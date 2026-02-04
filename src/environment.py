@@ -28,3 +28,19 @@ def get_device() -> torch.device:
         return torch.device("mps")
     else:
         return torch.device("cpu")
+
+
+def print_model_config(config) -> None:
+    items = {
+        "Layers": config.num_hidden_layers,
+        "Experts / layer": config.num_experts,
+        "Active experts / token": config.num_experts_per_tok,
+        "Hidden size": config.hidden_size,
+        "Model type": config.model_type,
+    }
+
+    print("\nModel configuration")
+    print("-" * 40)
+    for k, v in items.items():
+        print(f"{k:<30}: {v}")
+    print()
