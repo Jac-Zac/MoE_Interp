@@ -11,3 +11,9 @@ wheels/
 
 # Agent
 AGENTS.md
+
+# Eviroment variable
+secrets.txt
+
+# Slurm output files
+*.out

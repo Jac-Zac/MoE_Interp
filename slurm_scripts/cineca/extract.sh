@@ -10,13 +10,15 @@
 #SBATCH --job-name=self_attention_bench
 
 # Source common cache setup
-source "$(dirname "$0")/../setup_cache.sh"
+# export SCRATCH="/cineca/scratch/$USER"
+source "slurm_scripts/setup_cache.sh"
 
 # module load nvhpc
 # module load profile/deeplrn
 # module load cineca-ai
 
-# Load the uv enviroment 
+# Load the uv enviroment
+uv sync
 source .venv/bin/activate
 
 ./main.py
