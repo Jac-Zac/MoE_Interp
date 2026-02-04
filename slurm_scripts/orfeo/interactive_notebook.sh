@@ -1,12 +1,10 @@
 #!/bin/bash
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=50G
-#SBATCH --partition=GPU
-#SBATCH --gres=gpu:V100:1
-#SBATCH -t 00:10:00
-#SBATCH --job-name=interactive_notebook
+
+# If not already running under SLURM, re-launch with srun
+if [ -z "$SLURM_JOB_ID" ]; then
+    echo "Not running under SLURM, launching with srun..."
+    exec srun --pty --partition=GPU --gres=gpu:V100:1 --mem=50G --cpus-per-task=4 --time=00:10:00 "$0" "$@"
+fi
 
 export SCRATCH="/orfeo/scratch/dssc/$USER"
 source "slurm_scripts/setup_cache.sh"
