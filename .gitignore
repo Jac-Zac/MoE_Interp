@@ -17,3 +17,10 @@ AGENTS.md
 
 # Slurm output files
 *.out
+
+# Data and checkpoints
+data/
+*.pt
+*.pth
+*.npy
+*.safetensors

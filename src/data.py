@@ -1,56 +1,82 @@
-from typing import List
+"""Data loading utilities for MoE interpretability."""
 
-from datasets import load_dataset
+from typing import Any, Optional
+
+from datasets import Dataset, load_dataset
 
 
-def load_pile_docs(
-    tokenizer,
-    n_docs: int = 100,
-    max_tokens: int = 512,
-) -> List[List[int]]:
-    """
-    Load documents from The Pile that fit within max_tokens.
+class PileLoader:
+    """Loader for The Pile dataset."""
 
-    Respects document boundaries by only keeping complete documents.
-    Returns list of token sequences for nnsight to handle batching/padding.
-    Documents are loaded sequentially without shuffling for efficiency.
+    def __init__(self, tokenizer: Any, max_tokens: int = 512):
+        """Initialize the loader."""
+        self.tokenizer = tokenizer
+        self.max_tokens = max_tokens
+        self._eos_id: Optional[int] = None
+        self._dataset: Optional[Dataset] = None
 
-    Args:
-        tokenizer: HuggingFace tokenizer
-        n_docs: Number of documents to load
-        max_tokens: Maximum tokens per document (context window)
+    def _get_eos_id(self) -> int:
+        """
+        Get or compute EOS token ID. Supporting even when not available
+        """
+        if self._eos_id is None:
+            eos_id: Any = self.tokenizer.eos_token_id
+            if eos_id is None:
+                encoded: Any = self.tokenizer.encode(
+                    "<|endoftext|>", add_special_tokens=False
+                )
+                eos_id = encoded[0]
+            self._eos_id = int(eos_id)
+        return self._eos_id
 
-    Returns:
-        List of token ID sequences, each with length <= max_tokens
-    """
-    dataset = load_dataset(
-        "NeelNanda/pile-10k",
-        split="train",
-        streaming=True,
-    )
+    def _load_dataset(self) -> Dataset:
+        """Load dataset once to hugging face default storage location"""
 
-    docs = []
+        # The default storage location is set to be scratch with env variables
+        if self._dataset is None:
+            self._dataset = load_dataset("NeelNanda/pile-10k", split="train")
+        return self._dataset
 
-    # Use the model eos token else use the custom one defined here
-    eos_id = (
-        tokenizer.eos_token_id
-        or tokenizer.encode("<|endoftext|>", add_special_tokens=False)[0]
-    )
-
-    for example in dataset:
-        if len(docs) >= n_docs:
-            break
-
-        text = example.get("text", "")
+    def _tokenize_doc(self, text: str) -> Optional[list[int]]:
+        """Tokenize a single document, returns None if invalid."""
         if not text or len(text.strip()) <= 50:
-            continue
+            return None
 
-        tokens = tokenizer.encode(text, add_special_tokens=False)
+        try:
+            tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        except Exception:
+            return None
 
         # Only keep docs that fit entirely (respect boundaries)
         # +1 for EOS token
-        if len(tokens) + 1 <= max_tokens:
-            tokens = tokens + [eos_id]
-            docs.append(tokens)
+        if len(tokens) + 1 > self.max_tokens:
+            return None
 
-    return docs
+        tokens.append(self._get_eos_id())
+        return tokens
+
+    def load_n_docs(self, n_docs: int = 100) -> list[list[int]]:
+        """Load exactly n_docs documents that fit within max_tokens."""
+        dataset = self._load_dataset()
+        docs: list[list[int]] = []
+
+        for example in dataset:
+            if len(docs) >= n_docs:
+                break
+
+            ex: dict[str, Any] = example  # type: ignore
+            tokens = self._tokenize_doc(ex.get("text", ""))
+            if tokens is not None:
+                docs.append(tokens)
+
+        return docs
+
+
+def load_pile_docs(
+    tokenizer: Any,
+    n_docs: int = 100,
+    max_tokens: int = 512,
+) -> list[list[int]]:
+    """Load documents from The Pile that fit within max_tokens."""
+    loader = PileLoader(tokenizer, max_tokens)
+    return loader.load_n_docs(n_docs)
