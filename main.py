@@ -10,7 +10,9 @@ from src.environment import set_seed
 def main():
     set_seed(1337)
 
+    # Test the non instruct model
     model = LanguageModel(
+        # "allenai/OLMoE-1B-7B-0125",
         "allenai/OLMoE-1B-7B-0924-Instruct",
         device_map="auto",
         dtype=torch.bfloat16,
