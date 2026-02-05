@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 # %% Imports
+import nnsight
 import torch
 from nnsight import LanguageModel
 
@@ -10,8 +11,7 @@ from src.environment import set_seed
 
 # %% Model Definition
 seed = 1337
-batch_size = 8
-n_chunks = 10
+n_docs = 10
 
 set_seed(seed)
 
@@ -26,49 +26,66 @@ model = LanguageModel(
     "allenai/OLMoE-1B-7B-0924-Instruct",
     device_map="auto",
     dtype=torch.float16,
-    dispatch=False,
+    # dispatch=False,
+    dispatch=True,
 )
 
 # %% Load data from The Pile
 docs = load_pile_docs(
     tokenizer=model.tokenizer,
-    n_docs=n_chunks,
+    n_docs=n_docs,
     # max token based on what the model can actually do
-    max_tokens=model.config.max_position_embeddings,
-    seed=seed,
+    # max_tokens=model.config.max_position_embeddings,
+    max_tokens=100,  # HACK: For testing
 )
-
-print(f"Loaded {docs.shape[0]} documents of size {docs.shape[1]}")
+print(f"Loaded {len(docs)} documents")
 
 # %% Capture expert activations
 
-# Process in batches
-all_indices, all_weights = [], []
+# Pre-compute document boundaries for token-to-doc mapping
+doc_lens = [len(doc) for doc in docs]
+doc_boundaries = torch.tensor([0] + [sum(doc_lens[: i + 1]) for i in range(len(docs))])
 
-for i in range(0, len(docs), batch_size):
-    batch = docs[i : i + batch_size]
+# HACK: I think this set up will let nnsight automatically batch queries
+# In the way it believes to be best though I need to check
+with torch.no_grad(), model.trace(docs) as tracer:
+    # Collect per-layer routing info
+    layer_indices, layer_weights = [], []
 
-    with torch.no_grad(), model.trace(batch) as tracer:
-        for layer in model.model.layers:
-            # Get routing info from the gate
-            # top_k_weights: weight for each expert
-            # top_k_indices: expert id active for each token
+    for layer in model.model.layers:
+        # Get routing info from the gate
+        # top_k_weights: weight for each expert
+        # top_k_indices: expert id active for each token
 
-            # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-            _, weights, indices = layer.mlp.source.self_gate_0.output
-            all_indices.append(indices.save())
-            all_weights.append(weights.save())
+        # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
+        _, weights, indices = layer.mlp.source.self_gate_0.output
+        layer_indices.append(indices)
+        layer_weights.append(weights)
+
+    # Stack layers inside trace context: [n_layers, batch, seq, k]
+    # More efficient: only 2 tensors to save/extract instead of 2*n_layers
+    indices_stack = torch.stack(layer_indices, dim=0)
+    weights_stack = torch.stack(layer_weights, dim=0)
+
+    nnsight.save(indices_stack)
+    nnsight.save(weights_stack)
+    nnsight.save(doc_boundaries)
 
 # %% Build MoETrace from captured tensors
-trace = MoETrace.from_tensors(
-    token_ids=docs,
-    indices_list=all_indices,
-    weights_list=all_weights,
-    num_experts=model.model.config.num_experts,
+trace = MoETrace.build(
+    docs=docs,
+    indices_stack=indices_stack,
+    weights_stack=weights_stack,
+    doc_boundaries=doc_boundaries,
 )
 
 # %% Results
-print(f"\nexpert_indices shape: {trace.expert_indices.shape}")  # [batch, seq, layer, k]
-print(f"expert_weights shape: {trace.expert_weights.shape}")  # [batch, seq, layer, k]
-print(f"Active (layer, expert) pairs: {len(trace.expert_token_idx)}")
-print(f"\nDoc 0, Token 0, Layer 0 experts: {trace.expert_indices[0, 0, 0, :]}")
+print(f"Total tokens: {len(trace.token_ids)}")
+print(
+    f"Shape: [total_tokens={trace.token_ids.shape[0]}, layer={trace.n_layers}, k={trace.k}]"
+)
+
+expert_id, weights = trace.experts_for_token(0, 0)
+print("\nLayer 0, Token 0:")
+print(f"- Expert id: {expert_id}\n")
+print(f"- Token id: {expert_id}")

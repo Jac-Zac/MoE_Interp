@@ -1,68 +1,95 @@
-"""
-Sparse-first MoE activation trace.
+"""Token-level MoE activation trace.
 
-Routing tensors use token-major layout: [batch, seq, layer, k]
-Expert outputs use event-based sparse storage.
+Each token's expert activations are stored without padding.
+Document boundaries are tracked to map tokens back to their source.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import List, Tuple
 
 import torch
+
+# HACK: This structure is currently vibecoded and needs revision
 
 
 @dataclass
 class MoETrace:
-    """MoE routing trace for expert activation analysis."""
+    """Token-level MoE routing trace for expert activation analysis.
 
-    token_ids: torch.Tensor  # [batch, seq]
-    expert_indices: torch.Tensor  # [batch, seq, layer, k] expert IDs
-    expert_weights: torch.Tensor  # [batch, seq, layer, k] gate weights
-    expert_token_idx: Dict[Tuple[int, int], torch.Tensor] = field(default_factory=dict)
-    expert_outputs: Dict[Tuple[int, int], torch.Tensor] = field(default_factory=dict)
+    Storage layout: [n_layers, total_tokens, k] for contiguous layer access.
+    Document boundaries allow mapping tokens back to source documents.
+    """
+
+    token_ids: torch.Tensor  # [total_tokens] - all tokens concatenated
+    expert_indices: torch.Tensor  # [n_layers, total_tokens, k] - expert IDs
+    expert_weights: torch.Tensor  # [n_layers, total_tokens, k] - gate weights
+    doc_boundaries: torch.Tensor  # [n_docs+1] - cumulative token counts per doc
 
     @classmethod
-    def from_tensors(
+    def build(
         cls,
-        token_ids: torch.Tensor,
-        indices_list: List[torch.Tensor],
-        weights_list: List[torch.Tensor],
-        num_experts: int,
+        docs: List[List[int]],
+        indices_stack: torch.Tensor,  # [n_layers, batch, seq, k]
+        weights_stack: torch.Tensor,  # [n_layers, batch, seq, k]
+        doc_boundaries: torch.Tensor,
     ) -> "MoETrace":
-        """
-        Build MoETrace from nnsight-captured tensors.
+        """Build MoETrace from stacked routing tensors.
 
         Args:
-            token_ids: [batch, seq] token IDs
-            indices_list: [n_layers] list of [batch, seq, k] expert indices
-            weights_list: [n_layers] list of [batch, seq, k] expert weights
-            num_experts: Total number of experts per layer
+            docs: List of document token ID lists
+            indices_stack: Stacked expert indices from nnsight trace
+            weights_stack: Stacked expert weights from nnsight trace
+            doc_boundaries: Pre-computed cumulative token counts
 
         Returns:
-            MoETrace with sparse expert-to-token mapping
+            MoETrace with layer-first storage layout
         """
+        # Concatenate all tokens
+        token_ids = torch.tensor([tid for doc in docs for tid in doc], dtype=torch.long)
 
-        batch_size, seq_len = token_ids.shape
-        n_layers = len(indices_list)
-
-        # Stack to [batch, seq, layer, k]
-        indices_tensor = torch.stack(indices_list, dim=2)
-        weights_tensor = torch.stack(weights_list, dim=2)
-
-        # Build sparse (layer, expert) -> token_indices mapping
-        expert_token_idx = {}
-        for layer in range(n_layers):
-            for expert in range(num_experts):
-                mask = indices_tensor[:, :, layer, :] == expert
-                batch_idx, seq_idx, _ = mask.nonzero(as_tuple=True)
-                flat_idx = batch_idx * seq_len + seq_idx
-                if len(flat_idx) > 0:
-                    expert_token_idx[(layer, expert)] = flat_idx.unique()
+        # Flatten batch and seq: [n_layers, batch, seq, k] -> [n_layers, total_tokens, k]
+        n_layers = indices_stack.shape[0]
+        flat_shape = (n_layers, -1, indices_stack.shape[-1])
 
         return cls(
             token_ids=token_ids,
-            expert_indices=indices_tensor,
-            expert_weights=weights_tensor,
-            expert_token_idx=expert_token_idx,
-            expert_outputs={},
+            expert_indices=indices_stack.reshape(flat_shape),
+            expert_weights=weights_stack.reshape(flat_shape),
+            doc_boundaries=doc_boundaries,
         )
+
+    def doc_slice(self, doc_idx: int) -> slice:
+        """Get slice for token indices of a specific document."""
+        return slice(
+            self.doc_boundaries[doc_idx].item(),
+            self.doc_boundaries[doc_idx + 1].item(),
+        )
+
+    def experts_for_token(
+        self, layer: int, token_idx: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get expert IDs and weights for a specific layer and token.
+
+        Args:
+            layer: Layer index
+            token_idx: Global token index (flattened across all docs)
+
+        Returns:
+            Tuple of (expert_ids [k], expert_weights [k])
+        """
+        return (
+            self.expert_indices[layer, token_idx],
+            self.expert_weights[layer, token_idx],
+        )
+
+    @property
+    def n_docs(self) -> int:
+        return len(self.doc_boundaries) - 1
+
+    @property
+    def n_layers(self) -> int:
+        return self.expert_indices.shape[0]
+
+    @property
+    def k(self) -> int:
+        return self.expert_indices.shape[2]

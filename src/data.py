@@ -1,4 +1,5 @@
-import torch
+from typing import List
+
 from datasets import load_dataset
 
 
@@ -6,31 +7,31 @@ def load_pile_docs(
     tokenizer,
     n_docs: int = 100,
     max_tokens: int = 512,
-    seed: int = 1337,
-) -> torch.Tensor:
+) -> List[List[int]]:
     """
     Load documents from The Pile that fit within max_tokens.
 
-    Respects document boundaries by only keeping complete documents
-    and padding shorter ones to enable nnsight batching.
+    Respects document boundaries by only keeping complete documents.
+    Returns list of token sequences for nnsight to handle batching/padding.
+    Documents are loaded sequentially without shuffling for efficiency.
 
     Args:
         tokenizer: HuggingFace tokenizer
         n_docs: Number of documents to load
         max_tokens: Maximum tokens per document (context window)
-        seed: Random seed for shuffling
 
     Returns:
-        Tensor of shape [n_docs, max_tokens] with padded token IDs
+        List of token ID sequences, each with length <= max_tokens
     """
     dataset = load_dataset(
         "NeelNanda/pile-10k",
         split="train",
         streaming=True,
-    ).shuffle(seed=seed, buffer_size=10000)
+    )
 
     docs = []
-    pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
+
+    # Use the model eos token else use the custom one defined here
     eos_id = (
         tokenizer.eos_token_id
         or tokenizer.encode("<|endoftext|>", add_special_tokens=False)[0]
@@ -50,8 +51,6 @@ def load_pile_docs(
         # +1 for EOS token
         if len(tokens) + 1 <= max_tokens:
             tokens = tokens + [eos_id]
-            # Pad to max_tokens
-            tokens = tokens + [pad_id] * (max_tokens - len(tokens))
             docs.append(tokens)
 
-    return torch.tensor(docs, dtype=torch.long)
+    return docs

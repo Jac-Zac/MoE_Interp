@@ -2,9 +2,7 @@
 # Setup script: sync deps, load env vars, activate venv
 # Usage: source scripts/setup_env.sh
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
 cd "$PROJECT_ROOT"
 
 # Sync dependencies
