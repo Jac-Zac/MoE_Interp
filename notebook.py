@@ -4,7 +4,6 @@
 import nnsight
 import torch
 from nnsight import LanguageModel
-from tqdm import tqdm
 
 from src.cache import MoETrace
 from src.data import load_pile_docs
@@ -12,9 +11,9 @@ from src.environment import set_seed
 
 # %% Configuration
 seed = 1337
-n_docs = 10
+n_docs = 2
 # Process documents in batches to manage memory
-BATCH_SIZE = 8
+BATCH_SIZE = n_docs
 
 set_seed(seed)
 
@@ -33,81 +32,66 @@ model = LanguageModel(
 )
 
 # %% Load data from The Pile
-docs = load_pile_docs(
+docs, doc_source_ids = load_pile_docs(
     tokenizer=model.tokenizer,
     n_docs=n_docs,
-    max_tokens=100,  # HACK: For testing
+    max_tokens=2048,  # HACK: For testing
+    dataset_name="NeelNanda/pile-10k",
 )
 
 print(f"Loaded {len(docs)} documents")
+print(f"Source doc indices: {doc_source_ids}")
 
-# %% Process documents in batches
+# %% Process documents in batches (in this simple case I work with only 1 batch)
+# Pre-compute document boundaries for token-to-doc mapping
+doc_lengths = torch.tensor([len(doc) for doc in docs])
+batch_boundaries = torch.cat([torch.tensor([0]), doc_lengths.cumsum(0)])
 
+# HACK: I think this set up will let nnsight automatically batch queries
+# In the way it believes to be best though I need to check
+with torch.no_grad(), model.trace(docs) as tracer:
+    layer_indices, layer_weights = [], []
 
-def process_batch(model, batch_docs):
-    """Process a single batch and return expert trace."""
+    for layer in model.model.layers:
+        # Get routing info from the gate
+        # top_k_weights: weight for each expert
+        # top_k_indices: expert id active for each token
 
-    # Pre-compute document boundaries for token-to-doc mapping
-    batch_doc_lens = [len(doc) for doc in batch_docs]
-    batch_boundaries = torch.tensor(
-        [0] + [sum(batch_doc_lens[: i + 1]) for i in range(len(batch_docs))]
-    )
-    # HACK: I think this set up will let nnsight automatically batch queries
-    # In the way it believes to be best though I need to check
-    with torch.no_grad(), model.trace(batch_docs) as tracer:
-        layer_indices, layer_weights = [], []
+        # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
+        _, weights, indices = layer.mlp.source.self_gate_0.output
+        layer_indices.append(indices)
+        layer_weights.append(weights)
 
-        for layer in model.model.layers:
-            # Get routing info from the gate
-            # top_k_weights: weight for each expert
-            # top_k_indices: expert id active for each token
+    # Stack layers inside trace context: [n_layers, batch, seq, k]
+    indices_stack = torch.stack(layer_indices, dim=0)
+    weights_stack = torch.stack(layer_weights, dim=0)
 
-            # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-            _, weights, indices = layer.mlp.source.self_gate_0.output
-            layer_indices.append(indices)
-            layer_weights.append(weights)
+    nnsight.save(indices_stack)
+    nnsight.save(weights_stack)
 
-        # Stack layers inside trace context: [n_layers, batch, seq, k]
-        indices_stack = torch.stack(layer_indices, dim=0)
-        weights_stack = torch.stack(layer_weights, dim=0)
-
-        nnsight.save(indices_stack)
-        nnsight.save(weights_stack)
-        nnsight.save(batch_boundaries)
-
-    return MoETrace.build(
-        docs=batch_docs,
-        indices_stack=indices_stack,
-        weights_stack=weights_stack,
-        doc_boundaries=batch_boundaries,
-    )
-
-
-# Process in batches
-n_batches = (len(docs) + BATCH_SIZE - 1) // BATCH_SIZE
-all_traces = []
-
-for batch_idx in tqdm(range(n_batches)):
-    start = batch_idx * BATCH_SIZE
-    end = min(start + BATCH_SIZE, len(docs))
-    batch_docs = docs[start:end]
-
-    print(f"Processing batch {batch_idx + 1}/{n_batches} (docs {start}-{end - 1})...")
-    trace = process_batch(model, batch_docs)
-    all_traces.append(trace)
-    print(f"  Tokens: {len(trace.token_ids)}")
-
-# %% Results from first batch
-first_trace = all_traces[0]
-print(f"\nTotal batches: {len(all_traces)}")
-print(f"Example from batch 0:")
-print(f"Total tokens: {len(first_trace.token_ids)}")
-print(
-    f"Shape: [tokens={first_trace.token_ids.shape[0]}, "
-    f"layers={first_trace.n_layers}, k={first_trace.k}]"
+trace = MoETrace.build(
+    docs=docs,
+    indices_stack=indices_stack,
+    weights_stack=weights_stack,
+    doc_boundaries=batch_boundaries,
+    doc_source_ids=doc_source_ids,
 )
 
-expert_ids, weights = first_trace.experts_for_token(0, 0)
+# %% Results from first batch
+print(f"Example from batch 0:")
+print(f"Total tokens: {len(trace.token_ids)}")
+print(
+    f"Shape: [tokens={trace.token_ids.shape[0]}, layers={trace.n_layers}, k={trace.k}]"
+)
+
+expert_ids, weights = trace.experts_for_token(0, 0)
 print("\nLayer 0, Token 0:")
 print(f"- Expert ids: {expert_ids}")
 print(f"- Weights: {weights}")
+
+# %%
+# print(trace)
+# NOTE: Try to understand why expert_idices is not the same as token_idx which is the expected shape
+print(trace.expert_indices.shape)
+print(trace.token_ids.shape)
+print(f"{len(docs[0]) = }, {len(docs[1]) = }")

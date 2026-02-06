@@ -24,6 +24,7 @@ class MoETrace:
     expert_indices: torch.Tensor  # [n_layers, total_tokens, k] - expert IDs
     expert_weights: torch.Tensor  # [n_layers, total_tokens, k] - gate weights
     doc_boundaries: torch.Tensor  # [n_docs+1] - cumulative token counts per doc
+    doc_source_ids: torch.Tensor  # [n_docs] - original dataset indices for each doc
 
     @classmethod
     def build(
@@ -32,6 +33,7 @@ class MoETrace:
         indices_stack: torch.Tensor,  # [n_layers, batch, seq, k]
         weights_stack: torch.Tensor,  # [n_layers, batch, seq, k]
         doc_boundaries: torch.Tensor,
+        doc_source_ids: List[int],
     ) -> "MoETrace":
         """Build MoETrace from stacked routing tensors.
 
@@ -40,6 +42,7 @@ class MoETrace:
             indices_stack: Stacked expert indices from nnsight trace
             weights_stack: Stacked expert weights from nnsight trace
             doc_boundaries: Pre-computed cumulative token counts
+            doc_source_ids: Original dataset indices for each document
 
         Returns:
             MoETrace with layer-first storage layout
@@ -56,6 +59,7 @@ class MoETrace:
             expert_indices=indices_stack.reshape(flat_shape),
             expert_weights=weights_stack.reshape(flat_shape),
             doc_boundaries=doc_boundaries,
+            doc_source_ids=torch.tensor(doc_source_ids, dtype=torch.long),
         )
 
     def doc_slice(self, doc_idx: int) -> slice:

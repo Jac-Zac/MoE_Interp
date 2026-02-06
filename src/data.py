@@ -1,6 +1,6 @@
 """Data loading utilities for MoE interpretability."""
 
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from datasets import Dataset, load_dataset
 
@@ -22,9 +22,7 @@ class PileLoader:
         self._dataset: Optional[Dataset] = None
 
     def _get_eos_id(self) -> int:
-        """
-        Get or compute EOS token ID. Supporting even when not available
-        """
+        """Get or compute EOS token ID."""
         if self._eos_id is None:
             eos_id = self.tokenizer.eos_token_id
             if eos_id is None:
@@ -37,8 +35,6 @@ class PileLoader:
 
     def _load_dataset(self) -> Dataset:
         """Load dataset once to hugging face default storage location"""
-
-        # The default storage location is set to be scratch with env variables
         if self._dataset is None:
             self._dataset = load_dataset(self.dataset_name, split="train")
         return self._dataset
@@ -61,21 +57,28 @@ class PileLoader:
         tokens.append(self._get_eos_id())
         return tokens
 
-    def load_n_docs(self, n_docs: int = 100) -> list[list[int]]:
-        """Load exactly n_docs documents that fit within max_tokens."""
-        dataset = self._load_dataset()
-        docs: list[list[int]] = []
+    def load_n_docs(self, n_docs: int = 100) -> Tuple[list[list[int]], list[int]]:
+        """Load exactly n_docs documents that fit within max_tokens.
 
-        for example in dataset:
-            if len(docs) >= n_docs:
+        Returns:
+            Tuple of (token_lists, source_doc_indices) where source_doc_indices
+            maps each loaded doc to its original index in the dataset.
+        """
+        dataset = self._load_dataset()
+        tokens_list: list[list[int]] = []
+        source_indices: list[int] = []
+
+        for dataset_idx, example in enumerate(dataset):
+            if len(tokens_list) >= n_docs:
                 break
 
-            ex: dict[str, Any] = example  # type: ignore
+            ex: dict = example  # type: ignore
             tokens = self._tokenize_doc(ex.get("text", ""))
             if tokens is not None:
-                docs.append(tokens)
+                tokens_list.append(tokens)
+                source_indices.append(dataset_idx)
 
-        return docs
+        return tokens_list, source_indices
 
 
 def load_pile_docs(
@@ -83,7 +86,12 @@ def load_pile_docs(
     n_docs: int = 100,
     max_tokens: int = 512,
     dataset_name: str = "NeelNanda/pile-10k",
-) -> list[list[int]]:
-    """Load documents from The Pile that fit within max_tokens."""
+) -> Tuple[list[list[int]], list[int]]:
+    """Load documents from The Pile that fit within max_tokens.
+
+    Returns:
+        Tuple of (token_lists, source_doc_indices) where source_doc_indices
+        maps each loaded doc to its original index in the dataset.
+    """
     loader = PileLoader(tokenizer, max_tokens, dataset_name)
     return loader.load_n_docs(n_docs)

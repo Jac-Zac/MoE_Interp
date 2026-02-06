@@ -11,6 +11,7 @@ dependencies = [
     "ipywidgets>=8.1.8",
     "jupyter>=1.1.1",
     "nnsight>=0.5.15",
+    "safetensors>=0.4.0",
     "torch>=2.5.0,<2.10",
     "tqdm>=4.67.3",
     "transformers>=4.46.0",
