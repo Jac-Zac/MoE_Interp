@@ -2,17 +2,16 @@
 
 import torch
 from nnsight import LanguageModel
-from pathlib import Path
 
 from src.capture import capture_moe_activations
-from src.checkpoint import load_batch, list_batch_info, get_data_dir
+from src.checkpoint import get_data_dir, list_documents, load_document
 from src.data import load_pile_docs
 from src.environment import set_seed
 
 # Configuration
 SEED = 1337
 N_DOCS = 10
-BATCH_SIZE = 4
+STORE_FREQ = 5  # Save every 5 documents
 MAX_TOKENS = 100
 
 
@@ -40,51 +39,36 @@ def main():
 
     # Capture and save to disk
     data_dir = get_data_dir()
-    print(f"Saving checkpoints to: {data_dir}")
+    print(f"Saving traces to: {data_dir}")
     print()
 
-    batch_info = capture_moe_activations(
+    saved_files = capture_moe_activations(
         model,
         docs=docs,
-        doc_source_ids=doc_source_ids,
-        batch_size=BATCH_SIZE,
-        save_dir=data_dir,
+        doc_ids=doc_source_ids,
+        store_freq=STORE_FREQ,
+        output_dir=data_dir,
     )
 
-    print(f"\n\nCaptured {len(batch_info)} batches")
-    print("\nAvailable checkpoints:")
-    for info in list_batch_info(data_dir):
-        print(
-            f"  Batch {info['batch_idx']}: docs {info['doc_range']} -> {info['filename']}"
-        )
+    print(f"\n\nCaptured {len(saved_files)} documents total")
+    print("\nAvailable documents:")
+    for doc_id in list_documents(data_dir):
+        print(f"  Doc {doc_id}")
 
-    # Load batch 0 and show source tracking
-    print("\n\nLoading batch 0 from disk...")
-    trace, doc_range = load_batch(0, data_dir)
+    # Load first document and show structure
+    if saved_files:
+        first_doc_id = list_documents(data_dir)[0]
+        print(f"\n\nLoading document {first_doc_id} from disk...")
+        trace = load_document(first_doc_id, data_dir)
 
-    print(f"\nBatch 0 info:")
-    print(f"  Docs in batch: {doc_range[0]} to {doc_range[1] - 1}")
-    print(f"  Total tokens: {len(trace.token_ids)}")
-    print(
-        f"  Shape: [layers={trace.n_layers}, tokens={len(trace.token_ids)}, k={trace.k}]"
-    )
+        print(f"\nDocument {first_doc_id} info:")
+        print(f"  Shape: [layers={trace.n_layers}, seq={trace.seq_len}, k={trace.k}]")
 
-    # Show source tracking
-    print(f"\nSource document tracking:")
-    for i in range(trace.n_docs):
-        source_idx = trace.doc_source_ids[i].item()
-        doc_slice = trace.doc_slice(i)
-        n_tokens = doc_slice.stop - doc_slice.start
-        print(f"  Doc {i} -> Original Pile index {source_idx} ({n_tokens} tokens)")
-
-    # Show expert data for first token of first doc
-    first_doc_slice = trace.doc_slice(0)
-    expert_ids, weights = trace.experts_for_token(0, first_doc_slice.start)
-    print(
-        f"\nLayer 0, First token of doc 0 (Pile index {trace.doc_source_ids[0].item()}):"
-    )
-    print(f"  Expert ids: {expert_ids.tolist()}")
-    print(f"  Weights: {weights.tolist()}")
+        # Show expert data for first token
+        expert_ids, weights = trace.get_token(0, 0)
+        print(f"\nLayer 0, First token:")
+        print(f"  Expert ids: {expert_ids.tolist()}")
+        print(f"  Weights: {weights.tolist()}")
 
 
 if __name__ == "__main__":

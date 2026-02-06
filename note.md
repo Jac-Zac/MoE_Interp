@@ -17,3 +17,7 @@
 Try also to only save one expert for example. Then read head persuit algorithm and try to do based on that
 
 -> Be careful of using the correct template. If I need to add tokens or doing somehting with the prefix or something
+
+# NOTE:
+
+Review properties in python datacasses
