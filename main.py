@@ -6,6 +6,7 @@ from nnsight import LanguageModel
 from src.capture import capture_moe_activations
 from src.checkpoint import get_data_dir, list_documents, load_document
 from src.data import load_pile_docs
+from src.display import print_doc_summary, print_stats, print_token
 from src.environment import set_seed
 
 # Configuration
@@ -51,24 +52,20 @@ def main():
     )
 
     print(f"\n\nCaptured {len(saved_files)} documents total")
-    print("\nAvailable documents:")
-    for doc_id in list_documents(data_dir):
-        print(f"  Doc {doc_id}")
+    print_doc_summary(data_dir)
 
     # Load first document and show structure
     if saved_files:
         first_doc_id = list_documents(data_dir)[0]
-        print(f"\n\nLoading document {first_doc_id} from disk...")
+        print(f"\nLoading document {first_doc_id}...")
         trace = load_document(first_doc_id, data_dir)
 
-        print(f"\nDocument {first_doc_id} info:")
-        print(f"  Shape: [layers={trace.n_layers}, seq={trace.seq_len}, k={trace.k}]")
+        print(trace)
+        print("\n")
+        print_stats(trace)
 
-        # Show expert data for first token
-        expert_ids, weights = trace.get_token(0, 0)
-        print(f"\nLayer 0, First token:")
-        print(f"  Expert ids: {expert_ids.tolist()}")
-        print(f"  Weights: {weights.tolist()}")
+        print("\n")
+        print_token(trace, 0, 0)
 
 
 if __name__ == "__main__":

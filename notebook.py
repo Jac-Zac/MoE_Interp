@@ -7,6 +7,7 @@ from nnsight import LanguageModel
 
 from src.cache import DocumentTrace
 from src.data import load_pile_docs
+from src.display import print_token
 from src.environment import set_seed
 
 # %% Configuration
@@ -71,14 +72,7 @@ trace = DocumentTrace(
 )
 
 # %% Results from processing
-print(f"\nDocument {doc_id} trace structure:")
-print(f"  Layers: {trace.n_layers}")
-print(f"  Sequence length: {trace.seq_len}")
-print(f"  K (experts per token): {trace.k}")
-print(f"  Shape: [layers={trace.n_layers}, seq={trace.seq_len}, k={trace.k}]")
+print(trace)
 
-# Get experts for first token
-expert_ids, token_weights = trace.get_token(0, 0)
-print("\nLayer 0, Token 0:")
-print(f"  Expert ids: {expert_ids}")
-print(f"  Weights: {token_weights}")
+print("\n")
+print_token(trace, 0, 0)

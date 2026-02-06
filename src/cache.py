@@ -48,3 +48,14 @@ class DocumentTrace:
             self.expert_indices[layer, pos],
             self.expert_weights[layer, pos],
         )
+
+    def __str__(self) -> str:
+        """Return basic string representation."""
+        return (
+            f"DocumentTrace(doc_id={self.doc_id}, "
+            f"shape=[{self.n_layers}, {self.seq_len}, {self.k}])"
+        )
+
+    def __repr__(self) -> str:
+        """Return short representation for debugging."""
+        return f"DocumentTrace(doc_id={self.doc_id}, shape=[{self.n_layers}, {self.seq_len}, {self.k}])"
