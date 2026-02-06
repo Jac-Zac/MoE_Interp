@@ -8,10 +8,16 @@ from datasets import Dataset, load_dataset
 class PileLoader:
     """Loader for The Pile dataset."""
 
-    def __init__(self, tokenizer: Any, max_tokens: int = 512):
+    def __init__(
+        self,
+        tokenizer: Any,
+        max_tokens: int = 512,
+        dataset_name: str = "NeelNanda/pile-10k",
+    ):
         """Initialize the loader."""
         self.tokenizer = tokenizer
         self.max_tokens = max_tokens
+        self.dataset_name = dataset_name
         self._eos_id: Optional[int] = None
         self._dataset: Optional[Dataset] = None
 
@@ -20,12 +26,12 @@ class PileLoader:
         Get or compute EOS token ID. Supporting even when not available
         """
         if self._eos_id is None:
-            eos_id: Any = self.tokenizer.eos_token_id
+            eos_id = self.tokenizer.eos_token_id
             if eos_id is None:
-                encoded: Any = self.tokenizer.encode(
+                eos_id = self.tokenizer.encode(
                     "<|endoftext|>", add_special_tokens=False
-                )
-                eos_id = encoded[0]
+                )[0]
+
             self._eos_id = int(eos_id)
         return self._eos_id
 
@@ -34,12 +40,12 @@ class PileLoader:
 
         # The default storage location is set to be scratch with env variables
         if self._dataset is None:
-            self._dataset = load_dataset("NeelNanda/pile-10k", split="train")
+            self._dataset = load_dataset(self.dataset_name, split="train")
         return self._dataset
 
     def _tokenize_doc(self, text: str) -> Optional[list[int]]:
         """Tokenize a single document, returns None if invalid."""
-        if not text or len(text.strip()) <= 50:
+        if not text or len(text.strip()) <= 20:
             return None
 
         try:
@@ -76,7 +82,8 @@ def load_pile_docs(
     tokenizer: Any,
     n_docs: int = 100,
     max_tokens: int = 512,
+    dataset_name: str = "NeelNanda/pile-10k",
 ) -> list[list[int]]:
     """Load documents from The Pile that fit within max_tokens."""
-    loader = PileLoader(tokenizer, max_tokens)
+    loader = PileLoader(tokenizer, max_tokens, dataset_name)
     return loader.load_n_docs(n_docs)
