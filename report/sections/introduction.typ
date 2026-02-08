@@ -4,7 +4,7 @@ Large-scale language models have achieved remarkable performance on a wide spect
 As these models scale
 Currently a growing number of modern LLms have adopted a Mixture-of-Experts (MoE) architecture @shazeer2017outrageously @fedus2022switch, in which only a subset of the model's parameters is activated for each input token. 
 This sparse activation strategy allows MoE models to store significantly more factual knowledge in their parameters while keeping inference cost relatively low, since only a small fraction of experts is selected at each layer. 
-Notable examples include Mixtral @jiang2024mixtral, which routes each token to its top-2 feed-forward experts while keeping attention dense; OLMoE @muennighoff2024olmoe, a fully open-source MoE model with extensive analysis of routing stability; and DeepSeekMoE @dai2024deepseekmoe, which introduces fine-grained sub-experts and shared always-on experts to reduce redundancy.
+Notable examples include Mixtral @jiang2024mixtral, which routes each token to its top-2 feed-forward experts while keeping attention dense; OLMoE @muennighoff2024olmoe, a fully open-source MoE model; and DeepSeekMoE @dai2024deepseekmoe, which introduces fine-grained sub-experts and shared always-on experts to reduce redundancy.
 
 Despite the success of MoE architectures, the internal mechanisms by which experts organize and represent knowledge remain incompletely understood. 
 Recent work has begun to investigate expert specialization from several complementary perspectives. Wang et al. @wang2025whatgets establish a functional hierarchy among experts using entropy-based specialization metrics and causal mediation analysis, distinguishing between _domain experts_ that specialize in specific semantic areas and _driver experts_ that exert disproportionate causal influence on next-token probabilities. 
@@ -22,8 +22,7 @@ We propose _Expert Pursuit_, which extends this approach from attention heads to
 By capturing each expert's gated output (the FFN output weighted by the router gate) and applying SOMP, we obtain a principled, semantically grounded characterization of each expert's function, moving beyond routing metadata to directly analyze the information that experts contribute to the model's computation.
 
 A key structural difference between the attention head setting and the MoE expert setting is that attention heads process all tokens in a sequence, whereas each expert only processes the tokens routed to it by the gating mechanism. 
-This means expert activation matrices are naturally sparse: for a given expert, most token positions contribute zero. 
-We account for this by aggregating gated outputs only over routed tokens, and we note that this routing-induced selection bias may actually produce tighter semantic clusters than in the dense head setting, since the router has already pre-selected tokens that match the expert's learned specialization.
+We aggregating gated outputs only over routed tokens, and we note that this routing-induced selection bias may actually produce tighter semantic clusters than in the dense head setting, since the router has already pre-selected tokens that match the expert's learned specialization.
 
 Our contributions are as follows:
 - We extend the Head Pursuit framework from attention heads to MoE experts, proposing _Expert Pursuit_ as a method to characterize the semantic function of individual experts using sparse decomposition over the unembedding matrix.

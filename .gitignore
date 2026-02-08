@@ -24,3 +24,6 @@ data/
 *.pth
 *.npy
 *.safetensors
+
+# Pdf from report
+*.pdf
