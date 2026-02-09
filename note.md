@@ -21,3 +21,5 @@ Try also to only save one expert for example. Then read head persuit algorithm a
 # NOTE:
 
 Review properties in python datacasses
+
+- You can add alliasing like this https://github.com/ndif-team/nnsight/blob/4f2bdbe8aacb19b02a618ed222545b4d91e3b731/src/nnsight/intervention/envoy.py#L1339
