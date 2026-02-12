@@ -1,54 +1,76 @@
 # Interpretability of Mixture-of-Experts (MoE)
 
-This is a project on the Interpretability of MoE models.
+**Expert Pursuit**: An adaptation of the [HeadPursuit](https://github.com/lorenzobasile/HeadPursuit) framework to MoE models.
+Uses Simultaneous Orthogonal Matching Pursuit (SOMP) to identify which experts specialize in which semantic concepts by analyzing gated expert outputs against the model's unembedding matrix.
+
+Target model: `allenai/OLMoE-1B-7B-0924-Instruct` (16 layers, 64 experts/layer, top-8 routing)
 
 > [!WARNING]
-> This is a work in progress and it is extremily experimental
+> Work in progress and experimental
 
-### Project Scope
-
-1. Extracting activations from experts
-2. Analyzing them with ... (head persuite perhaps)
-
-## Usage
-
-### Local Usage
+## Quickstart
 
 ```bash
+# Setup
 source scripts/setup_env.sh
-python main.py
+
+# Run tests
+python -m pytest
+
+# Encode documents (capture expert activations)
+python main.py encode --n_docs 100 --max_tokens 512
+
+# Run SOMP analysis
+python main.py pursuit --concept countries --k 50
 ```
 
-### Cluster Usage
+## Commands
 
-1. For running the extraction on the cluster
+### `encode` - Capture expert activations
 
 ```bash
-sbatch scripts/orfeo/extract.sh
+python main.py encode [options]
 ```
 
-2. For running the analyses
+Options:
+
+- `--n_docs` (int, default: 100): Number of documents to encode
+- `--max_tokens` (int, default: 512): Max tokens per document
+- `--truncate`: Truncate long documents instead of skipping
+
+### `pursuit` - Run SOMP analysis
 
 ```bash
-sbatch scripts/...
+python main.py pursuit --concept <name> [options]
 ```
+
+Options:
+
+- `--concept` (required): Concept name - `countries`, `colors`, `numbers`, or `full`
+- `--k` (int, default: 50): Number of SOMP iterations
+
+**Available concepts:** `countries`, `colors`, `numbers`
 
 ## Project Structure
 
-```bash
+```
 .
-├── main.py              # Entry point
-├── notebook.py          # Jupyter notebook scripts
+├── main.py                 # CLI entry point
+├── notebooks/
+│   ├── notebook_base.py    # Jupyter demo (nnsight tracing + SOMP)
+│   └── notebook_lens.py    # Expert Logit Lens visualization
 ├── src/
-│   ├── capture.py       # Expert activation extraction
-│   ├── cache.py         # MoETrace dataclass
-│   ├── checkpoint.py    # Batch saving/loading
-│   ├── data.py          # Dataset loading
-│   ├── analyze.py       # Analysis functions
-│   └── environment.py   # Utils (seeds, device)
-├── scripts/             # SLURM cluster scripts
+│   ├── capture.py         # Expert activation extraction
+│   ├── cache.py           # HDF5-backed storage
+│   ├── somp.py            # SOMP algorithm
+│   ├── dictionary.py      # Unembedding/concept dictionaries
+│   ├── pursuit.py         # Expert Pursuit analysis
+│   ├── data.py            # Dataset loading
+│   └── environment.py     # Utils (seeds, device)
+├── tests/
+│   └── test_core.py       # Pytest suite
+├── scripts/               # SLURM cluster scripts
 │   ├── orfeo/
 │   └── cineca/
-├── pyproject.toml       # Dependencies and config
-└── README.md
+└── pyproject.toml         # Dependencies
 ```

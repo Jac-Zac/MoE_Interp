@@ -1,7 +1,22 @@
+import os
 import random
+from pathlib import Path
 
 import numpy as np
 import torch
+from nnsight import LanguageModel
+
+
+def get_data_dir() -> Path:
+    """Get data directory from environment variable or use default.
+
+    Returns:
+        Path object for the data directory (creates if needed)
+    """
+    data_dir = os.environ.get("DATA_DIR", "./data")
+    path = Path(data_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def set_seed(seed: int) -> None:
@@ -44,3 +59,15 @@ def print_model_config(config) -> None:
     for k, v in items.items():
         print(f"{k:<30}: {v}")
     print()
+
+    """Model loading utilities."""
+
+
+def load_model(model_name="allenai/OLMoE-1B-7B-0924-Instruct") -> LanguageModel:
+    """Load OLMoE model via nnsight."""
+    return LanguageModel(
+        model_name,
+        device_map="auto",
+        dtype=torch.float16,
+        dispatch=True,
+    )

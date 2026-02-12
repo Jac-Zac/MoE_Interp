@@ -26,7 +26,7 @@ Given the aggregated expert matrix $macron(bold(E))_(e,l) in RR^(n times d)$ for
 
 
 - NOTE: This is to revise
-*Phepras here something lower would be reasonable considering the sparsity of experts*
+*Perhaps here something lower would be reasonable considering the sparsity of experts, since each expert only processes $k\/E$ of tokens on average.*
 
 
 After a fixed number of iterations $T$ (typically $T = 50$, following the Head Pursuit setting), the support set $SS^T$ contains the indices of the $T$ vocabulary tokens that form the sparse decomposition. These tokens provide a human-readable characterization of what the expert writes into the residual stream --- for instance, an expert whose SOMP decomposition is dominated by country names can be interpreted as specializing in geographic knowledge.
