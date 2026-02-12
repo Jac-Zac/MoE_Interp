@@ -1,195 +1,253 @@
-"""Expert Pursuit data structures."""
+"""HDF5-backed storage for Expert Pursuit activations.
 
-from dataclasses import dataclass
+Stores per-document mean gated expert outputs in memory-mapped HDF5 files,
+organized per-layer for efficient SOMP iteration over experts.
+"""
+
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Iterator
 
+import h5py
+import numpy as np
 import torch
-from safetensors.torch import load_file, save_file
 
 
-@dataclass
-class ExpertTrace:
-    """Per-expert activation data for a specific layer.
-
-    Simple data container with no save/load methods.
-
-    Attributes:
-        token_indices: [n_tokens] positions in sequence routed to this expert
-        raw_outputs: [n_tokens, hidden_dim] down-projection outputs (before weighting)
-        top_k_positions: [n_tokens] which of the k slots this expert was in (0 to k-1)
-    """
-
-    token_indices: torch.Tensor
-    raw_outputs: torch.Tensor
-    top_k_positions: torch.Tensor
-
-
-@dataclass
-class DocumentTrace:
-    """All expert activations for one document across all layers.
+class ExpertActivationStore:
+    """HDF5-backed store for aggregated expert activations.
 
     Storage layout:
-      - doc_id: original document index from dataset
-      - n_layers: number of model layers
-      - expert_indices: [n_layers, seq_len, k] expert IDs per token
-      - expert_weights: [n_layers, seq_len, k] gate weights per token
-      - expert_traces: list[dict] where expert_traces[layer_idx][expert_id] = ExpertTrace
-
-    Attributes:
-        doc_id: Original document index from dataset
-        n_layers: Number of model layers
-        expert_indices: Expert routing indices per token
-        expert_weights: Gate weights per token
-        expert_traces: Per-layer, per-expert activation data
+        root_dir/
+            expert_activations/layer_{ll}.h5  — [n_docs, n_experts, d_model] float16
+            routing/routing_counts.h5         — [n_layers, n_docs, n_experts] int16
+            composition.json                  — metadata
+            doc_ids.json                      — row index -> dataset doc_id
     """
 
-    doc_id: int
-    n_layers: int
-    expert_indices: torch.Tensor  # [n_layers, seq_len, k]
-    expert_weights: torch.Tensor  # [n_layers, seq_len, k]
-    expert_traces: list[
-        dict[int, ExpertTrace]
-    ]  # [n_layers] dict[expert_id -> ExpertTrace]
+    def __init__(
+        self,
+        root_dir: Path,
+        n_layers: int,
+        n_experts: int,
+        d_model: int,
+        n_docs_estimate: int = 1000,
+    ):
+        self.root_dir = Path(root_dir)
+        self.n_layers = n_layers
+        self.n_experts = n_experts
+        self.d_model = d_model
+        self._n_docs = 0
 
-    @property
-    def seq_len(self) -> int:
-        return self.expert_indices.shape[1]
+        # Create directories
+        acts_dir = self.root_dir / "expert_activations"
+        routing_dir = self.root_dir / "routing"
+        acts_dir.mkdir(parents=True, exist_ok=True)
+        routing_dir.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def k(self) -> int:
-        return self.expert_indices.shape[2]
-
-    def __str__(self) -> str:
-        total_experts = sum(len(layer_acts) for layer_acts in self.expert_traces)
-        return (
-            f"DocumentTrace(doc_id={self.doc_id}, "
-            f"layers={self.n_layers}, seq_len={self.seq_len}, k={self.k}, "
-            f"total_expert_traces={total_experts})"
-        )
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-    def save(self, output_dir: Path) -> Path:
-        """Save this document trace to disk in safetensors format.
-
-        All tensors are detached, moved to CPU, and cloned to ensure
-        contiguous memory layout before saving.
-
-        Args:
-            output_dir: Directory to save the file
-
-        Returns:
-            Path to saved file
-        """
-        filename = f"doc_{self.doc_id:06d}.safetensors"
-        filepath = output_dir / filename
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build tensor dict with detached, CPU, contiguous tensors
-        tensors = {
-            "expert_indices": self.expert_indices.detach().cpu().contiguous(),
-            "expert_weights": self.expert_weights.detach().cpu().contiguous(),
-            "doc_id": torch.tensor(self.doc_id, dtype=torch.int64),
-            "n_layers": torch.tensor(self.n_layers, dtype=torch.int64),
-        }
-
-        # Flatten expert_traces: expert_traces[layer_idx][expert_id] = ExpertTrace
-        # Store as: "act_{layer_idx}_{expert_id}_tokens", "act_{layer_idx}_{expert_id}_output", "act_{layer_idx}_{expert_id}_pos"
-        acts_metadata = []  # List of (layer_idx, expert_id) pairs for reconstruction
-
-        for layer_idx, layer_dict in enumerate(self.expert_traces):
-            for expert_id, trace in layer_dict.items():
-                base_key = f"act_{layer_idx}_{expert_id}"
-                tensors[f"{base_key}_tokens"] = (
-                    trace.token_indices.detach().cpu().contiguous()
-                )
-                tensors[f"{base_key}_output"] = (
-                    trace.raw_outputs.detach().cpu().contiguous()
-                )
-                tensors[f"{base_key}_pos"] = (
-                    trace.top_k_positions.detach().cpu().contiguous()
-                )
-                acts_metadata.append((layer_idx, expert_id))
-
-        # Store metadata as tensor: [n_entries, 2] where each row is (layer_idx, expert_id)
-        if acts_metadata:
-            tensors["acts_metadata"] = torch.tensor(acts_metadata, dtype=torch.int64)
-        else:
-            tensors["acts_metadata"] = torch.empty((0, 2), dtype=torch.int64)
-
-        save_file(tensors, filepath)
-        return filepath
-
-    @classmethod
-    def load(cls, doc_id: int, data_dir: Optional[Path] = None) -> "DocumentTrace":
-        """Load a DocumentTrace by document ID.
-
-        Args:
-            doc_id: Document ID to load
-            data_dir: Directory containing trace files (default: ./data)
-
-        Returns:
-            DocumentTrace for the requested document
-
-        Raises:
-            FileNotFoundError: If document not found
-        """
-        if data_dir is None:
-            data_dir = Path("./data")
-
-        filepath = data_dir / f"doc_{doc_id:06d}.safetensors"
-
-        if not filepath.exists():
-            raise FileNotFoundError(f"Document {doc_id} not found at {filepath}")
-
-        tensors = load_file(filepath)
-
-        # Reconstruct expert_traces from flattened structure
-        n_layers = int(tensors["n_layers"].item())
-
-        # Initialize list of empty dicts for each layer
-        expert_traces: list[dict[int, ExpertTrace]] = [dict() for _ in range(n_layers)]
-
-        # Reconstruct from metadata
-        acts_metadata = tensors["acts_metadata"]
-        for layer_idx, expert_id in acts_metadata.tolist():
-            base_key = f"act_{layer_idx}_{expert_id}"
-            trace = ExpertTrace(
-                token_indices=tensors[f"{base_key}_tokens"],
-                raw_outputs=tensors[f"{base_key}_output"],
-                top_k_positions=tensors[f"{base_key}_pos"],
+        # Create per-layer HDF5 files for expert activations
+        chunk_docs = min(max(n_docs_estimate // 4, 1), 1000)
+        self._layer_files: list[h5py.File] = []
+        for layer_idx in range(n_layers):
+            path = acts_dir / f"layer_{layer_idx:02d}.h5"
+            f = h5py.File(path, "w")
+            f.create_dataset(
+                "data",
+                shape=(0, n_experts, d_model),
+                maxshape=(None, n_experts, d_model),
+                dtype=np.float16,
+                chunks=(chunk_docs, 1, d_model),
             )
-            expert_traces[layer_idx][expert_id] = trace
+            self._layer_files.append(f)
 
-        return cls(
-            doc_id=int(tensors["doc_id"].item()),
-            n_layers=n_layers,
-            expert_indices=tensors["expert_indices"],
-            expert_weights=tensors["expert_weights"],
-            expert_traces=expert_traces,
+        # Routing counts: [n_layers, n_docs, n_experts]
+        routing_path = routing_dir / "routing_counts.h5"
+        self._routing_file = h5py.File(routing_path, "w")
+        self._routing_file.create_dataset(
+            "data",
+            shape=(n_layers, 0, n_experts),
+            maxshape=(n_layers, None, n_experts),
+            dtype=np.int16,
+            chunks=(n_layers, chunk_docs, 1),
         )
 
+        # Doc ID tracking
+        self._doc_ids: list[int] = []
 
-def list_all(data_dir: Optional[Path] = None) -> list[int]:
-    """List all available document IDs in a directory.
+    @property
+    def n_docs(self) -> int:
+        return self._n_docs
 
-    Args:
-        data_dir: Directory containing trace files (default: ./data)
+    def add_document(
+        self,
+        expert_means: torch.Tensor,
+        routing_counts: torch.Tensor,
+        doc_id: int,
+    ) -> None:
+        """Append one document's aggregated data.
 
-    Returns:
-        List of document IDs sorted numerically
-    """
-    if data_dir is None:
-        data_dir = Path("./data")
+        Args:
+            expert_means: [n_layers, n_experts, d_model] mean gated outputs
+            routing_counts: [n_layers, n_experts] token counts per expert
+            doc_id: Original dataset document index
+        """
+        idx = self._n_docs
+        self._n_docs += 1
+        self._doc_ids.append(doc_id)
 
-    doc_ids = []
-    for filepath in sorted(data_dir.glob("doc_*.safetensors")):
-        try:
-            doc_id = int(filepath.stem.split("_")[1])
-            doc_ids.append(doc_id)
-        except (ValueError, IndexError):
-            continue
+        # Resize and write per-layer activation data
+        for layer_idx in range(self.n_layers):
+            ds = self._layer_files[layer_idx]["data"]
+            ds.resize(self._n_docs, axis=0)
+            ds[idx] = expert_means[layer_idx].cpu().numpy().astype(np.float16)
 
-    return doc_ids
+        # Resize and write routing counts
+        rds = self._routing_file["data"]
+        rds.resize(self._n_docs, axis=1)
+        rds[:, idx, :] = routing_counts.cpu().numpy().astype(np.int16)
+
+    def flush(self) -> None:
+        """Force write all buffered data to disk."""
+        for f in self._layer_files:
+            f.flush()
+        self._routing_file.flush()
+
+    def close(self) -> None:
+        """Finalize: save metadata and close all files."""
+        # Save composition metadata
+        metadata = {
+            "n_layers": self.n_layers,
+            "n_experts": self.n_experts,
+            "d_model": self.d_model,
+            "n_docs": self._n_docs,
+        }
+        with open(self.root_dir / "composition.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        # Save doc ID mapping
+        with open(self.root_dir / "doc_ids.json", "w") as f:
+            json.dump(self._doc_ids, f)
+
+        # Close HDF5 files
+        for f in self._layer_files:
+            f.close()
+        self._routing_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    # --- Read API (class methods for loading saved data) ---
+
+    @staticmethod
+    def load_expert(
+        root_dir: Path,
+        layer: int,
+        expert_id: int,
+        device: str = "cpu",
+    ) -> torch.Tensor:
+        """Load one expert's activations across all documents.
+
+        Args:
+            root_dir: Store root directory
+            layer: Layer index
+            expert_id: Expert index
+            device: Target device
+
+        Returns:
+            Tensor [n_docs, d_model]
+        """
+        path = root_dir / "expert_activations" / f"layer_{layer:02d}.h5"
+        with h5py.File(path, "r") as f:
+            data = f["data"][:, expert_id, :]  # [n_docs, d_model]
+        return torch.from_numpy(data).float().to(device)
+
+    @staticmethod
+    def load_layer(
+        root_dir: Path,
+        layer: int,
+        device: str = "cpu",
+    ) -> torch.Tensor:
+        """Load all expert activations for one layer.
+
+        Args:
+            root_dir: Store root directory
+            layer: Layer index
+            device: Target device
+
+        Returns:
+            Tensor [n_docs, n_experts, d_model]
+        """
+        path = root_dir / "expert_activations" / f"layer_{layer:02d}.h5"
+        with h5py.File(path, "r") as f:
+            data = f["data"][:]
+        return torch.from_numpy(data).float().to(device)
+
+    @staticmethod
+    def stream_experts(
+        root_dir: Path,
+        layer: int,
+        device: str = "cpu",
+    ) -> Iterator[tuple[int, torch.Tensor]]:
+        """Iterate over experts in a layer, yielding (expert_id, activations).
+
+        Args:
+            root_dir: Store root directory
+            layer: Layer index
+            device: Target device
+
+        Yields:
+            (expert_id, Tensor [n_docs, d_model])
+        """
+        path = root_dir / "expert_activations" / f"layer_{layer:02d}.h5"
+        with h5py.File(path, "r") as f:
+            n_experts = f["data"].shape[1]
+            for expert_id in range(n_experts):
+                data = f["data"][:, expert_id, :]
+                yield expert_id, torch.from_numpy(data).float().to(device)
+
+    @staticmethod
+    def load_routing_counts(
+        root_dir: Path,
+        device: str = "cpu",
+    ) -> torch.Tensor:
+        """Load routing counts [n_layers, n_docs, n_experts].
+
+        Args:
+            root_dir: Store root directory
+            device: Target device
+
+        Returns:
+            Tensor [n_layers, n_docs, n_experts]
+        """
+        path = root_dir / "routing" / "routing_counts.h5"
+        with h5py.File(path, "r") as f:
+            data = f["data"][:]
+        return torch.from_numpy(data).long().to(device)
+
+    @staticmethod
+    def load_metadata(root_dir: Path) -> dict:
+        """Load composition metadata.
+
+        Args:
+            root_dir: Store root directory
+
+        Returns:
+            Metadata dictionary
+        """
+        with open(root_dir / "composition.json") as f:
+            return json.load(f)
+
+    @staticmethod
+    def load_doc_ids(root_dir: Path) -> list[int]:
+        """Load document ID mapping.
+
+        Args:
+            root_dir: Store root directory
+
+        Returns:
+            List of original dataset doc IDs
+        """
+        with open(root_dir / "doc_ids.json") as f:
+            return json.load(f)
