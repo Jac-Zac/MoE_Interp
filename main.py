@@ -1,11 +1,4 @@
 #!/usr/bin/env python
-"""Expert Pursuit pipeline entry point.
-
-Usage:
-    python main.py encode --n_docs 100 --max_tokens 512
-    python main.py pursuit --concept countries --k 50
-"""
-
 import argparse
 
 from src.data import load_pile_docs

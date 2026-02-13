@@ -6,11 +6,12 @@
 #SBATCH --mem=50G
 #SBATCH --partition=GPU
 #SBATCH --gres=gpu:V100:1
-#SBATCH -t 00:30:00
+#SBATCH -t 00:25:00
 #SBATCH --job-name=extract_moe_act
 #SBATCH -o test.out
 
 source scripts/setup_env.sh
 module load cuda
 
-time python main.py encode --n_docs 1000 --max_tokens 2048
+time python main.py pursuit --concept countries --k 50
+
