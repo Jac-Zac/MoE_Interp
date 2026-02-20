@@ -1,115 +1,140 @@
-"""Data loading utilities for MoE interpretability."""
+"""Data loading for Expert Pursuit.
 
-from typing import Any, Optional
+Loads TriviaQA questions and tokenizes them using the model's chat template.
+Following HeadPursuit, raw questions are used for encoding.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
 
 from datasets import Dataset, load_dataset
 
 
-class PileLoader:
-    """Loader for The Pile dataset."""
+@dataclass
+class TokenizedQuestion:
+    """A tokenized TriviaQA question with content-token boundaries.
 
-    def __init__(
-        self,
-        tokenizer: Any,
-        max_tokens: int = 512,
-        dataset_name: str = "NeelNanda/pile-10k",
-        truncate: bool = False,
-    ):
-        """Initialize the loader.
+    Attributes:
+        token_ids: Full token sequence (with chat template markers).
+        content_start: Index of the first question-content token.
+        content_end: Index one past the last question-content token.
+        source_idx: Original index in the HF dataset.
+    """
 
-        Args:
-            tokenizer: HuggingFace tokenizer
-            max_tokens: Maximum tokens per document
-            dataset_name: HuggingFace dataset identifier
-            truncate: If True, truncate long docs instead of skipping them
-        """
-        self.tokenizer = tokenizer
-        self.max_tokens = max_tokens
-        self.dataset_name = dataset_name
-        self.truncate = truncate
-        self._eos_id: Optional[int] = None
-        self._dataset: Optional[Dataset] = None
-
-    def _get_eos_id(self) -> int:
-        """Get or compute EOS token ID."""
-        if self._eos_id is None:
-            eos_id = self.tokenizer.eos_token_id
-            if eos_id is None:
-                eos_id = self.tokenizer.encode(
-                    "<|endoftext|>", add_special_tokens=False
-                )[0]
-
-            self._eos_id = int(eos_id)
-        return self._eos_id
-
-    def _load_dataset(self) -> Dataset:
-        """Load dataset once to hugging face default storage location"""
-        if self._dataset is None:
-            self._dataset = load_dataset(self.dataset_name, split="train")
-        return self._dataset
-
-    def _tokenize_doc(self, text: str) -> Optional[list[int]]:
-        """Tokenize a single document, returns None if invalid."""
-        if not text or len(text.strip()) <= 20:
-            return None
-
-        try:
-            tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        except Exception:
-            return None
-
-        # +1 for EOS token
-        if len(tokens) + 1 > self.max_tokens:
-            if self.truncate:
-                tokens = tokens[: self.max_tokens - 1]
-            else:
-                return None
-
-        tokens.append(self._get_eos_id())
-        return tokens
-
-    def load_n_docs(self, n_docs: int = 100) -> tuple[list[list[int]], list[int]]:
-        """Load exactly n_docs documents that fit within max_tokens.
-
-        Returns:
-            Tuple of (token_lists, source_doc_indices) where source_doc_indices
-            maps each loaded doc to its original index in the dataset.
-        """
-        dataset = self._load_dataset()
-        tokens_list: list[list[int]] = []
-        source_indices: list[int] = []
-
-        for dataset_idx, example in enumerate(dataset):
-            if len(tokens_list) >= n_docs:
-                break
-
-            ex: dict = example  # type: ignore
-            tokens = self._tokenize_doc(ex.get("text", ""))
-            if tokens is not None:
-                tokens_list.append(tokens)
-                source_indices.append(dataset_idx)
-
-        return tokens_list, source_indices
+    token_ids: list[int]
+    content_start: int
+    content_end: int
+    source_idx: int
 
 
-def load_pile_docs(
+def _find_content_boundaries(
+    token_ids: list[int],
     tokenizer: Any,
-    n_docs: int = 100,
-    max_tokens: int = 512,
-    dataset_name: str = "NeelNanda/pile-10k",
-    truncate: bool = False,
-) -> tuple[list[list[int]], list[int]]:
-    """Load documents from The Pile.
+) -> tuple[int, int]:
+    """Find start/end indices of question-content tokens within chat template.
 
-    Args:
-        tokenizer: HuggingFace tokenizer
-        n_docs: Number of documents to load
-        max_tokens: Maximum tokens per document
-        dataset_name: HuggingFace dataset identifier
-        truncate: If True, truncate long docs instead of skipping
+    The OLMoE chat template produces:
+        <|endoftext|> <|user|> \\n {question tokens} \\n <|assistant|> \\n
+    We want only the {question tokens} portion.
 
     Returns:
-        Tuple of (token_lists, source_doc_indices)
+        (content_start, content_end) indices into token_ids.
     """
-    loader = PileLoader(tokenizer, max_tokens, dataset_name, truncate=truncate)
-    return loader.load_n_docs(n_docs)
+    # Encode the special tokens to find their IDs
+    user_token = tokenizer.encode("<|user|>", add_special_tokens=False)
+    assistant_token = tokenizer.encode("<|assistant|>", add_special_tokens=False)
+
+    # Find <|user|> token position
+    user_pos = None
+    if user_token:
+        uid = user_token[0]
+        for i, tid in enumerate(token_ids):
+            if tid == uid:
+                user_pos = i
+                break
+
+    # Find <|assistant|> token position (search from end)
+    assistant_pos = None
+    if assistant_token:
+        aid = assistant_token[0]
+        for i in range(len(token_ids) - 1, -1, -1):
+            if token_ids[i] == aid:
+                assistant_pos = i
+                break
+
+    # Content starts after <|user|> + newline token
+    if user_pos is not None:
+        content_start = user_pos + 2  # skip <|user|> and \n
+    else:
+        content_start = 0
+
+    # Content ends before \n <|assistant|>
+    if assistant_pos is not None:
+        content_end = assistant_pos - 1  # exclude \n before <|assistant|>
+    else:
+        content_end = len(token_ids)
+
+    # Sanity: ensure valid range
+    content_start = max(0, min(content_start, len(token_ids)))
+    content_end = max(content_start, min(content_end, len(token_ids)))
+
+    return content_start, content_end
+
+
+def load_triviaqa(
+    tokenizer: Any,
+    n_docs: int = 5000,
+    split: str = "train",
+    dataset: Dataset | None = None,
+) -> list[TokenizedQuestion]:
+    """Load and tokenize TriviaQA questions with the model's chat template.
+
+    Each question is wrapped in the OLMoE chat template (no QA prompt).
+    Token boundaries are computed so that only question-content tokens
+    (excluding <|user|>, <|assistant|>, etc.) are used for aggregation.
+
+    Args:
+        tokenizer: HuggingFace tokenizer with apply_chat_template support.
+        n_docs: Number of questions to load.
+        split: Dataset split ("train" for encoding, "validation" for eval).
+        dataset: Pre-loaded HF Dataset to skip download. Must have a
+            "question" column. Pass this in notebooks to avoid re-downloading.
+
+    Returns:
+        List of TokenizedQuestion with token IDs and content boundaries.
+    """
+    if dataset is None:
+        dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split=split)
+
+    questions: list[TokenizedQuestion] = []
+
+    for idx in range(len(dataset)):
+        if len(questions) >= n_docs:
+            break
+
+        question_text = dataset[idx].get("question", "").strip()
+        if not question_text:
+            continue
+
+        # Wrap in chat template (raw question, no QA prompt)
+        messages = [{"role": "user", "content": question_text}]
+        token_ids = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+        )
+
+        content_start, content_end = _find_content_boundaries(token_ids, tokenizer)
+
+        questions.append(
+            TokenizedQuestion(
+                token_ids=token_ids,
+                content_start=content_start,
+                content_end=content_end,
+                source_idx=idx,
+            )
+        )
+
+    return questions

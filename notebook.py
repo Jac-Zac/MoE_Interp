@@ -7,7 +7,7 @@ import nnsight
 import torch
 from nnsight import LanguageModel
 
-from src.data import load_pile_docs
+from src.data import load_triviaqa
 from src.environment import set_seed
 
 # %% Configuration
@@ -28,21 +28,20 @@ model = LanguageModel(
     dispatch=True,
 )
 
-# %% Load single document from The Pile
-docs, doc_source_ids = load_pile_docs(
-    tokenizer=model.tokenizer,
-    n_docs=1,
-    max_tokens=2048,  # HACK: For testing
-    dataset_name="NeelNanda/pile-10k",
-)
+# %% Load a few questions from TriviaQA
+# Small n_docs for quick hacking; increase for real analysis.
+N_DOCS = 3
+questions = load_triviaqa(tokenizer=model.tokenizer, n_docs=N_DOCS)
 
-# Get the document 0 which is the only one in this case
-doc = docs[0]
-# Get the actual document which corresponds to it
-doc_id = doc_source_ids[0]
+# Use the first question for the single-doc demo below
+q = questions[0]
+doc = q.token_ids
+doc_id = q.source_idx
 
-print(f"Loaded document {doc_id}")
-print(f"Doc length: {len(doc)} tokens")
+print(f"Loaded {len(questions)} TriviaQA questions")
+for i, qq in enumerate(questions):
+    decoded = model.tokenizer.decode(qq.token_ids[qq.content_start : qq.content_end])
+    print(f"  [{i}] idx={qq.source_idx}: {decoded[:80]}...")
 
 
 # %% Simple dataclass to hold per-expert data (used only in this notebook)
@@ -132,21 +131,31 @@ for layer_idx in range(n_layers):
 
 # %% Compute gated outputs from captured trace
 # Demonstrate: raw_outputs + expert_weights -> gated outputs -> per-doc mean
-# This is the aggregation that the encode pipeline does automatically
+# Only content tokens (excluding chat template markers) are averaged,
+# matching HeadPursuit's aggregation strategy.
 
 layer_idx = 0
 expert_id = sorted(expert_traces[layer_idx].keys())[0]
 et = expert_traces[layer_idx][expert_id]
 
+# Filter to content tokens only
+content_mask = (et.token_indices >= q.content_start) & (
+    et.token_indices < q.content_end
+)
+content_token_idxs = et.token_indices[content_mask]
+content_raw_outputs = et.raw_outputs[content_mask]
+content_top_k_pos = et.top_k_positions[content_mask]
+
 # Gated output = gate_weight * raw_output (what actually enters the residual stream)
-gate_weights = all_weights[layer_idx, et.token_indices, et.top_k_positions]
-gated_outputs = gate_weights.unsqueeze(-1) * et.raw_outputs  # [n_tokens, d_model]
+gate_weights = all_weights[layer_idx, content_token_idxs, content_top_k_pos]
+gated_outputs = gate_weights.unsqueeze(-1) * content_raw_outputs  # [n_tokens, d_model]
 
 # Per-document mean gated output (this is what SOMP operates on)
 mean_gated = gated_outputs.mean(dim=0)  # [d_model]
 
 print(f"\nLayer {layer_idx}, Expert {expert_id}:")
-print(f"  Routed tokens: {et.token_indices.numel()}")
+print(f"  Total routed tokens: {et.token_indices.numel()}")
+print(f"  Content tokens used: {content_token_idxs.numel()}")
 print(f"  Gated output shape: {tuple(gated_outputs.shape)}")
 print(f"  Mean gated output shape: {tuple(mean_gated.shape)}")
 print(f"  Mean gated norm: {mean_gated.norm():.4f}")
@@ -155,11 +164,11 @@ print(f"  Mean gated norm: {mean_gated.norm():.4f}")
 # %% Simple SOMP demo on this single document
 import torch.nn.functional as F
 
-from src.dictionary import extract_unembedding
 from src.somp import somp
 
-# Extract unembedding matrix (the SOMP dictionary)
-unembed = extract_unembedding(model)  # [vocab_size, d_model]
+# Get the unembedding matrix directly from the model (the SOMP dictionary).
+# This is the lm_head weight: [vocab_size, d_model].
+unembed = model.lm_head.weight.detach().float().cpu()
 dictionary = F.normalize(unembed, dim=-1)
 
 # Build aggregated expert activations for all experts in one layer
@@ -170,8 +179,11 @@ d_model = model.config.hidden_size
 # SOMP needs multiple samples to be meaningful, but we can still demo the mechanics
 layer_acts = torch.zeros(n_experts, d_model)
 for eid, et in expert_traces[layer_idx].items():
-    gw = all_weights[layer_idx, et.token_indices, et.top_k_positions]
-    gated = (gw.unsqueeze(-1) * et.raw_outputs).mean(dim=0)
+    cmask = (et.token_indices >= q.content_start) & (et.token_indices < q.content_end)
+    if not cmask.any():
+        continue
+    gw = all_weights[layer_idx, et.token_indices[cmask], et.top_k_positions[cmask]]
+    gated = (gw.unsqueeze(-1) * et.raw_outputs[cmask]).mean(dim=0)
     layer_acts[eid] = gated
 
 # Pick one expert and run SOMP (single sample = not statistically meaningful,
@@ -181,7 +193,39 @@ result = somp(X, dictionary, k=10, center=False)  # no centering with 1 sample
 
 # Decode the top atoms
 print(f"\nSOMP decomposition for Layer {layer_idx}, Expert {expert_id}:")
-print(f"  (NOTE: single-document demo, use main.py pursuit for real analysis)")
+print(f"  (NOTE: single-document demo — centering needs multiple documents)")
 for i, atom_idx in enumerate(result["chosen"][:10].tolist()):
     token = model.tokenizer.decode([atom_idx])
     print(f"  {i + 1:2d}. token={repr(token):20s}  EVR={result['evr'][i]:.4f}")
+
+
+# %% Multi-document SOMP: trace all questions, aggregate, run with centering
+# This is the real Expert Pursuit workflow: multiple documents give SOMP enough
+# samples to identify systematic expert specialization (not single-doc artifacts).
+
+from src.capture import capture_document
+
+# Trace each question and collect per-expert mean gated outputs
+all_expert_means = []
+for qi, question in enumerate(questions):
+    expert_means, routing_counts, _ = capture_document(model, question)
+    all_expert_means.append(expert_means)
+    print(f"  Traced question {qi}: {len(question.token_ids)} tokens")
+
+# Stack: [n_docs, n_layers, n_experts, d_model]
+all_means = torch.stack(all_expert_means, dim=0)
+
+# Run SOMP on one expert across all documents (the real use case)
+target_layer = 0
+target_expert = sorted(expert_traces[target_layer].keys())[0]
+
+X_multi = all_means[:, target_layer, target_expert, :]  # [n_docs, d_model]
+result_multi = somp(X_multi, dictionary, k=10, center=True)
+
+print(
+    f"\nMulti-doc SOMP: Layer {target_layer}, Expert {target_expert}"
+    f" ({len(questions)} docs):"
+)
+for i, atom_idx in enumerate(result_multi["chosen"][:10].tolist()):
+    token = model.tokenizer.decode([atom_idx])
+    print(f"  {i + 1:2d}. token={repr(token):20s}  EVR={result_multi['evr'][i]:.4f}")

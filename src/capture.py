@@ -1,7 +1,8 @@
 """Expert Pursuit activation extraction.
 
 Captures gated expert outputs via nnsight tracing, aggregates to
-per-document means, and streams to HDF5 via ExpertActivationStore.
+per-document means (averaging only question-content tokens), and
+streams to HDF5 via ExpertActivationStore.
 """
 
 from pathlib import Path
@@ -12,6 +13,7 @@ from nnsight import LanguageModel
 from tqdm import tqdm
 
 from src.cache import ExpertActivationStore
+from src.data import TokenizedQuestion
 
 
 def _aggregate_document(
@@ -23,8 +25,14 @@ def _aggregate_document(
     top_k_pos_per_layer: list[list[torch.Tensor]],
     n_experts: int,
     d_model: int,
+    content_start: int = 0,
+    content_end: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute per-expert mean gated outputs for one document.
+
+    Only tokens within [content_start, content_end) are included in the
+    average, matching HeadPursuit's approach of excluding chat template
+    markers from aggregation.
 
     Args:
         expert_indices: [n_layers, seq_len, k] routing indices
@@ -35,12 +43,17 @@ def _aggregate_document(
         top_k_pos_per_layer: per-layer list of top-k position tensors
         n_experts: total number of experts
         d_model: hidden dimension
+        content_start: first question-content token index
+        content_end: one past last question-content token index (None = all)
 
     Returns:
         expert_means: [n_layers, n_experts, d_model]
         routing_counts: [n_layers, n_experts]
     """
     n_layers = expert_indices.shape[0]
+    if content_end is None:
+        content_end = expert_indices.shape[1]
+
     expert_means = torch.zeros(n_layers, n_experts, d_model)
     routing_counts = torch.zeros(n_layers, n_experts, dtype=torch.long)
 
@@ -59,6 +72,15 @@ def _aggregate_document(
             if token_idxs.numel() == 0:
                 continue
 
+            # Filter to content tokens only (exclude chat template markers)
+            content_mask = (token_idxs >= content_start) & (token_idxs < content_end)
+            if not content_mask.any():
+                continue
+
+            token_idxs = token_idxs[content_mask]
+            raw_output = raw_output[content_mask]
+            k_positions = k_positions[content_mask]
+
             # Gated output: g_e(x) * f_e(x)
             gate_weights = expert_weights[layer_idx, token_idxs, k_positions]
             gated = gate_weights.unsqueeze(-1) * raw_output  # [n_tokens, d_model]
@@ -71,19 +93,29 @@ def _aggregate_document(
 
 def capture_document(
     model: LanguageModel,
-    doc: list[int],
+    question: TokenizedQuestion | list[int],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Capture MoE activations for a single document via nnsight.
 
     Args:
         model: nnsight LanguageModel instance
-        doc: Document token IDs
+        question: TokenizedQuestion (with content boundaries) or raw token IDs.
+            When raw token IDs are passed, all tokens are averaged.
 
     Returns:
         expert_means: [n_layers, n_experts, d_model]
         routing_counts: [n_layers, n_experts]
         expert_weights_all: [n_layers, seq_len, k]
     """
+    if isinstance(question, TokenizedQuestion):
+        doc = question.token_ids
+        content_start = question.content_start
+        content_end = question.content_end
+    else:
+        doc = question
+        content_start = 0
+        content_end = None
+
     layer_indices: list = []
     layer_weights: list = []
     active_experts_per_layer: list[torch.Tensor] = []
@@ -143,6 +175,8 @@ def capture_document(
         top_k_pos_per_layer=top_k_pos_per_layer,
         n_experts=n_experts,
         d_model=d_model,
+        content_start=content_start,
+        content_end=content_end,
     )
 
     return expert_means, routing_counts, weights_t
@@ -150,16 +184,14 @@ def capture_document(
 
 def encode_dataset(
     model: LanguageModel,
-    docs: list[list[int]],
-    doc_ids: list[int],
+    questions: list[TokenizedQuestion],
     output_dir: Path,
 ) -> Path:
     """Encode a dataset: capture gated expert outputs and save to HDF5.
 
     Args:
         model: nnsight LanguageModel
-        docs: List of document token ID lists
-        doc_ids: Original dataset indices
+        questions: List of TokenizedQuestion from load_triviaqa()
         output_dir: Root directory for HDF5 output
 
     Returns:
@@ -176,16 +208,14 @@ def encode_dataset(
         n_layers=n_layers,
         n_experts=n_experts,
         d_model=d_model,
-        n_docs_estimate=len(docs),
+        n_docs_estimate=len(questions),
     ) as store:
-        for i, (doc, doc_id) in enumerate(
-            tqdm(zip(docs, doc_ids), total=len(docs), desc="Encoding")
-        ):
-            expert_means, routing_counts, _ = capture_document(model, doc)
-            store.add_document(expert_means, routing_counts, doc_id)
+        for i, question in enumerate(tqdm(questions, desc="Encoding")):
+            expert_means, routing_counts, _ = capture_document(model, question)
+            store.add_document(expert_means, routing_counts, question.source_idx)
 
             if (i + 1) % 100 == 0:
                 store.flush()
-                tqdm.write(f"Flushed {i + 1}/{len(docs)} documents to disk")
+                tqdm.write(f"Flushed {i + 1}/{len(questions)} documents to disk")
 
     return output_dir

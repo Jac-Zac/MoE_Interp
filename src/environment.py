@@ -60,8 +60,6 @@ def print_model_config(config) -> None:
         print(f"{k:<30}: {v}")
     print()
 
-    """Model loading utilities."""
-
 
 def load_model(model_name="allenai/OLMoE-1B-7B-0924-Instruct") -> LanguageModel:
     """Load OLMoE model via nnsight."""

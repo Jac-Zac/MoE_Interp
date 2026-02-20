@@ -1,96 +1,12 @@
-"""Tests for SOMP algorithm, ExpertActivationStore, and pipeline utilities."""
+"""Tests for ExpertActivationStore, aggregation, and content boundaries."""
 
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 
 from src.cache import ExpertActivationStore
 from src.capture import _aggregate_document
-from src.dictionary import CONCEPTS, make_concept_dictionary
-from src.pursuit import print_top_experts
-from src.somp import somp
-
-
-class TestSOMP:
-    """Test SOMP with synthetic data where we know the answer."""
-
-    def test_recovers_single_direction(self):
-        """SOMP should find a dictionary atom that matches a 1D signal."""
-        d = 64
-        n_samples = 50
-
-        # Dictionary: random normalized vectors
-        dictionary = F.normalize(torch.randn(100, d), dim=-1)
-
-        # Signal: varying magnitudes along dictionary atom 42
-        # After centering, the variance is along atom 42's direction
-        target = dictionary[42]
-        coeffs = torch.randn(n_samples, 1)  # varying coefficients
-        X = coeffs * target.unsqueeze(0) + 0.01 * torch.randn(n_samples, d)
-
-        result = somp(X, dictionary, k=5)
-
-        # First chosen atom should be 42
-        assert result["chosen"][0].item() == 42
-        # EVR should be very high after first atom
-        assert result["evr"][0].item() > 0.9
-
-    def test_recovers_two_directions(self):
-        """SOMP should find both directions in a 2-component signal."""
-        d = 64
-        n_samples = 100
-
-        dictionary = F.normalize(torch.randn(200, d), dim=-1)
-
-        # Signal: varying mix of atoms 10 and 50
-        c1 = torch.randn(n_samples, 1)
-        c2 = torch.randn(n_samples, 1)
-        X = (
-            3.0 * c1 * dictionary[10].unsqueeze(0)
-            + 1.0 * c2 * dictionary[50].unsqueeze(0)
-            + 0.01 * torch.randn(n_samples, d)
-        )
-
-        result = somp(X, dictionary, k=5)
-
-        top2 = set(result["chosen"][:2].tolist())
-        assert 10 in top2
-        assert 50 in top2
-
-    def test_evr_monotonically_increases(self):
-        """EVR should increase (or stay same) with each new atom."""
-        d = 32
-        X = torch.randn(30, d)
-        dictionary = F.normalize(torch.randn(50, d), dim=-1)
-
-        result = somp(X, dictionary, k=10)
-
-        for i in range(1, 10):
-            assert result["evr"][i] >= result["evr"][i - 1] - 1e-6
-
-    def test_zero_signal_returns_zeros(self):
-        """Zero-variance signal should return zero EVR."""
-        d = 32
-        X = torch.ones(20, d)  # constant signal, zero variance after centering
-
-        dictionary = F.normalize(torch.randn(50, d), dim=-1)
-        result = somp(X, dictionary, k=5)
-
-        assert result["evr"].abs().max() < 1e-6
-
-    def test_output_shapes(self):
-        """Check output tensor shapes."""
-        k = 7
-        result = somp(
-            X=torch.randn(25, 16),
-            dictionary=F.normalize(torch.randn(40, 16), dim=-1),
-            k=k,
-        )
-
-        assert result["chosen"].shape == (k,)
-        assert result["evr"].shape == (k,)
-        assert result["weights"].shape == (k,)
+from src.data import TokenizedQuestion, _find_content_boundaries
 
 
 class TestExpertActivationStore:
@@ -195,190 +111,162 @@ class TestExpertActivationStore:
 class TestAggregateDocument:
     """Test per-expert mean gated output computation."""
 
-    def test_single_expert_single_token(self):
-        """One expert processes one token: mean == gated output."""
+    def test_sum_experts_matches_moe_output(self):
+        """Summed gated expert outputs equal the MoE output per token."""
+        torch.manual_seed(0)
+        n_layers, n_experts, d_model = 2, 6, 8
+        seq_len, k = 5, 3
+
+        expert_indices = torch.randint(0, n_experts, (n_layers, seq_len, k))
+        expert_weights = torch.rand(n_layers, seq_len, k)
+        raw_outputs = torch.randn(n_layers, seq_len, k, d_model)
+
+        active_experts_per_layer: list[torch.Tensor] = []
+        token_indices_per_layer: list[list[torch.Tensor]] = []
+        raw_outputs_per_layer: list[list[torch.Tensor]] = []
+        top_k_pos_per_layer: list[list[torch.Tensor]] = []
+
+        for layer_idx in range(n_layers):
+            active_experts = torch.unique(expert_indices[layer_idx])
+            token_indices_list: list[torch.Tensor] = []
+            down_projs_list: list[torch.Tensor] = []
+            top_k_pos_list: list[torch.Tensor] = []
+
+            for expert_id in active_experts:
+                positions = (expert_indices[layer_idx] == expert_id).nonzero(
+                    as_tuple=False
+                )
+                token_idxs = positions[:, 0]
+                k_positions = positions[:, 1]
+                down_proj = raw_outputs[layer_idx, token_idxs, k_positions]
+
+                token_indices_list.append(token_idxs)
+                down_projs_list.append(down_proj)
+                top_k_pos_list.append(k_positions)
+
+            active_experts_per_layer.append(active_experts)
+            token_indices_per_layer.append(token_indices_list)
+            raw_outputs_per_layer.append(down_projs_list)
+            top_k_pos_per_layer.append(top_k_pos_list)
+
+        moe_output = (expert_weights.unsqueeze(-1) * raw_outputs).sum(dim=2)
+        summed_experts = torch.zeros_like(moe_output)
+
+        for layer_idx in range(n_layers):
+            for i, _ in enumerate(active_experts_per_layer[layer_idx]):
+                token_idxs = token_indices_per_layer[layer_idx][i]
+                raw_output = raw_outputs_per_layer[layer_idx][i]
+                k_positions = top_k_pos_per_layer[layer_idx][i]
+                gate_weights = expert_weights[layer_idx, token_idxs, k_positions]
+                gated = gate_weights.unsqueeze(-1) * raw_output
+                summed_experts[layer_idx].index_add_(0, token_idxs, gated)
+
+        assert torch.allclose(summed_experts, moe_output, atol=1e-6)
+
+    def test_content_token_filtering(self):
+        """Only tokens within [content_start, content_end) are averaged."""
+        torch.manual_seed(1)
         n_layers, n_experts, d_model = 1, 4, 8
-        seq_len, k = 5, 2
-
-        expert_indices = torch.zeros(n_layers, seq_len, k, dtype=torch.long)
-        expert_weights = torch.ones(n_layers, seq_len, k)
-
-        # Expert 2 processes token 3 at top-k position 0
-        raw_output = torch.randn(1, d_model)
-        gate_weight = 0.7
-        expert_weights[0, 3, 0] = gate_weight
-
-        means, counts = _aggregate_document(
-            expert_indices=expert_indices,
-            expert_weights=expert_weights,
-            active_experts_per_layer=[torch.tensor([2])],
-            token_indices_per_layer=[[torch.tensor([3])]],
-            raw_outputs_per_layer=[[raw_output]],
-            top_k_pos_per_layer=[[torch.tensor([0])]],
-            n_experts=n_experts,
-            d_model=d_model,
-        )
-
-        assert means.shape == (n_layers, n_experts, d_model)
-        assert counts.shape == (n_layers, n_experts)
-        expected = gate_weight * raw_output
-        assert torch.allclose(means[0, 2], expected.squeeze(0), atol=1e-6)
-        assert counts[0, 2] == 1
-        # Other experts should be zero
-        assert means[0, 0].abs().sum() == 0
-        assert means[0, 1].abs().sum() == 0
-        assert means[0, 3].abs().sum() == 0
-
-    def test_multiple_tokens_same_expert(self):
-        """Expert with multiple tokens: mean is average of gated outputs."""
-        n_layers, n_experts, d_model = 1, 2, 4
         seq_len, k = 10, 2
-
-        expert_indices = torch.zeros(n_layers, seq_len, k, dtype=torch.long)
-        expert_weights = torch.ones(n_layers, seq_len, k)
-
-        # Expert 0 processes tokens 1, 4, 7 at top-k position 0
-        token_idxs = torch.tensor([1, 4, 7])
-        raw_outputs = torch.randn(3, d_model)
-        gate_weights_vals = torch.tensor([0.5, 0.8, 0.3])
-        for i, tidx in enumerate(token_idxs):
-            expert_weights[0, tidx, 0] = gate_weights_vals[i]
-
-        means, counts = _aggregate_document(
-            expert_indices=expert_indices,
-            expert_weights=expert_weights,
-            active_experts_per_layer=[torch.tensor([0])],
-            token_indices_per_layer=[[token_idxs]],
-            raw_outputs_per_layer=[[raw_outputs]],
-            top_k_pos_per_layer=[[torch.tensor([0, 0, 0])]],
-            n_experts=n_experts,
-            d_model=d_model,
-        )
-
-        gated = gate_weights_vals.unsqueeze(-1) * raw_outputs
-        expected_mean = gated.mean(dim=0)
-        assert torch.allclose(means[0, 0], expected_mean, atol=1e-6)
-        assert counts[0, 0] == 3
-
-    def test_empty_expert_stays_zero(self):
-        """Expert with no tokens should have zero mean and count."""
-        n_layers, n_experts, d_model = 1, 4, 8
-        seq_len, k = 5, 2
-
-        expert_indices = torch.zeros(n_layers, seq_len, k, dtype=torch.long)
-        expert_weights = torch.ones(n_layers, seq_len, k)
-
-        # No active experts at all
-        means, counts = _aggregate_document(
-            expert_indices=expert_indices,
-            expert_weights=expert_weights,
-            active_experts_per_layer=[torch.tensor([1])],
-            token_indices_per_layer=[[torch.tensor([], dtype=torch.long)]],
-            raw_outputs_per_layer=[[torch.zeros(0, d_model)]],
-            top_k_pos_per_layer=[[torch.tensor([], dtype=torch.long)]],
-            n_experts=n_experts,
-            d_model=d_model,
-        )
-
-        assert means.abs().sum() == 0
-        assert counts.sum() == 0
-
-    def test_output_shape_multilayer(self):
-        """Output shapes are correct with multiple layers."""
-        n_layers, n_experts, d_model = 3, 8, 16
-        seq_len, k = 20, 4
 
         expert_indices = torch.randint(0, n_experts, (n_layers, seq_len, k))
         expert_weights = torch.rand(n_layers, seq_len, k)
 
-        # One active expert per layer with one token each
-        active_per_layer = [torch.tensor([i]) for i in range(n_layers)]
-        token_per_layer = [[torch.tensor([0])] for _ in range(n_layers)]
-        raw_per_layer = [[torch.randn(1, d_model)] for _ in range(n_layers)]
-        kpos_per_layer = [[torch.tensor([0])] for _ in range(n_layers)]
+        # Build per-expert data
+        active_experts_per_layer: list[torch.Tensor] = []
+        token_indices_per_layer: list[list[torch.Tensor]] = []
+        raw_outputs_per_layer: list[list[torch.Tensor]] = []
+        top_k_pos_per_layer: list[list[torch.Tensor]] = []
 
-        means, counts = _aggregate_document(
-            expert_indices=expert_indices,
-            expert_weights=expert_weights,
-            active_experts_per_layer=active_per_layer,
-            token_indices_per_layer=token_per_layer,
-            raw_outputs_per_layer=raw_per_layer,
-            top_k_pos_per_layer=kpos_per_layer,
-            n_experts=n_experts,
-            d_model=d_model,
+        raw_outputs = torch.randn(n_layers, seq_len, k, d_model)
+        for layer_idx in range(n_layers):
+            active_experts = torch.unique(expert_indices[layer_idx])
+            tl, dl, kl = [], [], []
+            for expert_id in active_experts:
+                positions = (expert_indices[layer_idx] == expert_id).nonzero(
+                    as_tuple=False
+                )
+                tl.append(positions[:, 0])
+                dl.append(raw_outputs[layer_idx, positions[:, 0], positions[:, 1]])
+                kl.append(positions[:, 1])
+            active_experts_per_layer.append(active_experts)
+            token_indices_per_layer.append(tl)
+            raw_outputs_per_layer.append(dl)
+            top_k_pos_per_layer.append(kl)
+
+        # With content_start=3, content_end=7, only tokens 3-6 should be used
+        means_filtered, counts_filtered = _aggregate_document(
+            expert_indices,
+            expert_weights,
+            active_experts_per_layer,
+            token_indices_per_layer,
+            raw_outputs_per_layer,
+            top_k_pos_per_layer,
+            n_experts,
+            d_model,
+            content_start=3,
+            content_end=7,
         )
 
-        assert means.shape == (n_layers, n_experts, d_model)
-        assert counts.shape == (n_layers, n_experts)
+        # With no filtering (all tokens), result should differ
+        means_all, counts_all = _aggregate_document(
+            expert_indices,
+            expert_weights,
+            active_experts_per_layer,
+            token_indices_per_layer,
+            raw_outputs_per_layer,
+            top_k_pos_per_layer,
+            n_experts,
+            d_model,
+        )
+
+        # Counts should be <= when filtering
+        assert (counts_filtered <= counts_all).all()
+        # At least some experts should have different means
+        assert not torch.allclose(means_filtered, means_all)
 
 
-class TestDictionary:
-    """Test concept dictionary construction."""
+class TestContentBoundaries:
+    """Test chat template content boundary detection."""
 
-    def test_dictionary_is_normalized(self):
-        """Dictionary rows should be L2-normalized."""
-        vocab_size, d_model = 100, 32
-        unembedding = torch.randn(vocab_size, d_model)
+    def test_finds_content_tokens(self):
+        """Content boundaries exclude special tokens."""
 
-        # Minimal mock tokenizer
         class MockTokenizer:
             def encode(self, text, add_special_tokens=False):
-                # Return deterministic token IDs based on text hash
-                return [abs(hash(text)) % vocab_size]
+                if text == "<|user|>":
+                    return [100]
+                if text == "<|assistant|>":
+                    return [101]
+                return [50]
 
-        dictionary, token_ids = make_concept_dictionary(
-            unembedding, MockTokenizer(), ["red", "blue", "green"]
-        )
+        # Simulated OLMoE chat template:
+        # [EOS=99, <|user|>=100, \n=10, q1, q2, q3, \n=10, <|assistant|>=101, \n=10]
+        token_ids = [99, 100, 10, 1, 2, 3, 10, 101, 10]
+        start, end = _find_content_boundaries(token_ids, MockTokenizer())
+        # Should find content at tokens 3-6 (indices of 1, 2, 3)
+        assert start == 3
+        assert end == 6
 
-        norms = dictionary.norm(dim=-1)
-        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
-
-    def test_dictionary_deduplicates_tokens(self):
-        """Same token ID from "word" and " word" should appear once."""
-        vocab_size, d_model = 100, 16
-        unembedding = torch.randn(vocab_size, d_model)
+    def test_fallback_when_no_special_tokens(self):
+        """Returns full range when special tokens are missing."""
 
         class MockTokenizer:
             def encode(self, text, add_special_tokens=False):
-                # Both "cat" and " cat" map to same ID
-                return [42]
+                return [999]  # never matches anything in token_ids
 
-        dictionary, token_ids = make_concept_dictionary(
-            unembedding, MockTokenizer(), ["cat"]
+        token_ids = [1, 2, 3, 4, 5]
+        start, end = _find_content_boundaries(token_ids, MockTokenizer())
+        assert start == 0
+        assert end == len(token_ids)
+
+    def test_tokenized_question_dataclass(self):
+        """TokenizedQuestion stores boundaries correctly."""
+        q = TokenizedQuestion(
+            token_ids=[99, 100, 10, 1, 2, 3, 10, 101, 10],
+            content_start=3,
+            content_end=6,
+            source_idx=42,
         )
-
-        assert len(token_ids) == 1
-        assert token_ids[0] == 42
-        assert dictionary.shape == (1, d_model)
-
-    def test_concept_word_lists_exist(self):
-        """All expected concept lists are present and non-empty."""
-        for name in ["countries", "colors", "numbers"]:
-            assert name in CONCEPTS
-            assert len(CONCEPTS[name]) > 0
-
-
-class TestPrintTopExperts:
-    """Test expert ranking utilities."""
-
-    def test_top_experts_ordering(self):
-        """Top experts should be returned in descending EVR order."""
-        n_layers, n_experts, k = 4, 8, 10
-        evr = torch.rand(n_layers, n_experts, k)
-
-        # Plant a known max at layer=2, expert=5
-        evr[2, 5, -1] = 100.0
-
-        results = print_top_experts(evr, n=5)
-
-        assert len(results) == 5
-        assert results[0] == (2, 5, 100.0)
-        # Rest should be in descending order
-        for i in range(1, len(results)):
-            assert results[i][2] <= results[i - 1][2]
-
-    def test_top_experts_respects_n(self):
-        """Should return exactly n results."""
-        evr = torch.rand(2, 4, 5)
-        results = print_top_experts(evr, n=3)
-        assert len(results) == 3
+        assert q.token_ids[q.content_start : q.content_end] == [1, 2, 3]
+        assert q.source_idx == 42

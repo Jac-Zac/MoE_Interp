@@ -5,7 +5,6 @@ Reference: Tropp (2006), "Algorithms for simultaneous sparse approximation."
 """
 
 import torch
-import torch.nn.functional as F
 
 
 @torch.no_grad()
