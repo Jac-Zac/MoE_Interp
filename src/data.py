@@ -1,11 +1,7 @@
 """TriviaQA data loading for Expert Pursuit.
 
-Simple loader following HeadPursuit's approach: returns tokenized prompts
-as list of token ID lists. No content boundary tracking needed since we
-capture at the last token position.
+Simple loader following HeadPursuit's approach: returns tokenized prompts as list of token ID lists.
 """
-
-from __future__ import annotations
 
 from typing import Any
 

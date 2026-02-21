@@ -15,56 +15,12 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-from residual.sparse_decomposition import SOMP
+
+# from residual.sparse_decomposition import SOMP
 from tqdm import tqdm
 
 from src.cache import load_layer, load_metadata
 from src.constants import WORD_LISTS
-
-
-def build_filtered_dictionary(
-    unembed: torch.Tensor,
-    tokenizer: Any,
-    word_list: str | list[str] | set[str] = "countries",
-) -> tuple[torch.Tensor, list[int]]:
-    """Build a filtered, normalized unembedding dictionary from a word list.
-
-    Tokenizes each word, collects unique token IDs, and slices the
-    unembedding matrix to only those rows.
-
-    Args:
-        unembed: [vocab_size, d_model] raw unembedding matrix (lm_head.weight).
-        tokenizer: HuggingFace tokenizer.
-        word_list: Key in WORD_LISTS ("countries", "colors", "quantity"),
-            an explicit list/set of words, or "all" for full unembedding.
-
-    Returns:
-        dictionary: [n_tokens, d_model] L2-normalized filtered unembedding.
-        tokens_data: sorted list of original vocab IDs (remapping table).
-    """
-    if word_list == "all":
-        tokens_data = list(range(unembed.shape[0]))
-        dictionary = F.normalize(unembed.float(), dim=-1)
-        return dictionary, tokens_data
-
-    if isinstance(word_list, str):
-        if word_list not in WORD_LISTS:
-            raise ValueError(
-                f"Unknown word list: {word_list!r}. "
-                f"Choose from {list(WORD_LISTS.keys())} or pass explicit words."
-            )
-        names = WORD_LISTS[word_list]
-    else:
-        names = word_list
-
-    token_id_set: set[int] = set()
-    for name in names:
-        ids = tokenizer(name, add_special_tokens=False)["input_ids"]
-        token_id_set.update(ids)
-
-    tokens_data = sorted(token_id_set)
-    dictionary = F.normalize(unembed[tokens_data].float(), dim=-1)
-    return dictionary, tokens_data
 
 
 @dataclass
@@ -86,7 +42,6 @@ class PursuitResult:
     n_layers: int
     n_experts: int
     k: int
-    property_name: str
     experts: list[ExpertConceptResult] = field(default_factory=list)
     evr_matrix: torch.Tensor = field(default_factory=lambda: torch.zeros(0))
     zscore_matrix: torch.Tensor = field(default_factory=lambda: torch.zeros(0))
@@ -110,7 +65,6 @@ class PursuitResult:
             "n_layers": self.n_layers,
             "n_experts": self.n_experts,
             "k": self.k,
-            "property": self.property_name,
             "experts": [
                 {
                     "layer": e.layer,
@@ -149,7 +103,6 @@ class PursuitResult:
             n_layers=data["n_layers"],
             n_experts=data["n_experts"],
             k=data["k"],
-            property_name=data["property"],
             experts=experts,
             evr_matrix=torch.load(path / "evr.pt", weights_only=True),
             zscore_matrix=torch.load(path / "zscore.pt", weights_only=True),
@@ -218,7 +171,6 @@ def run_expert_pursuit(
     tokens_data: list[int],
     tokenizer: Any,
     k: int = 50,
-    property_name: str = "countries",
 ) -> PursuitResult:
     """Run SOMP on all experts across all layers, loading per-layer from HDF5.
 
@@ -228,7 +180,6 @@ def run_expert_pursuit(
         tokens_data: remapping table (tokens_data[i] -> original vocab ID).
         tokenizer: HuggingFace tokenizer for decoding.
         k: Number of SOMP atoms to select per expert.
-        property_name: Name of the word list used (for metadata).
 
     Returns:
         PursuitResult with per-expert decompositions, EVR, and z-scores.
@@ -269,7 +220,6 @@ def run_expert_pursuit(
         n_layers=n_layers,
         n_experts=n_experts,
         k=k,
-        property_name=property_name,
         experts=expert_results,
         evr_matrix=evr_matrix,
         zscore_matrix=zscore_matrix,

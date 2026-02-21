@@ -17,7 +17,6 @@ dependencies = [
     "torch>=2.5.0,<2.10",
     "tqdm>=4.67.3",
     "transformers>=4.46.0",
-    "residual",
 ]
 
 # PyTorch sources: PyPI for macOS (MPS support), CUDA index for Linux
@@ -25,7 +24,10 @@ dependencies = [
 torch = [
     { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
 ]
-residual = { git = "https://github.com/Flegyas/ResiDual.git" }
+
+# NOTE: This ca be added if we want to use that instead
+# "residual",
+# residual = { git = "https://github.com/Flegyas/ResiDual.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu124"
