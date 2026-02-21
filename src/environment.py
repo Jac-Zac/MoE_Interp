@@ -20,9 +20,7 @@ def get_data_dir() -> Path:
 
 
 def set_seed(seed: int) -> None:
-    """
-    Set random seed for reproducibility.
-    """
+    """Set random seed for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -34,31 +32,13 @@ def set_seed(seed: int) -> None:
 
 
 def get_device() -> torch.device:
-    """
-    Determine the best available device.
-    """
+    """Determine the best available device."""
     if torch.cuda.is_available():
         return torch.device("cuda")
     elif torch.backends.mps.is_available():
         return torch.device("mps")
     else:
         return torch.device("cpu")
-
-
-def print_model_config(config) -> None:
-    items = {
-        "Layers": config.num_hidden_layers,
-        "Experts / layer": config.num_experts,
-        "Active experts / token": config.num_experts_per_tok,
-        "Hidden size": config.hidden_size,
-        "Model type": config.model_type,
-    }
-
-    print("\nModel configuration")
-    print("-" * 40)
-    for k, v in items.items():
-        print(f"{k:<30}: {v}")
-    print()
 
 
 def load_model(model_name="allenai/OLMoE-1B-7B-0924-Instruct") -> LanguageModel:

@@ -1,86 +1,15 @@
-"""Data loading for Expert Pursuit.
+"""TriviaQA data loading for Expert Pursuit.
 
-Loads TriviaQA questions and tokenizes them using the model's chat template.
-Following HeadPursuit, raw questions are used for encoding.
+Simple loader following HeadPursuit's approach: returns tokenized prompts
+as list of token ID lists. No content boundary tracking needed since we
+capture at the last token position.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from datasets import Dataset, load_dataset
-
-
-@dataclass
-class TokenizedQuestion:
-    """A tokenized TriviaQA question with content-token boundaries.
-
-    Attributes:
-        token_ids: Full token sequence (with chat template markers).
-        content_start: Index of the first question-content token.
-        content_end: Index one past the last question-content token.
-        source_idx: Original index in the HF dataset.
-    """
-
-    token_ids: list[int]
-    content_start: int
-    content_end: int
-    source_idx: int
-
-
-def _find_content_boundaries(
-    token_ids: list[int],
-    tokenizer: Any,
-) -> tuple[int, int]:
-    """Find start/end indices of question-content tokens within chat template.
-
-    The OLMoE chat template produces:
-        <|endoftext|> <|user|> \\n {question tokens} \\n <|assistant|> \\n
-    We want only the {question tokens} portion.
-
-    Returns:
-        (content_start, content_end) indices into token_ids.
-    """
-    # Encode the special tokens to find their IDs
-    user_token = tokenizer.encode("<|user|>", add_special_tokens=False)
-    assistant_token = tokenizer.encode("<|assistant|>", add_special_tokens=False)
-
-    # Find <|user|> token position
-    user_pos = None
-    if user_token:
-        uid = user_token[0]
-        for i, tid in enumerate(token_ids):
-            if tid == uid:
-                user_pos = i
-                break
-
-    # Find <|assistant|> token position (search from end)
-    assistant_pos = None
-    if assistant_token:
-        aid = assistant_token[0]
-        for i in range(len(token_ids) - 1, -1, -1):
-            if token_ids[i] == aid:
-                assistant_pos = i
-                break
-
-    # Content starts after <|user|> + newline token
-    if user_pos is not None:
-        content_start = user_pos + 2  # skip <|user|> and \n
-    else:
-        content_start = 0
-
-    # Content ends before \n <|assistant|>
-    if assistant_pos is not None:
-        content_end = assistant_pos - 1  # exclude \n before <|assistant|>
-    else:
-        content_end = len(token_ids)
-
-    # Sanity: ensure valid range
-    content_start = max(0, min(content_start, len(token_ids)))
-    content_end = max(content_start, min(content_end, len(token_ids)))
-
-    return content_start, content_end
 
 
 def load_triviaqa(
@@ -88,44 +17,36 @@ def load_triviaqa(
     n_docs: int = 5000,
     split: str = "train",
     dataset: Dataset | None = None,
-) -> list[TokenizedQuestion]:
+) -> list[list[int]]:
     """Load and tokenize TriviaQA questions with the model's chat template.
-
-    Each question is wrapped in the OLMoE chat template (no QA prompt).
-    Token boundaries are computed so that only question-content tokens
-    (excluding <|user|>, <|assistant|>, etc.) are used for aggregation.
 
     Args:
         tokenizer: HuggingFace tokenizer with apply_chat_template support.
         n_docs: Number of questions to load.
         split: Dataset split ("train" for encoding, "validation" for eval).
-        dataset: Pre-loaded HF Dataset to skip download. Must have a
-            "question" column. Pass this in notebooks to avoid re-downloading.
+        dataset: Pre-loaded HF Dataset to skip download.
 
     Returns:
-        List of TokenizedQuestion with token IDs and content boundaries.
+        List of token ID lists, each wrapped in the model's chat template.
     """
     if dataset is None:
         dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split=split)
 
-    questions: list[TokenizedQuestion] = []
+    prompts: list[list[int]] = []
 
-    for idx in range(len(dataset)):
-        if len(questions) >= n_docs:
+    for row in dataset:
+        if len(prompts) >= n_docs:
             break
 
-        question_text = dataset[idx].get("question", "").strip()
-        if not question_text:
+        question = dict(row).get("question", "").strip()
+        if not question:
             continue
 
-        # Wrap in chat template (raw question, no QA prompt)
-        messages = [{"role": "user", "content": question_text}]
+        messages = [{"role": "user", "content": question}]
         token_ids = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
+            messages, add_generation_prompt=True, tokenize=True
         )
-        # Normalize to plain list[int] — some tokenizers return BatchEncoding
+
         if hasattr(token_ids, "input_ids"):
             token_ids = token_ids.input_ids
             if isinstance(token_ids[0], list):
@@ -133,31 +54,7 @@ def load_triviaqa(
         elif not isinstance(token_ids, list):
             token_ids = list(token_ids)
 
-        content_start, content_end = _find_content_boundaries(token_ids, tokenizer)
+        if token_ids:
+            prompts.append(token_ids)
 
-        questions.append(
-            TokenizedQuestion(
-                token_ids=token_ids,
-                content_start=content_start,
-                content_end=content_end,
-                source_idx=idx,
-            )
-        )
-
-    return questions
-
-
-def get_prompt(task, question=None):
-    """Trivia QA prompt (used for intervention/generation, not encoding).
-
-    Ref: https://github.com/lorenzobasile/HeadPursuit/blob/main/src/headpursuit/utils.py#L250
-    """
-    if task == "triviaqa":
-        prompt = (
-            f"Answer the following question in 1–3 words only. "
-            f"Do not provide any additional explanation for your answer. "
-            f"Question: {question} Answer:"
-        )
-    else:
-        prompt = f"{question}"
-    return prompt
+    return prompts

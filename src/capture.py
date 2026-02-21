@@ -1,8 +1,11 @@
-"""Expert Pursuit activation extraction.
+"""Expert Pursuit activation capture.
 
-Captures gated expert outputs via nnsight tracing, aggregates to
-per-document means (averaging only question-content tokens), and
-streams to HDF5 via ExpertActivationStore.
+Batched last-token capture: traces a batch of documents through the model
+via nnsight, extracts per-expert gated outputs at the LAST TOKEN position,
+and stores per-layer HDF5 files.
+
+With left-padding (nnsight default), the last token is always at seq_len - 1,
+making last-token extraction trivial.
 """
 
 from pathlib import Path
@@ -12,210 +15,148 @@ import torch
 from nnsight import LanguageModel
 from tqdm import tqdm
 
-from src.cache import ExpertActivationStore
-from src.data import TokenizedQuestion
+from src.cache import save_layer, save_metadata
 
 
-def _aggregate_document(
-    expert_indices: torch.Tensor,
-    expert_weights: torch.Tensor,
-    active_experts_per_layer: list[torch.Tensor],
-    token_indices_per_layer: list[list[torch.Tensor]],
-    raw_outputs_per_layer: list[list[torch.Tensor]],
-    top_k_pos_per_layer: list[list[torch.Tensor]],
-    n_experts: int,
-    d_model: int,
-    content_start: int = 0,
-    content_end: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute per-expert mean gated outputs for one document.
-
-    Only tokens within [content_start, content_end) are included in the
-    average, matching HeadPursuit's approach of excluding chat template
-    markers from aggregation.
-
-    Args:
-        expert_indices: [n_layers, seq_len, k] routing indices
-        expert_weights: [n_layers, seq_len, k] gating weights
-        active_experts_per_layer: list of active expert ID tensors per layer
-        token_indices_per_layer: per-layer list of token index tensors
-        raw_outputs_per_layer: per-layer list of raw down_proj output tensors
-        top_k_pos_per_layer: per-layer list of top-k position tensors
-        n_experts: total number of experts
-        d_model: hidden dimension
-        content_start: first question-content token index
-        content_end: one past last question-content token index (None = all)
-
-    Returns:
-        expert_means: [n_layers, n_experts, d_model]
-        routing_counts: [n_layers, n_experts]
-    """
-    n_layers = expert_indices.shape[0]
-    if content_end is None:
-        content_end = expert_indices.shape[1]
-
-    expert_means = torch.zeros(n_layers, n_experts, d_model)
-    routing_counts = torch.zeros(n_layers, n_experts, dtype=torch.long)
-
-    for layer_idx in range(n_layers):
-        active_experts = active_experts_per_layer[layer_idx]
-        token_indices_list = token_indices_per_layer[layer_idx]
-        raw_outputs_list = raw_outputs_per_layer[layer_idx]
-        top_k_pos_list = top_k_pos_per_layer[layer_idx]
-
-        for i, expert_id_tensor in enumerate(active_experts):
-            expert_id = int(expert_id_tensor.item())
-            token_idxs = token_indices_list[i]
-            raw_output = raw_outputs_list[i]
-            k_positions = top_k_pos_list[i]
-
-            if token_idxs.numel() == 0:
-                continue
-
-            # Filter to content tokens only (exclude chat template markers)
-            content_mask = (token_idxs >= content_start) & (token_idxs < content_end)
-            if not content_mask.any():
-                continue
-
-            token_idxs = token_idxs[content_mask]
-            raw_output = raw_output[content_mask]
-            k_positions = k_positions[content_mask]
-
-            # Gated output: g_e(x) * f_e(x)
-            gate_weights = expert_weights[layer_idx, token_idxs, k_positions]
-            gated = gate_weights.unsqueeze(-1) * raw_output  # [n_tokens, d_model]
-
-            expert_means[layer_idx, expert_id] = gated.mean(dim=0)
-            routing_counts[layer_idx, expert_id] = token_idxs.numel()
-
-    return expert_means, routing_counts
-
-
-def capture_document(
+def capture_batch(
     model: LanguageModel,
-    question: TokenizedQuestion | list[int],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Capture MoE activations for a single document via nnsight.
+    batch: list[list[int]],
+) -> torch.Tensor:
+    """Capture last-token gated expert outputs for a batch.
+
+    Uses nnsight tracing to extract per-expert down_proj outputs and gate
+    weights. For each expert in each document, extracts the gated output
+    at the LAST TOKEN position (seq_len - 1 with left-padding).
 
     Args:
-        model: nnsight LanguageModel instance
-        question: TokenizedQuestion (with content boundaries) or raw token IDs.
-            When raw token IDs are passed, all tokens are averaged.
+        model: nnsight LanguageModel instance.
+        batch: List of token ID lists.
 
     Returns:
-        expert_means: [n_layers, n_experts, d_model]
-        routing_counts: [n_layers, n_experts]
-        expert_weights_all: [n_layers, seq_len, k]
+        [batch_size, n_layers, n_experts, d_model] dense tensor (float32).
     """
-    if isinstance(question, TokenizedQuestion):
-        doc = question.token_ids
-        content_start = question.content_start
-        content_end = question.content_end
-    else:
-        doc = question
-        content_start = 0
-        content_end = None
+    n_layers = model.config.num_hidden_layers
+    n_experts_total = model.config.num_experts
+    d_model = model.config.hidden_size
+    batch_size = len(batch)
 
-    layer_indices: list = []
+    layer_active_experts: list = []
+    layer_token_indices: list[list[torch.Tensor]] = []
+    layer_down_projs: list[list[torch.Tensor]] = []
+    layer_top_k_pos: list[list[torch.Tensor]] = []
     layer_weights: list = []
-    active_experts_per_layer: list[torch.Tensor] = []
-    token_indices_per_layer: list[list[torch.Tensor]] = []
-    raw_outputs_per_layer: list[list[torch.Tensor]] = []
-    top_k_pos_per_layer: list[list[torch.Tensor]] = []
+    layer_indices: list = []
 
-    with torch.no_grad(), model.trace([doc]) as tracer:
+    with torch.no_grad(), model.trace(batch) as tracer:
         for layer in model.model.layers:
-            # Get routing info from the gate
             _, weights, indices = layer.mlp.source.self_gate_0.output
-            layer_indices.append(indices)
             layer_weights.append(weights)
+            layer_indices.append(indices)
 
-            # Get active experts for this layer
             expert_hit = layer.mlp.experts.source.nonzero_0.output
-            num_experts_total = model.config.num_experts
-            active_experts = expert_hit[expert_hit != num_experts_total].squeeze(-1)
+            active_experts = expert_hit[expert_hit != n_experts_total].squeeze(-1)
             num_iters = active_experts.numel()
 
-            # Capture per-expert data
-            token_indices_list: list[torch.Tensor] = []
-            down_projs_list: list[torch.Tensor] = []
+            token_idx_list: list[torch.Tensor] = []
+            down_proj_list: list[torch.Tensor] = []
             top_k_pos_list: list[torch.Tensor] = []
 
             with tracer.iter[:num_iters]:
                 top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
                 down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
-                token_indices_list.append(token_idx)
-                down_projs_list.append(down_proj)
+                token_idx_list.append(token_idx)
+                down_proj_list.append(down_proj)
                 top_k_pos_list.append(top_k_pos)
 
-            active_experts_per_layer.append(active_experts)
-            token_indices_per_layer.append(token_indices_list)
-            raw_outputs_per_layer.append(down_projs_list)
-            top_k_pos_per_layer.append(top_k_pos_list)
+            layer_active_experts.append(active_experts)
+            layer_token_indices.append(token_idx_list)
+            layer_down_projs.append(down_proj_list)
+            layer_top_k_pos.append(top_k_pos_list)
 
-        indices_t = torch.stack(layer_indices, dim=0)
+        nnsight.save(layer_active_experts)
+        nnsight.save(layer_token_indices)
+        nnsight.save(layer_down_projs)
+        nnsight.save(layer_top_k_pos)
         weights_t = torch.stack(layer_weights, dim=0)
-
-        nnsight.save(indices_t)
+        indices_t = torch.stack(layer_indices, dim=0)
         nnsight.save(weights_t)
-        nnsight.save(active_experts_per_layer)
-        nnsight.save(token_indices_per_layer)
-        nnsight.save(raw_outputs_per_layer)
-        nnsight.save(top_k_pos_per_layer)
+        nnsight.save(indices_t)
 
-    n_experts = model.config.num_experts
-    d_model = model.config.hidden_size
+    seq_len = weights_t.shape[2]
+    result = torch.zeros(batch_size, n_layers, n_experts_total, d_model)
 
-    expert_means, routing_counts = _aggregate_document(
-        expert_indices=indices_t,
-        expert_weights=weights_t,
-        active_experts_per_layer=active_experts_per_layer,
-        token_indices_per_layer=token_indices_per_layer,
-        raw_outputs_per_layer=raw_outputs_per_layer,
-        top_k_pos_per_layer=top_k_pos_per_layer,
-        n_experts=n_experts,
-        d_model=d_model,
-        content_start=content_start,
-        content_end=content_end,
-    )
+    for li in range(n_layers):
+        active_experts = layer_active_experts[li]
+        for i, expert_id_tensor in enumerate(active_experts):
+            expert_id = int(expert_id_tensor.item())
+            token_idxs = layer_token_indices[li][i]
+            down_proj = layer_down_projs[li][i]
+            top_k_positions = layer_top_k_pos[li][i]
 
-    return expert_means, routing_counts, weights_t
+            if token_idxs.numel() == 0:
+                continue
+
+            doc_idxs = token_idxs // seq_len
+            padded_positions = token_idxs % seq_len
+
+            last_token_mask = padded_positions == (seq_len - 1)
+            if not last_token_mask.any():
+                continue
+
+            token_idxs_last = token_idxs[last_token_mask]
+            down_proj_last = down_proj[last_token_mask]
+            top_k_positions_last = top_k_positions[last_token_mask]
+            doc_idxs_last = doc_idxs[last_token_mask]
+
+            for d_tensor in doc_idxs_last.unique():
+                d = int(d_tensor.item())
+                doc_mask = doc_idxs_last == d_tensor
+                doc_down_proj = down_proj_last[doc_mask]
+                doc_top_k = top_k_positions_last[doc_mask]
+
+                for idx in range(doc_down_proj.shape[0]):
+                    gate_w = weights_t[li, d, seq_len - 1, doc_top_k[idx]]
+                    gated = gate_w.unsqueeze(-1) * doc_down_proj[idx]
+                    result[d, li, expert_id] = gated
+                    break
+
+    return result
 
 
 def encode_dataset(
     model: LanguageModel,
-    questions: list[TokenizedQuestion],
+    prompts: list[list[int]],
     output_dir: Path,
+    batch_size: int = 8,
 ) -> Path:
-    """Encode a dataset: capture gated expert outputs and save to HDF5.
+    """Encode dataset: capture last-token expert outputs and save per-layer.
 
     Args:
-        model: nnsight LanguageModel
-        questions: List of TokenizedQuestion from load_triviaqa()
-        output_dir: Root directory for HDF5 output
+        model: nnsight LanguageModel.
+        prompts: List of token ID lists.
+        output_dir: Root directory for output (per-layer HDF5 + metadata).
+        batch_size: Documents per batch for nnsight tracing.
 
     Returns:
-        Path to output directory
+        Path to output directory.
     """
     n_layers = model.config.num_hidden_layers
     n_experts = model.config.num_experts
     d_model = model.config.hidden_size
-
     output_dir = Path(output_dir)
 
-    with ExpertActivationStore(
-        root_dir=output_dir,
-        n_layers=n_layers,
-        n_experts=n_experts,
-        d_model=d_model,
-        n_docs_estimate=len(questions),
-    ) as store:
-        for i, question in enumerate(tqdm(questions, desc="Encoding")):
-            expert_means, routing_counts, _ = capture_document(model, question)
-            store.add_document(expert_means, routing_counts, question.source_idx)
+    all_batches: list[torch.Tensor] = []
 
-            if (i + 1) % 100 == 0:
-                store.flush()
-                tqdm.write(f"Flushed {i + 1}/{len(questions)} documents to disk")
+    for start in tqdm(range(0, len(prompts), batch_size), desc="Encoding"):
+        batch = prompts[start : start + batch_size]
+        batch_result = capture_batch(model, batch)
+        all_batches.append(batch_result)
+
+    activations = torch.cat(all_batches, dim=0)
+
+    for li in tqdm(range(n_layers), desc="Saving layers"):
+        save_layer(output_dir, li, activations[:, li])
+
+    save_metadata(output_dir, len(prompts), n_layers, n_experts, d_model)
 
     return output_dir
