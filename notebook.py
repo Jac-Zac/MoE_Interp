@@ -1,26 +1,26 @@
 #!/usr/bin/env python
 
 # %% Imports
+from collections import Counter
 from dataclasses import dataclass
 
 import nnsight
+import plotly.express as px
 import torch
+from datasets import load_dataset
 from nnsight import LanguageModel
+from residual.sparse_decomposition import SOMP
+from tqdm import tqdm
 
-from src.data import load_triviaqa
-from src.environment import set_seed
+from src.environment import get_device, set_seed
+from src.pursuit import build_filtered_dictionary
 
 # %% Configuration
 seed = 1337
 set_seed(seed)
+device = get_device()
 
-# NOTE: Ollmo (allenai/OLMoE-1B-7B-0924-Instruct) Model Spec:
-# - Layers                        : 16
-# - Experts / layer               : 64
-# - Active experts / token        : 8
-# - Hidden size                   : 2048
-
-# Use float16 for mps compatibility (bfloat better for CUDA)
+# OLMoE: 16 layers, 64 experts/layer, top-8 routing, d_model=2048
 model = LanguageModel(
     "allenai/OLMoE-1B-7B-0924-Instruct",
     device_map="auto",
@@ -28,23 +28,8 @@ model = LanguageModel(
     dispatch=True,
 )
 
-# %% Load a few questions from TriviaQA
-# Small n_docs for quick hacking; increase for real analysis.
-N_DOCS = 3
-questions = load_triviaqa(tokenizer=model.tokenizer, n_docs=N_DOCS)
 
-# Use the first question for the single-doc demo below
-q = questions[0]
-doc = q.token_ids
-doc_id = q.source_idx
-
-print(f"Loaded {len(questions)} TriviaQA questions")
-for i, qq in enumerate(questions):
-    decoded = model.tokenizer.decode(qq.token_ids[qq.content_start : qq.content_end])
-    print(f"  [{i}] idx={qq.source_idx}: {decoded[:80]}...")
-
-
-# %% Simple dataclass to hold per-expert data (used only in this notebook)
+# %% Simple dataclass to hold per-expert data (used in tracing block below)
 @dataclass
 class ExpertTrace:
     """Per-expert activation data for a specific layer."""
@@ -53,6 +38,22 @@ class ExpertTrace:
     raw_outputs: torch.Tensor  # [n_tokens, hidden_dim] down-proj outputs
     top_k_positions: torch.Tensor  # [n_tokens] which of the k slots (0 to k-1)
 
+
+# %% Load TriviaQA question (Single Document)
+dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split="train")
+
+question_text = dataset[0]["question"]
+messages = [{"role": "user", "content": question_text}]
+
+# Tokenize and ensure we extract a flat list of token IDs
+doc = model.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+if hasattr(doc, "input_ids"):
+    doc_ids = getattr(doc, "input_ids")
+    doc = doc_ids[0] if isinstance(doc_ids[0], list) else doc_ids
+elif not isinstance(doc, list):
+    doc = list(doc)
+
+print(f"Loaded TriviaQA question, {len(doc)} tokens")
 
 # %% Process document with nnsight
 with torch.no_grad(), model.trace([doc]) as tracer:
@@ -121,111 +122,101 @@ with torch.no_grad(), model.trace([doc]) as tracer:
     nnsight.save(all_weights)
     nnsight.save(expert_traces)
 
-
-# %% Results from tracing
-n_layers = len(expert_traces)
-print(f"Document {doc_id}: {len(doc)} tokens, {n_layers} layers")
-for layer_idx in range(n_layers):
-    print(f"  Layer {layer_idx:2d}: {len(expert_traces[layer_idx]):2d} active experts")
-
-
-# %% Compute gated outputs from captured trace
-# Demonstrate: raw_outputs + expert_weights -> gated outputs -> per-doc mean
-# Only content tokens (excluding chat template markers) are averaged,
-# matching HeadPursuit's aggregation strategy.
-
-layer_idx = 0
-expert_id = sorted(expert_traces[layer_idx].keys())[0]
-et = expert_traces[layer_idx][expert_id]
-
-# Filter to content tokens only
-content_mask = (et.token_indices >= q.content_start) & (
-    et.token_indices < q.content_end
-)
-content_token_idxs = et.token_indices[content_mask]
-content_raw_outputs = et.raw_outputs[content_mask]
-content_top_k_pos = et.top_k_positions[content_mask]
-
-# Gated output = gate_weight * raw_output (what actually enters the residual stream)
-gate_weights = all_weights[layer_idx, content_token_idxs, content_top_k_pos]
-gated_outputs = gate_weights.unsqueeze(-1) * content_raw_outputs  # [n_tokens, d_model]
-
-# Per-document mean gated output (this is what SOMP operates on)
-mean_gated = gated_outputs.mean(dim=0)  # [d_model]
-
-print(f"\nLayer {layer_idx}, Expert {expert_id}:")
-print(f"  Total routed tokens: {et.token_indices.numel()}")
-print(f"  Content tokens used: {content_token_idxs.numel()}")
-print(f"  Gated output shape: {tuple(gated_outputs.shape)}")
-print(f"  Mean gated output shape: {tuple(mean_gated.shape)}")
-print(f"  Mean gated norm: {mean_gated.norm():.4f}")
-
-
-# %% Simple SOMP demo on this single document
-import torch.nn.functional as F
-
-from src.somp import somp
-
-# Get the unembedding matrix directly from the model (the SOMP dictionary).
-# This is the lm_head weight: [vocab_size, d_model].
-unembed = model.lm_head.weight.detach().float().cpu()
-dictionary = F.normalize(unembed, dim=-1)
-
-# Build aggregated expert activations for all experts in one layer
+# %% Build Filtered Concept Dictionary
+# Tokenize a word list and slice the unembedding to those rows.
+# Using "countries" by default — change to "colors" or "quantity" as needed.
+property_name = "countries"
+n_layers = model.config.num_hidden_layers
 n_experts = model.config.num_experts
-d_model = model.config.hidden_size
+tokenizer = model.tokenizer
 
-# For a single document, the "activation matrix" is just one row per expert
-# SOMP needs multiple samples to be meaningful, but we can still demo the mechanics
-layer_acts = torch.zeros(n_experts, d_model)
-for eid, et in expert_traces[layer_idx].items():
-    cmask = (et.token_indices >= q.content_start) & (et.token_indices < q.content_end)
-    if not cmask.any():
-        continue
-    gw = all_weights[layer_idx, et.token_indices[cmask], et.top_k_positions[cmask]]
-    gated = (gw.unsqueeze(-1) * et.raw_outputs[cmask]).mean(dim=0)
-    layer_acts[eid] = gated
+unembed = model.lm_head.weight.detach().cpu()
+dictionary, tokens_data = build_filtered_dictionary(unembed, tokenizer, property_name)
 
-# Pick one expert and run SOMP (single sample = not statistically meaningful,
-# but demonstrates the API; use main.py encode + pursuit for real analysis)
-X = layer_acts[expert_id].unsqueeze(0)  # [1, d_model]
-result = somp(X, dictionary, k=10, center=False)  # no centering with 1 sample
+# %% Run Expert Pursuit (SOMP on all experts)
+k = min(50, len(tokens_data))
+decomposition = SOMP(k=k)
+evr_matrix = torch.zeros(n_layers, n_experts, k)
+zscore_matrix = torch.zeros(n_layers, n_experts)
+expert_concepts: dict[tuple[int, int], list[str]] = {}
 
-# Decode the top atoms
-print(f"\nSOMP decomposition for Layer {layer_idx}, Expert {expert_id}:")
-print(f"  (NOTE: single-document demo — centering needs multiple documents)")
-for i, atom_idx in enumerate(result["chosen"][:10].tolist()):
-    token = model.tokenizer.decode([atom_idx])
-    print(f"  {i + 1:2d}. token={repr(token):20s}  EVR={result['evr'][i]:.4f}")
+for layer_idx, layer_traces in tqdm(
+    enumerate(expert_traces),
+    total=n_layers,
+    desc="Expert Pursuit",
+):
+    for expert_id, trace in layer_traces.items():
+        token_idxs = trace.token_indices
+        raw_output = trace.raw_outputs.cpu()
+        k_positions = trace.top_k_positions
 
+        if raw_output.shape[0] == 0:
+            continue
 
-# %% Multi-document SOMP: trace all questions, aggregate, run with centering
-# This is the real Expert Pursuit workflow: multiple documents give SOMP enough
-# samples to identify systematic expert specialization (not single-doc artifacts).
+        # Gated output: gate_weight * raw_down_proj
+        gate_weights = all_weights[layer_idx, 0, token_idxs, k_positions].cpu()
+        gated = gate_weights.unsqueeze(-1) * raw_output
 
-from src.capture import capture_document
+        unit = gated.double()
+        if unit.norm() < 1e-6:
+            continue
 
-# Trace each question and collect per-expert mean gated outputs
-all_expert_means = []
-for qi, question in enumerate(questions):
-    expert_means, routing_counts, _ = capture_document(model, question)
-    all_expert_means.append(expert_means)
-    print(f"  Traced question {qi}: {len(question.token_ids)} tokens")
+        # SOMP decomposition using HeadPursuit's SOMP class
+        decomp_out = decomposition(
+            X=unit,
+            dictionary=dictionary,
+            descriptors=list(range(len(dictionary))),
+            device=device,
+        )
+        chosen = decomp_out["chosen"]
+        evr_matrix[layer_idx, expert_id] = decomp_out["evr"]
 
-# Stack: [n_docs, n_layers, n_experts, d_model]
-all_means = torch.stack(all_expert_means, dim=0)
+        # Remap filtered indices -> vocab IDs -> decoded tokens
+        vocab_ids = [tokens_data[t] for t in chosen.tolist()]
+        tokens = [tokenizer.decode([vid]).strip() for vid in vocab_ids]
+        expert_concepts[(layer_idx, expert_id)] = tokens
 
-# Run SOMP on one expert across all documents (the real use case)
-target_layer = 0
-target_expert = sorted(expert_traces[target_layer].keys())[0]
+        # Z-score: internal coherence vs. random dictionary similarity
+        D_chosen = dictionary[chosen]
+        mean_sim = (D_chosen @ dictionary.T).mean()
+        std_sim = (D_chosen @ dictionary.T).std()
+        if std_sim > 1e-8:
+            zscore_matrix[layer_idx, expert_id] = (
+                (D_chosen @ D_chosen.T).mean() - mean_sim
+            ) / std_sim
 
-X_multi = all_means[:, target_layer, target_expert, :]  # [n_docs, d_model]
-result_multi = somp(X_multi, dictionary, k=10, center=True)
+        print(f"  L{layer_idx} E{expert_id}: {tokens[:5]}")
 
-print(
-    f"\nMulti-doc SOMP: Layer {target_layer}, Expert {target_expert}"
-    f" ({len(questions)} docs):"
+# %% EVR Heatmap
+fig = px.imshow(
+    evr_matrix[:, :, -1].numpy(),
+    x=[f"E{i}" for i in range(n_experts)],
+    y=[f"L{i}" for i in range(n_layers)],
+    color_continuous_scale="Blues",
+    labels=dict(x="Experts", y="Layers", color="EVR"),
 )
-for i, atom_idx in enumerate(result_multi["chosen"][:10].tolist()):
-    token = model.tokenizer.decode([atom_idx])
-    print(f"  {i + 1:2d}. token={repr(token):20s}  EVR={result_multi['evr'][i]:.4f}")
+fig.update_layout(title=f"Expert Pursuit EVR ({property_name})", width=1400, height=600)
+fig.show()
+
+# %% Z-Score Heatmap
+fig = px.imshow(
+    zscore_matrix.numpy(),
+    x=[f"E{i}" for i in range(n_experts)],
+    y=[f"L{i}" for i in range(n_layers)],
+    color_continuous_scale=px.colors.diverging.RdYlBu_r,
+    color_continuous_midpoint=0.0,
+    labels=dict(x="Experts", y="Layers", color="Z-Score"),
+)
+fig.update_layout(
+    title=f"Expert Concept Coherence ({property_name})", width=1400, height=600
+)
+fig.show()
+
+# %% Concept Frequency Analysis
+concept_counter: Counter = Counter()
+for tokens in expert_concepts.values():
+    concept_counter.update(tokens[:5])
+
+print(f"\nTop 20 concepts across all experts ({property_name}):")
+for word, count in concept_counter.most_common(20):
+    print(f"  {word}: {count}")

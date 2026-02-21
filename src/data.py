@@ -125,6 +125,13 @@ def load_triviaqa(
             add_generation_prompt=True,
             tokenize=True,
         )
+        # Normalize to plain list[int] — some tokenizers return BatchEncoding
+        if hasattr(token_ids, "input_ids"):
+            token_ids = token_ids.input_ids
+            if isinstance(token_ids[0], list):
+                token_ids = token_ids[0]
+        elif not isinstance(token_ids, list):
+            token_ids = list(token_ids)
 
         content_start, content_end = _find_content_boundaries(token_ids, tokenizer)
 
@@ -138,3 +145,19 @@ def load_triviaqa(
         )
 
     return questions
+
+
+def get_prompt(task, question=None):
+    """Trivia QA prompt (used for intervention/generation, not encoding).
+
+    Ref: https://github.com/lorenzobasile/HeadPursuit/blob/main/src/headpursuit/utils.py#L250
+    """
+    if task == "triviaqa":
+        prompt = (
+            f"Answer the following question in 1–3 words only. "
+            f"Do not provide any additional explanation for your answer. "
+            f"Question: {question} Answer:"
+        )
+    else:
+        prompt = f"{question}"
+    return prompt

@@ -12,13 +12,13 @@ dependencies = [
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
     "jupyter>=1.1.1",
-    "matplotlib>=3.8.0",
     "nnsight>=0.5.15",
     "plotly>=5.0.0",
     "pytest>=9.0.2",
     "torch>=2.5.0,<2.10",
     "tqdm>=4.67.3",
     "transformers>=4.46.0",
+    "residual",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +31,8 @@ dev = [
 torch = [
     { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
 ]
+residual = { git = "https://github.com/Flegyas/ResiDual.git" }
+
 [[tool.uv.index]]
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"

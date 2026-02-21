@@ -251,3 +251,47 @@ class ExpertActivationStore:
         """
         with open(root_dir / "doc_ids.json") as f:
             return json.load(f)
+
+
+# --- Unembedding matrix (HDF5) ---
+
+
+def save_unembedding(root_dir: Path, unembed: torch.Tensor) -> Path:
+    """Save the unembedding matrix (lm_head.weight) to HDF5.
+
+    Args:
+        root_dir: Store root directory
+        unembed: [vocab_size, d_model] unembedding matrix
+
+    Returns:
+        Path to the saved HDF5 file
+    """
+    root_dir = Path(root_dir)
+    root_dir.mkdir(parents=True, exist_ok=True)
+    path = root_dir / "unembedding.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset(
+            "data",
+            data=unembed.cpu().numpy(),
+            dtype=np.float32,
+        )
+    return path
+
+
+def load_unembedding(
+    root_dir: Path,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """Load the unembedding matrix from HDF5.
+
+    Args:
+        root_dir: Store root directory
+        device: Target device
+
+    Returns:
+        Tensor [vocab_size, d_model]
+    """
+    path = Path(root_dir) / "unembedding.h5"
+    with h5py.File(path, "r") as f:
+        data = f["data"][:]
+    return torch.from_numpy(data).float().to(device)
