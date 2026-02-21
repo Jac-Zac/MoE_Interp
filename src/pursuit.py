@@ -1,8 +1,7 @@
-"""Expert Pursuit: SOMP-based concept decomposition of MoE experts.
+"""Expert Pursuit: projection-based concept decomposition of MoE experts.
 
-Builds filtered concept dictionaries from word lists, runs SOMP on all
-experts across layers (loading per-layer HDF5), and collects EVR, z-scores,
-and per-expert concept decompositions.
+Projects expert activations onto full unembedding dictionary and finds
+top-k tokens by explained variance ratio (EVR).
 """
 
 from __future__ import annotations
@@ -15,24 +14,21 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-
-# from residual.sparse_decomposition import SOMP
 from tqdm import tqdm
 
 from src.cache import load_layer, load_metadata
-from src.constants import WORD_LISTS
 
 
 @dataclass
 class ExpertConceptResult:
-    """SOMP decomposition result for a single expert."""
+    """Decomposition result for a single expert."""
 
     layer: int
     expert_id: int
+    n_activations: int
     tokens: list[str]
     token_ids: list[int]
     evr: list[float]
-    zscore: float = 0.0
 
 
 @dataclass
@@ -44,7 +40,6 @@ class PursuitResult:
     k: int
     experts: list[ExpertConceptResult] = field(default_factory=list)
     evr_matrix: torch.Tensor = field(default_factory=lambda: torch.zeros(0))
-    zscore_matrix: torch.Tensor = field(default_factory=lambda: torch.zeros(0))
 
     def concept_frequency(self, top_n: int = 5) -> Counter:
         """Aggregate top-N concepts across all experts."""
@@ -59,7 +54,6 @@ class PursuitResult:
         path.mkdir(parents=True, exist_ok=True)
 
         torch.save(self.evr_matrix, path / "evr.pt")
-        torch.save(self.zscore_matrix, path / "zscore.pt")
 
         data = {
             "n_layers": self.n_layers,
@@ -69,10 +63,10 @@ class PursuitResult:
                 {
                     "layer": e.layer,
                     "expert_id": e.expert_id,
+                    "n_activations": e.n_activations,
                     "tokens": e.tokens,
                     "token_ids": e.token_ids,
                     "evr": e.evr,
-                    "zscore": e.zscore,
                 }
                 for e in self.experts
             ],
@@ -91,10 +85,10 @@ class PursuitResult:
             ExpertConceptResult(
                 layer=e["layer"],
                 expert_id=e["expert_id"],
+                n_activations=e["n_activations"],
                 tokens=e["tokens"],
                 token_ids=e["token_ids"],
                 evr=e["evr"],
-                zscore=e["zscore"],
             )
             for e in data["experts"]
         ]
@@ -105,116 +99,98 @@ class PursuitResult:
             k=data["k"],
             experts=experts,
             evr_matrix=torch.load(path / "evr.pt", weights_only=True),
-            zscore_matrix=torch.load(path / "zscore.pt", weights_only=True),
         )
 
 
-def _analyze_expert(
+def projection_pursuit(
     X: torch.Tensor,
     dictionary: torch.Tensor,
-    tokens_data: list[int],
     tokenizer: Any,
-    decomposition: SOMP,
-    layer: int,
-    expert_id: int,
-) -> tuple[ExpertConceptResult, torch.Tensor, float]:
-    """Run SOMP on a single expert's activations.
+    k: int = 50,
+) -> tuple[list[str], list[int], list[float]]:
+    """Project expert activations onto dictionary, return top-k by EVR.
 
-    Args:
-        X: [n_docs, d_model] expert activations across documents.
-        dictionary: [n_tokens, d_model] L2-normalized dictionary.
-        tokens_data: remapping table (index -> original vocab ID).
-        tokenizer: HuggingFace tokenizer for decoding.
-        decomposition: Reusable SOMP instance.
-        layer: Layer index (for metadata).
-        expert_id: Expert index (for metadata).
-
-    Returns:
-        (ExpertConceptResult, evr_vector [k], zscore float)
+    EVR per token = var(projection) / total_var, clamped to [0, 1].
     """
-    res = decomposition(
-        X=X.double(),
-        dictionary=dictionary,
-        descriptors=list(range(len(dictionary))),
-        device=X.device,
-    )
+    if X.shape[0] <= 1:
+        return [], [], []
 
-    # Remap filtered indices -> vocab IDs -> decoded tokens
-    chosen = res["chosen"]
-    vocab_ids = [tokens_data[t] for t in chosen.tolist()]
-    tokens = [tokenizer.decode([vid]).strip() for vid in vocab_ids]
+    X_centered = X - X.mean(dim=0, keepdim=True)
+    projections = X_centered @ dictionary.T
 
-    # Z-score: coherence of chosen atoms vs. background
-    D_chosen = dictionary[chosen]  # [k, d_model]
-    sim_matrix = D_chosen @ dictionary.T  # [k, n_tokens] — compute once
-    mean_sim = sim_matrix.mean()
-    std_sim = sim_matrix.std()
-    zs = 0.0
-    if std_sim > 1e-8:
-        internal_sim = (D_chosen @ D_chosen.T).mean()
-        zs = float((internal_sim - mean_sim) / std_sim)
+    total_var = X_centered.var(dim=0).sum()
+    if total_var < 1e-10:
+        return [], [], []
 
-    result = ExpertConceptResult(
-        layer=layer,
-        expert_id=expert_id,
-        tokens=tokens,
-        token_ids=vocab_ids,
-        evr=res["evr"].tolist(),
-        zscore=zs,
-    )
-    return result, res["evr"], zs
+    var_per_token = projections.var(dim=0)
+    evr = (var_per_token / total_var).clamp(0, 1)
+
+    valid_mask = evr > 1e-6
+    if not valid_mask.any():
+        return [], [], []
+
+    top_k = evr.topk(min(k, int(valid_mask.sum().item())))
+
+    token_ids = top_k.indices.tolist()
+    tokens = [tokenizer.decode([i]).strip() for i in token_ids]
+    return tokens, token_ids, top_k.values.tolist()
 
 
 def run_expert_pursuit(
     activations_dir: Path,
-    dictionary: torch.Tensor,
-    tokens_data: list[int],
+    unembed: torch.Tensor,
     tokenizer: Any,
     k: int = 50,
+    min_activations: int = 5,
 ) -> PursuitResult:
-    """Run SOMP on all experts across all layers, loading per-layer from HDF5.
+    """Run projection pursuit on all experts across all layers.
 
     Args:
         activations_dir: Path to directory with per-layer HDF5 files.
-        dictionary: [n_tokens, d_model] L2-normalized filtered dictionary.
-        tokens_data: remapping table (tokens_data[i] -> original vocab ID).
+        unembed: [vocab_size, d_model] unembedding matrix.
         tokenizer: HuggingFace tokenizer for decoding.
-        k: Number of SOMP atoms to select per expert.
+        k: Number of top atoms to return per expert.
+        min_activations: Minimum non-zero activations required.
 
     Returns:
-        PursuitResult with per-expert decompositions, EVR, and z-scores.
+        PursuitResult with per-expert decompositions and EVR.
     """
     meta = load_metadata(activations_dir)
     n_layers = meta["n_layers"]
     n_experts = meta["n_experts"]
-    k = min(k, len(tokens_data))
+    k = min(k, unembed.shape[0])
+
+    # L2-normalize dictionary
+    dictionary = F.normalize(unembed, dim=1)
 
     evr_matrix = torch.zeros(n_layers, n_experts, k)
-    zscore_matrix = torch.zeros(n_layers, n_experts)
     expert_results: list[ExpertConceptResult] = []
-
-    decomposition = SOMP(k=k)
 
     for li in tqdm(range(n_layers), desc="Expert Pursuit"):
         layer_data = load_layer(activations_dir, li)  # [n_docs, n_experts, d_model]
 
         for ei in range(n_experts):
             X = layer_data[:, ei, :]  # [n_docs, d_model]
-            if X.norm() < 1e-6:
+
+            n_activations = int((X.norm(dim=1) > 1e-6).sum().item())
+            if n_activations < min_activations:
                 continue
 
-            result, evr, zs = _analyze_expert(
-                X,
-                dictionary,
-                tokens_data,
-                tokenizer,
-                decomposition,
-                li,
-                ei,
+            tokens, token_ids, evr = projection_pursuit(X, dictionary, tokenizer, k)
+            if not tokens:
+                continue
+
+            evr_matrix[li, ei, : len(evr)] = torch.tensor(evr)
+            expert_results.append(
+                ExpertConceptResult(
+                    layer=li,
+                    expert_id=ei,
+                    n_activations=n_activations,
+                    tokens=tokens,
+                    token_ids=token_ids,
+                    evr=evr,
+                )
             )
-            evr_matrix[li, ei] = evr
-            zscore_matrix[li, ei] = zs
-            expert_results.append(result)
 
     return PursuitResult(
         n_layers=n_layers,
@@ -222,5 +198,4 @@ def run_expert_pursuit(
         k=k,
         experts=expert_results,
         evr_matrix=evr_matrix,
-        zscore_matrix=zscore_matrix,
     )

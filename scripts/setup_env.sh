@@ -17,3 +17,6 @@ fi
 
 # Activate Python venv
 source "$PROJECT_ROOT/.venv/bin/activate"
+
+# Set up source to project root
+export PYTHONPATH=$PWD

@@ -1,31 +1,19 @@
 #!/usr/bin/env python
 
-import sys
-from pathlib import Path
-
-sys.path.insert(
-    0, str(Path(__file__).parent.parent if "__file__" in dir() else Path.cwd())
-)
-
 # %% Imports
-import logging
 from pathlib import Path
 
+import h5py
+import numpy as np
+import plotly.express as px
 import torch
 import torch.nn.functional as F
 from nnsight import LanguageModel
 from tqdm import tqdm
 
-import numpy as np
-
 from src.cache import ExpertActivationWriter, save_metadata
 from src.data import load_triviaqa
 from src.environment import get_device, set_seed
-
-# from src.plot import plot_concept_frequency, plot_evr_heatmap, plot_zscore_heatmap
-
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
 
 # %% Configuration
 seed = 1337
@@ -45,8 +33,8 @@ n_experts = model.config.num_experts
 d_model = model.config.hidden_size
 
 # %% Load TriviaQA prompts
-n_docs = 8
-batch_size = 1
+n_docs = 16
+batch_size = 8
 prompts = load_triviaqa(tokenizer, n_docs=n_docs)
 print(f"Loaded {len(prompts)} TriviaQA prompts")
 
@@ -142,7 +130,7 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
 
             # Write immediately to HDF5 (no memory accumulation)
             for j in range(gated_output.shape[0]):
-                writers[layer_idx].add(expert_id, gated_output[j])
+                writers[layer_idx].add(expert_id, gated_output[j].half())
 
 # %% Close all writers
 for w in writers:
@@ -161,18 +149,27 @@ def projection_pursuit(
 ) -> tuple[list[str], list[float]]:
     """Project expert activations onto dictionary, return top-k tokens by EVR.
 
-    EVR per token = var(X @ W_i.T) / var(X)
+    EVR per token = var(projection) / total_var, clamped to [0,1].
+    Note: Dictionary vectors are non-orthogonal, so sum(EVR) may exceed 1.
     """
-    projections = X @ dictionary.T
+    if X.shape[0] <= 1:
+        return [], []
 
-    var_per_token = projections.var(dim=0)
-    total_var = X.var()
+    X_centered = X - X.mean(dim=0, keepdim=True)
+    projections = X_centered @ dictionary.T
 
+    total_var = X_centered.var(dim=0).sum()
     if total_var < 1e-10:
         return [], []
 
-    evr = var_per_token / total_var
-    top_k = evr.topk(k)
+    var_per_token = projections.var(dim=0)
+    evr = (var_per_token / total_var).clamp(0, 1)
+
+    valid_mask = evr > 1e-6
+    if not valid_mask.any():
+        return [], []
+
+    top_k = evr.topk(min(k, int(valid_mask.sum().item())))
 
     tokens = [tokenizer.decode([i.item()]).strip() for i in top_k.indices]
     return tokens, top_k.values.tolist()
@@ -180,8 +177,6 @@ def projection_pursuit(
 
 def load_expert_data(path, expert_id):
     """Load activations for a single expert from HDF5."""
-    import h5py
-
     with h5py.File(path, "r") as f:
         data = f[f"expert_{expert_id:03d}"][:]
     return torch.from_numpy(data).float()
@@ -191,14 +186,17 @@ def load_expert_data(path, expert_id):
 dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
 
 # %% Run on all experts
+min_activations = 5
 results = []
 for li in tqdm(range(n_layers), desc="Projection pursuit"):
     layer_path = output_dir / f"layer_{li:02d}.h5"
     for ei in range(n_experts):
         X = load_expert_data(layer_path, ei)
-        if X.shape[0] == 0 or X.norm() < 1e-6:
+        if X.shape[0] < min_activations:
             continue
         tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=50)
+        if not tokens:
+            continue
         results.append(
             {
                 "layer": li,
@@ -216,3 +214,19 @@ for r in results[:5]:
     print(f"\nLayer {r['layer']}, Expert {r['expert']}:")
     for t, e in zip(r["tokens"][:10], r["evr"][:10]):
         print(f"  {t}: {e:.4f}")
+
+# %% Plot EVR heatmap per expert
+evr_matrix = np.zeros((n_layers, n_experts))
+for r in results:
+    evr_matrix[r["layer"], r["expert"]] = r["evr"][0] if r["evr"] else 0.0
+
+fig = px.imshow(
+    evr_matrix,
+    x=[f"E{i}" for i in range(n_experts)],
+    y=[f"L{i}" for i in range(n_layers)],
+    color_continuous_scale="Blues",
+    labels=dict(x="Expert", y="Layer", color="Top EVR"),
+    title="Expert Pursuit: Top Explained Variance Ratio per Expert",
+)
+fig.update_layout(width=1600, height=600)
+fig.show()
