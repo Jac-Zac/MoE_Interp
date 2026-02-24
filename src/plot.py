@@ -1,28 +1,21 @@
-"""Plotting utilities for Expert Pursuit results.
-
-Generates EVR heatmaps and concept frequency charts from saved PursuitResult.
-"""
-
-from __future__ import annotations
+"""Plotting utilities for Expert Pursuit results."""
 
 from pathlib import Path
 
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from src.pursuit import PursuitResult
-
 
 def plot_evr_heatmap(
-    result: PursuitResult,
+    evr_matrix: np.ndarray,
     output_path: Path | None = None,
 ) -> go.Figure:
-    """EVR heatmap (final EVR per expert, all layers)."""
-    data = result.evr_matrix[:, :, -1].cpu().numpy()
-    n_layers, n_experts = data.shape
+    """EVR heatmap (top EVR per expert, all layers)."""
+    n_layers, n_experts = evr_matrix.shape
 
     fig = px.imshow(
-        data,
+        evr_matrix,
         x=[f"E{i}" for i in range(n_experts)],
         y=[f"L{i}" for i in range(n_layers)],
         color_continuous_scale="Blues",
@@ -35,25 +28,24 @@ def plot_evr_heatmap(
     )
 
     if output_path:
-        _save_figure(fig, output_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.write_html(str(output_path))
     return fig
 
 
 def plot_concept_frequency(
-    result: PursuitResult,
-    top_n: int = 20,
+    concepts: list[tuple[str, int]],
     output_path: Path | None = None,
 ) -> go.Figure:
-    """Bar chart of most frequent concepts across all experts."""
-    counter = result.concept_frequency(top_n=5)
-    if not counter:
+    """Bar chart of most frequent concepts."""
+    if not concepts:
         fig = go.Figure()
         fig.add_annotation(text="No concepts found", x=0.5, y=0.5, showarrow=False)
         return fig
 
-    most_common = counter.most_common(top_n)
-    words = [w for w, _ in most_common]
-    counts = [c for _, c in most_common]
+    words = [w for w, _ in concepts]
+    counts = [c for _, c in concepts]
 
     fig = go.Figure(
         go.Bar(
@@ -64,7 +56,7 @@ def plot_concept_frequency(
         )
     )
     fig.update_layout(
-        title=f"Top {top_n} concepts",
+        title=f"Top {len(concepts)} concepts",
         xaxis_title="Expert count",
         yaxis=dict(autorange="reversed"),
         height=max(400, len(words) * 25),
@@ -72,31 +64,7 @@ def plot_concept_frequency(
     )
 
     if output_path:
-        _save_figure(fig, output_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.write_html(str(output_path))
     return fig
-
-
-def _save_figure(fig: go.Figure, path: Path) -> None:
-    """Save a Plotly figure."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_html(str(path))
-
-
-def generate_all_plots(
-    result: PursuitResult,
-    output_dir: Path,
-) -> list[Path]:
-    """Generate and save all standard plots."""
-    output_dir = Path(output_dir)
-    paths = []
-
-    evr_path = output_dir / "evr_heatmap.html"
-    plot_evr_heatmap(result, evr_path)
-    paths.append(evr_path)
-
-    freq_path = output_dir / "concept_frequency.html"
-    plot_concept_frequency(result, output_path=freq_path)
-    paths.append(freq_path)
-
-    return paths

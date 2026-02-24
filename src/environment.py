@@ -4,7 +4,15 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from dotenv import load_dotenv
 from nnsight import LanguageModel
+
+
+def load_env() -> None:
+    """Load environment variables from .env file."""
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
 
 
 def get_data_dir() -> Path:
@@ -39,13 +47,3 @@ def get_device() -> torch.device:
         return torch.device("mps")
     else:
         return torch.device("cpu")
-
-
-def load_model(model_name="allenai/OLMoE-1B-7B-0924-Instruct") -> LanguageModel:
-    """Load OLMoE model via nnsight."""
-    return LanguageModel(
-        model_name,
-        device_map="auto",
-        dtype=torch.float16,
-        dispatch=True,
-    )

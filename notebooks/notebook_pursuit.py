@@ -3,7 +3,6 @@
 # %% Imports
 from pathlib import Path
 
-import h5py
 import numpy as np
 import plotly.express as px
 import torch
@@ -11,7 +10,7 @@ import torch.nn.functional as F
 from nnsight import LanguageModel
 from tqdm import tqdm
 
-from src.cache import ExpertActivationWriter, save_metadata
+from src.cache import load_expert, save_expert, save_metadata
 from src.data import load_triviaqa
 from src.environment import get_device, set_seed
 
@@ -25,6 +24,7 @@ model = LanguageModel(
     device_map="auto",
     dtype=torch.float16,
     dispatch=True,
+    offload_folder="offload",
 )
 tokenizer = model.tokenizer
 
@@ -38,27 +38,27 @@ batch_size = 8
 prompts = load_triviaqa(tokenizer, n_docs=n_docs)
 print(f"Loaded {len(prompts)} TriviaQA prompts")
 
-# %% Setup: create HDF5 writers (memory-mapped, buffered)
-output_dir = Path("data/notebook_activations")
+# %% Setup: per-expert storage (variable length, collected in memory)
+output_dir = Path("data/encodings")
 output_dir.mkdir(parents=True, exist_ok=True)
 
-writers = [
-    ExpertActivationWriter(
-        output_dir / f"layer_{layer_idx:02d}.h5", n_experts, d_model, dtype=np.float16
-    )
-    for layer_idx in range(n_layers)
-]
+expert_data = {
+    li: {ei: {"activations": [], "tokens": []} for ei in range(n_experts)}
+    for li in range(n_layers)
+}
 
-# %% Batched capture: process each batch, write immediately to disk
+# %% Batched capture: process each batch, collect per-expert activations
 total_docs = 0
 for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
     batch = prompts[start : start + batch_size]
-    seq_len = len(batch[0])
-    batch_n_docs = len(batch)
-    total_docs += batch_n_docs
+    total_docs += len(batch)
     batch_data = {}
+    seq_len = None
 
     with torch.no_grad(), model.trace(batch) as tracer:
+        # nnsight left-pads by default, so last token is always at seq_len - 1
+        input_ids = model.inputs[1]["input_ids"].save()
+
         for layer_idx, layer in enumerate(model.model.layers):
             # Get routing info from the gate
             # top_k_weights: weight for each expert
@@ -100,7 +100,9 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
                 "weights": top_k_weights,
             }
 
-    # Process this batch: filter to last token, write to HDF5 immediately
+    seq_len = input_ids.shape[1]
+
+    # Process this batch: filter to last token, collect per-expert
     for layer_idx in range(n_layers):
         d = batch_data[layer_idx]
         active_experts = d["active_experts"]
@@ -114,29 +116,54 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
             down_proj = down_projs[i]
             top_k_pos = top_k_positions[i]
 
-            # Filter to last token only
+            # Filter to last token only (nnsight left-pads, so last token is at seq_len - 1)
             last_token_mask = (token_idx % seq_len) == (seq_len - 1)
             if not last_token_mask.any():
                 continue
 
             last_token_idx = token_idx[last_token_mask]
             last_down_proj = down_proj[last_token_mask]
-            last_top_k_pos = top_k_pos[last_token_mask]
+            last_top_k_pos = top_k_positions[i][last_token_mask]
 
             # Get gate weights and compute weighted output
             # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
             gate_weights = weights[last_token_idx, last_top_k_pos]
             gated_output = gate_weights.unsqueeze(-1) * last_down_proj
 
-            # Write immediately to HDF5 (no memory accumulation)
+            # Get the actual last token IDs for these documents
+            last_doc_indices = last_token_idx // seq_len
+            last_token_ids = input_ids[last_doc_indices, -1]
+
+            # Collect in memory
             for j in range(gated_output.shape[0]):
-                writers[layer_idx].add(expert_id, gated_output[j].half())
+                expert_data[layer_idx][expert_id]["activations"].append(
+                    gated_output[j].half().cpu()
+                )
+                expert_data[layer_idx][expert_id]["tokens"].append(
+                    last_token_ids[j].cpu()
+                )
 
-# %% Close all writers
-for w in writers:
-    w.close()
+# %% Save per-expert safetensor files
+for li in tqdm(range(n_layers), desc="Saving layers"):
+    layer_dir = output_dir / f"layer_{li:02d}"
+    layer_dir.mkdir(parents=True, exist_ok=True)
+    for ei in range(n_experts):
+        acts = expert_data[li][ei]["activations"]
+        toks = expert_data[li][ei]["tokens"]
+        if acts:
+            save_expert(
+                layer_dir / f"expert_{ei:03d}.safetensors",
+                torch.stack(acts),
+                torch.stack(toks),
+            )
 
-save_metadata(output_dir, total_docs, n_layers, n_experts, d_model, dtype="float16")
+save_metadata(
+    output_dir,
+    n_docs=total_docs,
+    n_layers=n_layers,
+    n_experts=n_experts,
+    d_model=d_model,
+)
 print(f"Saved activations to {output_dir}")
 
 
@@ -175,13 +202,6 @@ def projection_pursuit(
     return tokens, top_k.values.tolist()
 
 
-def load_expert_data(path, expert_id):
-    """Load activations for a single expert from HDF5."""
-    with h5py.File(path, "r") as f:
-        data = f[f"expert_{expert_id:03d}"][:]
-    return torch.from_numpy(data).float()
-
-
 # Load dictionary (full unembedding, L2-normalized)
 dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
 
@@ -189,9 +209,13 @@ dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
 min_activations = 5
 results = []
 for li in tqdm(range(n_layers), desc="Projection pursuit"):
-    layer_path = output_dir / f"layer_{li:02d}.h5"
+    layer_dir = output_dir / f"layer_{li:02d}"
     for ei in range(n_experts):
-        X = load_expert_data(layer_path, ei)
+        expert_path = layer_dir / f"expert_{ei:03d}.safetensors"
+        if not expert_path.exists():
+            continue
+        data = load_expert(expert_path)
+        X = data["activations"].float()
         if X.shape[0] < min_activations:
             continue
         tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=50)

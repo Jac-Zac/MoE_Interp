@@ -1,201 +1,137 @@
-"""Expert Pursuit: projection-based concept decomposition of MoE experts.
+"""Projection pursuit for Expert Pursuit."""
 
-Projects expert activations onto full unembedding dictionary and finds
-top-k tokens by explained variance ratio (EVR).
-"""
-
-from __future__ import annotations
-
-import json
-from collections import Counter
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
+import numpy as np
 import torch
-import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.cache import load_layer, load_metadata
-
-
-@dataclass
-class ExpertConceptResult:
-    """Decomposition result for a single expert."""
-
-    layer: int
-    expert_id: int
-    n_activations: int
-    tokens: list[str]
-    token_ids: list[int]
-    evr: list[float]
-
-
-@dataclass
-class PursuitResult:
-    """Full Expert Pursuit analysis results."""
-
-    n_layers: int
-    n_experts: int
-    k: int
-    experts: list[ExpertConceptResult] = field(default_factory=list)
-    evr_matrix: torch.Tensor = field(default_factory=lambda: torch.zeros(0))
-
-    def concept_frequency(self, top_n: int = 5) -> Counter:
-        """Aggregate top-N concepts across all experts."""
-        counter: Counter = Counter()
-        for e in self.experts:
-            counter.update(e.tokens[:top_n])
-        return counter
-
-    def save(self, path: Path) -> None:
-        """Save results to JSON + tensors."""
-        path = Path(path)
-        path.mkdir(parents=True, exist_ok=True)
-
-        torch.save(self.evr_matrix, path / "evr.pt")
-
-        data = {
-            "n_layers": self.n_layers,
-            "n_experts": self.n_experts,
-            "k": self.k,
-            "experts": [
-                {
-                    "layer": e.layer,
-                    "expert_id": e.expert_id,
-                    "n_activations": e.n_activations,
-                    "tokens": e.tokens,
-                    "token_ids": e.token_ids,
-                    "evr": e.evr,
-                }
-                for e in self.experts
-            ],
-        }
-        with open(path / "pursuit_results.json", "w") as f:
-            json.dump(data, f, indent=2)
-
-    @staticmethod
-    def load(path: Path) -> "PursuitResult":
-        """Load saved results from disk."""
-        path = Path(path)
-        with open(path / "pursuit_results.json") as f:
-            data = json.load(f)
-
-        experts = [
-            ExpertConceptResult(
-                layer=e["layer"],
-                expert_id=e["expert_id"],
-                n_activations=e["n_activations"],
-                tokens=e["tokens"],
-                token_ids=e["token_ids"],
-                evr=e["evr"],
-            )
-            for e in data["experts"]
-        ]
-
-        return PursuitResult(
-            n_layers=data["n_layers"],
-            n_experts=data["n_experts"],
-            k=data["k"],
-            experts=experts,
-            evr_matrix=torch.load(path / "evr.pt", weights_only=True),
-        )
+from src.cache import load_expert, load_unembedding
 
 
 def projection_pursuit(
     X: torch.Tensor,
     dictionary: torch.Tensor,
-    tokenizer: Any,
+    tokenizer,
     k: int = 50,
-) -> tuple[list[str], list[int], list[float]]:
-    """Project expert activations onto dictionary, return top-k by EVR.
+) -> tuple[list[str], list[float]]:
+    """Project expert activations onto dictionary, return top-k tokens by EVR.
 
-    EVR per token = var(projection) / total_var, clamped to [0, 1].
+    EVR per token = var(projection) / total_var, clamped to [0,1].
+    Note: Dictionary vectors are non-orthogonal, so sum(EVR) may exceed 1.
     """
     if X.shape[0] <= 1:
-        return [], [], []
+        return [], []
 
     X_centered = X - X.mean(dim=0, keepdim=True)
     projections = X_centered @ dictionary.T
 
     total_var = X_centered.var(dim=0).sum()
     if total_var < 1e-10:
-        return [], [], []
+        return [], []
 
     var_per_token = projections.var(dim=0)
     evr = (var_per_token / total_var).clamp(0, 1)
 
     valid_mask = evr > 1e-6
     if not valid_mask.any():
-        return [], [], []
+        return [], []
 
     top_k = evr.topk(min(k, int(valid_mask.sum().item())))
 
-    token_ids = top_k.indices.tolist()
-    tokens = [tokenizer.decode([i]).strip() for i in token_ids]
-    return tokens, token_ids, top_k.values.tolist()
+    tokens = [tokenizer.decode([i.item()]).strip() for i in top_k.indices]
+    return tokens, top_k.values.tolist()
 
 
-def run_expert_pursuit(
-    activations_dir: Path,
-    unembed: torch.Tensor,
-    tokenizer: Any,
-    k: int = 50,
+def run_pursuit(
+    encodings_dir: Path,
+    tokenizer,
     min_activations: int = 5,
-) -> PursuitResult:
-    """Run projection pursuit on all experts across all layers.
+    k: int = 50,
+    output_dir: Path | None = None,
+    data_dir: Path | None = None,
+) -> tuple[list[dict], np.ndarray]:
+    """Run projection pursuit on all experts.
 
     Args:
-        activations_dir: Path to directory with per-layer HDF5 files.
-        unembed: [vocab_size, d_model] unembedding matrix.
-        tokenizer: HuggingFace tokenizer for decoding.
-        k: Number of top atoms to return per expert.
-        min_activations: Minimum non-zero activations required.
+        encodings_dir: Directory containing expert encodings
+        tokenizer: Model tokenizer
+        min_activations: Minimum activations required to analyze an expert
+        k: Number of top tokens to return per expert
+        output_dir: Optional output directory for results and plots
+        data_dir: Data directory containing unembedding. If None, derived from encodings_dir.
 
     Returns:
-        PursuitResult with per-expert decompositions and EVR.
+        Tuple of (results list, evr_matrix)
     """
-    meta = load_metadata(activations_dir)
-    n_layers = meta["n_layers"]
-    n_experts = meta["n_experts"]
-    k = min(k, unembed.shape[0])
+    encodings_dir = Path(encodings_dir)
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    # L2-normalize dictionary
-    dictionary = F.normalize(unembed, dim=1)
+    if data_dir is None:
+        data_dir = encodings_dir.parent
+    dictionary = load_unembedding(data_dir / "unembedding" / "dictionary.safetensors")
 
-    evr_matrix = torch.zeros(n_layers, n_experts, k)
-    expert_results: list[ExpertConceptResult] = []
+    metadata_path = encodings_dir / "metadata.json"
+    if metadata_path.exists():
+        import json
 
-    for li in tqdm(range(n_layers), desc="Expert Pursuit"):
-        layer_data = load_layer(activations_dir, li)  # [n_docs, n_experts, d_model]
+        metadata = json.loads(metadata_path.read_text())
+        n_layers = metadata["n_layers"]
+        n_experts = metadata["n_experts"]
+    else:
+        raise ValueError(f"No metadata found in {encodings_dir}")
 
+    results = []
+    for li in tqdm(range(n_layers), desc="Projection pursuit"):
+        layer_dir = encodings_dir / f"layer_{li:02d}"
         for ei in range(n_experts):
-            X = layer_data[:, ei, :]  # [n_docs, d_model]
-
-            n_activations = int((X.norm(dim=1) > 1e-6).sum().item())
-            if n_activations < min_activations:
+            expert_path = layer_dir / f"expert_{ei:03d}.safetensors"
+            if not expert_path.exists():
                 continue
-
-            tokens, token_ids, evr = projection_pursuit(X, dictionary, tokenizer, k)
+            data = load_expert(expert_path)
+            X = data["activations"].float()
+            if X.shape[0] < min_activations:
+                continue
+            tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=k)
             if not tokens:
                 continue
-
-            evr_matrix[li, ei, : len(evr)] = torch.tensor(evr)
-            expert_results.append(
-                ExpertConceptResult(
-                    layer=li,
-                    expert_id=ei,
-                    n_activations=n_activations,
-                    tokens=tokens,
-                    token_ids=token_ids,
-                    evr=evr,
-                )
+            results.append(
+                {
+                    "layer": li,
+                    "expert": ei,
+                    "n_activations": X.shape[0],
+                    "tokens": tokens,
+                    "evr": evr,
+                }
             )
 
-    return PursuitResult(
-        n_layers=n_layers,
-        n_experts=n_experts,
-        k=k,
-        experts=expert_results,
-        evr_matrix=evr_matrix,
-    )
+    print(f"Analyzed {len(results)} experts")
+
+    evr_matrix = np.zeros((n_layers, n_experts))
+    for r in results:
+        evr_matrix[r["layer"], r["expert"]] = r["evr"][0] if r["evr"] else 0.0
+
+    if output_dir:
+        import json
+
+        (output_dir / "results.json").write_text(json.dumps(results))
+        np.save(output_dir / "evr_matrix.npy", evr_matrix)
+
+        import plotly.express as px
+
+        fig = px.imshow(
+            evr_matrix,
+            x=[f"E{i}" for i in range(n_experts)],
+            y=[f"L{i}" for i in range(n_layers)],
+            color_continuous_scale="Blues",
+            labels=dict(x="Expert", y="Layer", color="Top EVR"),
+            title="Expert Pursuit: Top Explained Variance Ratio per Expert",
+        )
+        fig.update_layout(width=1600, height=600)
+        fig.write_html(output_dir / "evr_heatmap.html")
+
+        print(f"Saved results to {output_dir}")
+
+    return results, evr_matrix

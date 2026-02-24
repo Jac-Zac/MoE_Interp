@@ -21,7 +21,7 @@ AGENTS.md
 *.out
 
 # Data and checkpoints
-*/data/
+**/data/
 *.pt
 *.pth
 *.npy
