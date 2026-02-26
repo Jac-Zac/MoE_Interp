@@ -24,8 +24,8 @@ model = LanguageModel(
     device_map="auto",
     dtype=torch.float16,
     dispatch=True,
-    offload_folder="offload",
 )
+
 tokenizer = model.tokenizer
 
 n_layers = model.config.num_hidden_layers
