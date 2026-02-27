@@ -26,6 +26,9 @@ torch = [
     { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
 ]
 
+[tool.uv]
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
 # NOTE: This ca be added if we want to use that instead
 # "residual",
 # residual = { git = "https://github.com/Flegyas/ResiDual.git" }
