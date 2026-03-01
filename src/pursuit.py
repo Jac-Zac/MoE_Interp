@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.cache import load_expert, load_unembedding
+from src.cache import load_expert_h5, load_unembedding
 
 
 def projection_pursuit(
@@ -71,7 +71,7 @@ def run_pursuit(
 
     if data_dir is None:
         data_dir = encodings_dir.parent
-    dictionary = load_unembedding(data_dir / "unembedding" / "dictionary.safetensors")
+    dictionary = load_unembedding(data_dir / "unembedding" / "dictionary.h5")
 
     metadata_path = encodings_dir / "metadata.json"
     if metadata_path.exists():
@@ -85,12 +85,11 @@ def run_pursuit(
 
     results = []
     for li in tqdm(range(n_layers), desc="Projection pursuit"):
-        layer_dir = encodings_dir / f"layer_{li:02d}"
+        layer_path = encodings_dir / f"layer_{li:02d}.h5"
+        if not layer_path.exists():
+            continue
         for ei in range(n_experts):
-            expert_path = layer_dir / f"expert_{ei:03d}.safetensors"
-            if not expert_path.exists():
-                continue
-            data = load_expert(expert_path)
+            data = load_expert_h5(layer_path, ei)
             X = data["activations"].float()
             if X.shape[0] < min_activations:
                 continue

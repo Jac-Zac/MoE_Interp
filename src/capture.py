@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from src.cache import save_expert, save_metadata, save_unembedding
+from src.cache import append_expert_h5, save_metadata, save_unembedding
 
 
 def capture_expert_activations(
@@ -37,11 +37,6 @@ def capture_expert_activations(
     n_layers = model.config.num_hidden_layers
     n_experts = model.config.num_experts
     d_model = model.config.hidden_size
-
-    expert_data = {
-        li: {ei: {"activations": [], "tokens": []} for ei in range(n_experts)}
-        for li in range(n_layers)
-    }
 
     total_docs = 0
     for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
@@ -113,25 +108,14 @@ def capture_expert_activations(
                 last_doc_indices = last_token_idx // seq_len
                 last_token_ids = input_ids[last_doc_indices, -1]
 
-                for j in range(gated_output.shape[0]):
-                    expert_data[layer_idx][expert_id]["activations"].append(
-                        gated_output[j].half().cpu()
-                    )
-                    expert_data[layer_idx][expert_id]["tokens"].append(
-                        last_token_ids[j].cpu()
-                    )
-
-    for li in tqdm(range(n_layers), desc="Saving layers"):
-        layer_dir = output_dir / f"layer_{li:02d}"
-        layer_dir.mkdir(parents=True, exist_ok=True)
-        for ei in range(n_experts):
-            acts = expert_data[li][ei]["activations"]
-            toks = expert_data[li][ei]["tokens"]
-            if acts:
-                save_expert(
-                    layer_dir / f"expert_{ei:03d}.safetensors",
-                    torch.stack(acts),
-                    torch.stack(toks),
+                if gated_output.shape[0] == 0:
+                    continue
+                layer_path = output_dir / f"layer_{layer_idx:02d}.h5"
+                append_expert_h5(
+                    layer_path,
+                    expert_id,
+                    gated_output.half(),
+                    last_token_ids,
                 )
 
     metadata = {
@@ -144,7 +128,7 @@ def capture_expert_activations(
 
     unembedding_dir = data_dir / "unembedding"
     dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
-    save_unembedding(unembedding_dir / "dictionary.safetensors", dictionary)
+    save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
     print(f"Saved unembedding to {unembedding_dir}")
 
     print(f"Saved activations to {output_dir}")
