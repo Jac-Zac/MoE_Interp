@@ -17,12 +17,13 @@ def projection_pursuit(
     tokenizer,
     k: int = 50,
 ) -> tuple[list[str], list[float]]:
-    """Project expert activations onto dictionary, return top-k tokens by EVR.
+    """Greedy projection pursuit with residualization.
 
-    EVR per token = var(projection) / total_var, clamped to [0,1].
-    Note: Dictionary vectors are non-orthogonal, so sum(EVR) may exceed 1.
+    At each step, select the dictionary direction that maximizes variance
+    explained by the current residual. EVR values are reported relative to
+    the original total variance.
     """
-    if X.shape[0] <= 1:
+    if k <= 0 or X.shape[0] <= 1:
         return [], []
 
     X_centered = X - X.mean(dim=0, keepdim=True)
@@ -30,15 +31,31 @@ def projection_pursuit(
     if total_var < 1e-10:
         return [], []
 
-    projections = X_centered @ dictionary.T
-    evr = (projections.var(dim=0) / total_var).clamp(0, 1)
-    valid = evr > 1e-6
-    if not valid.any():
-        return [], []
+    residual = X_centered
+    selected: list[int] = []
+    evr_values: list[float] = []
 
-    top_k = evr.topk(min(k, int(valid.sum().item())))
-    tokens = [tokenizer.decode([i.item()]).strip() for i in top_k.indices]
-    return tokens, top_k.values.tolist()
+    for _ in range(k):
+        projections = residual @ dictionary.T
+        evr = projections.var(dim=0) / total_var
+        best_val, best_idx = evr.max(dim=0)
+        if best_val <= 1e-6:
+            break
+
+        idx = int(best_idx.item())
+        selected.append(idx)
+        evr_values.append(float(best_val.item()))
+
+        direction = dictionary[idx]
+        residual = residual - (residual @ direction).unsqueeze(1) * direction.unsqueeze(
+            0
+        )
+
+        if residual.var(dim=0).sum() < 1e-10:
+            break
+
+    tokens = [tokenizer.decode([idx]).strip() for idx in selected]
+    return tokens, evr_values
 
 
 def run_pursuit(
@@ -78,10 +95,13 @@ def run_pursuit(
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]
 
+    total_experts = n_layers * n_experts
+
     results = []
     for li, ei, acts in tqdm(
         iter_layer_activations(encodings_dir, n_layers, n_experts, min_activations),
         desc="Projection pursuit",
+        total=total_experts,
     ):
         X = acts.float()
         tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=k)
@@ -100,13 +120,18 @@ def run_pursuit(
     print(f"Analyzed {len(results)} experts")
 
     evr_matrix = np.zeros((n_layers, n_experts))
+    count_matrix = np.zeros((n_layers, n_experts))
     for r in results:
-        evr_matrix[r["layer"], r["expert"]] = r["evr"][0] if r["evr"] else 0.0
+        evr_matrix[r["layer"], r["expert"]] = sum(r["evr"]) if r["evr"] else 0.0
+        count_matrix[r["layer"], r["expert"]] = r["n_activations"]
 
     if output_dir:
         (output_dir / "results.json").write_text(json.dumps(results))
         np.save(output_dir / "evr_matrix.npy", evr_matrix)
-        plot_evr_heatmap(evr_matrix, output_path=output_dir / "evr_heatmap.html")
+        np.save(output_dir / "count_matrix.npy", count_matrix)
+        plot_evr_heatmap(
+            evr_matrix, count_matrix, output_path=output_dir / "evr_heatmap.html"
+        )
         print(f"Saved results to {output_dir}")
 
     return results, evr_matrix

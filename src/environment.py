@@ -5,7 +5,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from dotenv import load_dotenv
-from nnsight import LanguageModel
 
 
 def load_env() -> None:

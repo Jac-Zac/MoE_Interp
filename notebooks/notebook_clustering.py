@@ -34,9 +34,9 @@ n_experts = metadata["n_experts"]
 # %% Stream activations layer-by-layer and build per-layer arrays
 # Peak memory = one layer's activations, not all layers at once.
 counts_matrix = np.zeros((n_layers, n_experts), dtype=np.int64)
-layer_data: dict[
-    int, dict
-] = {}  # layer_idx -> {"X": ndarray, "X_norm": ndarray, "labels": ndarray}
+
+# layer_idx -> {"X": ndarray, "X_norm": ndarray, "labels": ndarray}
+layer_data: dict[int, dict] = {}
 
 
 def _l2_normalize_rows(X: np.ndarray) -> np.ndarray:
