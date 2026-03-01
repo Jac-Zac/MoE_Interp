@@ -1,6 +1,7 @@
 """Simple storage for Expert Pursuit activations."""
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -8,34 +9,23 @@ import h5py
 import torch
 
 
-def save_metadata(path: Path, **kwargs) -> None:
+def _metadata_path(path: Path) -> Path:
     path = Path(path)
+    return path if path.suffix == ".json" else path / "metadata.json"
+
+
+def _expert_group_name(expert_id: int) -> str:
+    return f"expert_{expert_id:03d}"
+
+
+def save_metadata(path: Path, **kwargs) -> None:
+    path = _metadata_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    (path if path.suffix == ".json" else path / "metadata.json").write_text(
-        json.dumps(kwargs)
-    )
+    path.write_text(json.dumps(kwargs))
 
 
 def load_metadata(path: Path) -> dict:
-    path = Path(path)
-    p = path if path.suffix == ".json" else path / "metadata.json"
-    return json.loads(p.read_text())
-
-
-def save_expert(path: Path, activations: torch.Tensor, tokens: torch.Tensor) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(path, "w") as f:
-        f.create_dataset("activations", data=activations.detach().cpu().numpy())
-        f.create_dataset("tokens", data=tokens.detach().cpu().numpy())
-
-
-def load_expert(path: Path) -> dict[str, torch.Tensor]:
-    with h5py.File(path, "r") as f:
-        return {
-            "activations": torch.from_numpy(cast(h5py.Dataset, f["activations"])[:]),
-            "tokens": torch.from_numpy(cast(h5py.Dataset, f["tokens"])[:]),
-        }
+    return json.loads(_metadata_path(path).read_text())
 
 
 def append_expert_h5(
@@ -46,7 +36,7 @@ def append_expert_h5(
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    group_name = f"expert_{expert_id:03d}"
+    group_name = _expert_group_name(expert_id)
     acts = activations.detach().cpu()
     toks = tokens.detach().cpu()
     if acts.numel() == 0:
@@ -80,7 +70,7 @@ def append_expert_h5(
 
 def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
     path = Path(path)
-    group_name = f"expert_{expert_id:03d}"
+    group_name = _expert_group_name(expert_id)
     with h5py.File(path, "r") as f:
         if group_name not in f:
             return {"activations": torch.empty(0), "tokens": torch.empty(0)}
@@ -103,3 +93,53 @@ def save_unembedding(path: Path, tensor: torch.Tensor) -> None:
 def load_unembedding(path: Path) -> torch.Tensor:
     with h5py.File(path, "r") as f:
         return torch.from_numpy(cast(h5py.Dataset, f["weight"])[:])
+
+
+def iter_layer_activations(
+    encodings_dir: Path,
+    n_layers: int,
+    n_experts: int,
+    min_activations: int = 0,
+) -> Iterator[tuple[int, int, torch.Tensor]]:
+    """Yield (layer_idx, expert_idx, activations) for every populated expert.
+
+    Streams one expert at a time — peak memory is one expert's activations.
+    Skips experts with fewer than min_activations rows.
+    """
+    encodings_dir = Path(encodings_dir)
+    for li in range(n_layers):
+        layer_path = encodings_dir / f"layer_{li:02d}.h5"
+        if not layer_path.exists():
+            continue
+        for ei in range(n_experts):
+            data = load_expert_h5(layer_path, ei)
+            acts = data["activations"]
+            if acts.shape[0] >= min_activations:
+                yield li, ei, acts
+
+
+def iter_layers(
+    encodings_dir: Path,
+    n_layers: int,
+    n_experts: int,
+    min_activations: int = 0,
+) -> Iterator[tuple[int, dict[int, torch.Tensor]]]:
+    """Yield (layer_idx, {expert_id: activations}) for each layer.
+
+    All experts for a layer are loaded together (one HDF5 file open at a time),
+    so peak memory is one full layer's activations. Experts below min_activations
+    are excluded from the dict.
+    """
+    encodings_dir = Path(encodings_dir)
+    for li in range(n_layers):
+        layer_path = encodings_dir / f"layer_{li:02d}.h5"
+        if not layer_path.exists():
+            continue
+        expert_acts: dict[int, torch.Tensor] = {}
+        for ei in range(n_experts):
+            data = load_expert_h5(layer_path, ei)
+            acts = data["activations"]
+            if acts.shape[0] >= min_activations:
+                expert_acts[ei] = acts
+        if expert_acts:
+            yield li, expert_acts

@@ -1,12 +1,14 @@
 """Projection pursuit for Expert Pursuit."""
 
+import json
 from pathlib import Path
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.cache import load_expert_h5, load_unembedding
+from src.cache import iter_layer_activations, load_metadata, load_unembedding
+from src.plots import plot_evr_heatmap
 
 
 def projection_pursuit(
@@ -24,21 +26,17 @@ def projection_pursuit(
         return [], []
 
     X_centered = X - X.mean(dim=0, keepdim=True)
-    projections = X_centered @ dictionary.T
-
     total_var = X_centered.var(dim=0).sum()
     if total_var < 1e-10:
         return [], []
 
-    var_per_token = projections.var(dim=0)
-    evr = (var_per_token / total_var).clamp(0, 1)
-
-    valid_mask = evr > 1e-6
-    if not valid_mask.any():
+    projections = X_centered @ dictionary.T
+    evr = (projections.var(dim=0) / total_var).clamp(0, 1)
+    valid = evr > 1e-6
+    if not valid.any():
         return [], []
 
-    top_k = evr.topk(min(k, int(valid_mask.sum().item())))
-
+    top_k = evr.topk(min(k, int(valid.sum().item())))
     tokens = [tokenizer.decode([i.item()]).strip() for i in top_k.indices]
     return tokens, top_k.values.tolist()
 
@@ -74,37 +72,30 @@ def run_pursuit(
     dictionary = load_unembedding(data_dir / "unembedding" / "dictionary.h5")
 
     metadata_path = encodings_dir / "metadata.json"
-    if metadata_path.exists():
-        import json
-
-        metadata = json.loads(metadata_path.read_text())
-        n_layers = metadata["n_layers"]
-        n_experts = metadata["n_experts"]
-    else:
+    if not metadata_path.exists():
         raise ValueError(f"No metadata found in {encodings_dir}")
+    metadata = load_metadata(metadata_path)
+    n_layers = metadata["n_layers"]
+    n_experts = metadata["n_experts"]
 
     results = []
-    for li in tqdm(range(n_layers), desc="Projection pursuit"):
-        layer_path = encodings_dir / f"layer_{li:02d}.h5"
-        if not layer_path.exists():
+    for li, ei, acts in tqdm(
+        iter_layer_activations(encodings_dir, n_layers, n_experts, min_activations),
+        desc="Projection pursuit",
+    ):
+        X = acts.float()
+        tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=k)
+        if not tokens:
             continue
-        for ei in range(n_experts):
-            data = load_expert_h5(layer_path, ei)
-            X = data["activations"].float()
-            if X.shape[0] < min_activations:
-                continue
-            tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=k)
-            if not tokens:
-                continue
-            results.append(
-                {
-                    "layer": li,
-                    "expert": ei,
-                    "n_activations": X.shape[0],
-                    "tokens": tokens,
-                    "evr": evr,
-                }
-            )
+        results.append(
+            {
+                "layer": li,
+                "expert": ei,
+                "n_activations": X.shape[0],
+                "tokens": tokens,
+                "evr": evr,
+            }
+        )
 
     print(f"Analyzed {len(results)} experts")
 
@@ -113,24 +104,9 @@ def run_pursuit(
         evr_matrix[r["layer"], r["expert"]] = r["evr"][0] if r["evr"] else 0.0
 
     if output_dir:
-        import json
-
         (output_dir / "results.json").write_text(json.dumps(results))
         np.save(output_dir / "evr_matrix.npy", evr_matrix)
-
-        import plotly.express as px
-
-        fig = px.imshow(
-            evr_matrix,
-            x=[f"E{i}" for i in range(n_experts)],
-            y=[f"L{i}" for i in range(n_layers)],
-            color_continuous_scale="Blues",
-            labels=dict(x="Expert", y="Layer", color="Top EVR"),
-            title="Expert Pursuit: Top Explained Variance Ratio per Expert",
-        )
-        fig.update_layout(width=1600, height=600)
-        fig.write_html(output_dir / "evr_heatmap.html")
-
+        plot_evr_heatmap(evr_matrix, output_path=output_dir / "evr_heatmap.html")
         print(f"Saved results to {output_dir}")
 
     return results, evr_matrix

@@ -13,7 +13,6 @@ def plot_evr_heatmap(
 ) -> go.Figure:
     """EVR heatmap (top EVR per expert, all layers)."""
     n_layers, n_experts = evr_matrix.shape
-
     fig = px.imshow(
         evr_matrix,
         x=[f"E{i}" for i in range(n_experts)],
@@ -26,7 +25,6 @@ def plot_evr_heatmap(
         width=1400,
         height=600,
     )
-
     if output_path:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
