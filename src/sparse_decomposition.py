@@ -60,18 +60,24 @@ def _as_float_tensor(value: torch.Tensor, device: torch.device) -> torch.Tensor:
 
 def pca(X, k, compute_evr: bool = True, *args, **kwargs) -> dict:
     X = X.float()
+    # Center the data by subtracting the mean of each feature
     X_mean = torch.mean(X, dim=0)
     X_centered = X - X_mean
 
-    _, S, Vt = torch.linalg.svd(X_centered, full_matrices=False)
-    components = Vt[:k]
+    # Compute the SVD of the centered data
+    U, S, Vt = torch.linalg.svd(X_centered, full_matrices=False)
 
-    evr = torch.zeros(k)
-    l2 = torch.zeros(k)
-    cosine = torch.zeros(k)
+    # Select the number of components we want to keep
+    components = Vt[:k]  # Transpose Vt to get right singular vectors in columns
+    # explained_variance = S**2 / (X.size(0) - 1)  # Variance explained by each singular value
+    # explained_variance_ratio = explained_variance[:k] / explained_variance.sum()
+
     if compute_evr:
         std_orig = torch.std(X, dim=0) ** 2
 
+        evr = torch.zeros(k)
+        l2 = torch.zeros(k)
+        cosine = torch.zeros(k)
         for i in range(1, k + 1):
             filtering = components[:i].T @ components[:i]
             recon_i = X_centered @ filtering + X_mean
@@ -79,6 +85,8 @@ def pca(X, k, compute_evr: bool = True, *args, **kwargs) -> dict:
             evr[i - 1] = std_recon.sum(dim=-1) / std_orig.sum(dim=-1)
             cosine[i - 1] = F.cosine_similarity(X, recon_i).mean().item()
             l2[i - 1] = F.mse_loss(X, recon_i).item()
+    else:
+        evr = l2 = cosine = torch.zeros(k)
 
     recon = X_centered @ components.T @ components + torch.mean(X, dim=0)
     results = []
@@ -112,12 +120,8 @@ class OMP(Projection):
         *args,
         **kwargs,
     ):
-        pca_out = pca(X, 1)
-        components = pca_out.get("components")
-        if not isinstance(components, torch.Tensor):
-            raise TypeError("PCA components are missing")
-        x_pc = components[0]
-        return omp(
+        x_pc = pca(X, 1)["components"][0]
+        omp_result = omp(
             *args,
             X=x_pc,
             orig_X=X,
@@ -127,6 +131,7 @@ class OMP(Projection):
             device=device,
             **kwargs,
         )
+        return omp_result
 
 
 @torch.no_grad()
@@ -174,11 +179,16 @@ def omp(
         current_atoms = torch.index_select(
             dictionary, 0, torch.as_tensor(chosen, device=device)
         )
-        lstsq_weights = torch.linalg.lstsq(current_atoms.T, X).solution
+        lstsq_weights = torch.linalg.lstsq(
+            current_atoms.T.double(), X.double()
+        ).solution.float()
         recon = current_atoms.T @ lstsq_weights
         residual = X - recon
-        recon_norm = recon / (recon.norm() + 1e-12)
-        recon_X = orig_X @ recon_norm.reshape(-1, 1) @ recon_norm.reshape(1, -1)
+        recon_X = (
+            orig_X
+            @ (recon / recon.norm()).reshape(-1, 1)
+            @ (recon / recon.norm()).reshape(1, -1)
+        )
         std_recon = torch.std(recon_X, dim=0) ** 2
         evr[j] = std_recon.sum(dim=-1) / std_orig.sum(dim=-1)
         cosine[j] = F.cosine_similarity(orig_X, recon_X).mean().item()
@@ -225,28 +235,27 @@ class SOMP(Projection):
         **kwargs,
     ):
         orig_X = X
+        # X_mean = torch.mean(X, dim=0)
+        # X_centered = X - X_mean
 
         if self.pc is not None:
             pca_out = pca(X, self.pc)
-            components = pca_out.get("components")
-            weights = pca_out.get("weights")
-            if not isinstance(components, torch.Tensor) or not isinstance(
-                weights, torch.Tensor
-            ):
-                raise TypeError("PCA outputs are missing")
-            X = components * weights.unsqueeze(1) ** 2
+            weights = pca_out["weights"].unsqueeze(1)
+            X = pca_out["components"] * weights**2
 
-        return somp(
-            X=X,
-            orig_X=orig_X,
+        result = somp(
+            X=X.double(),
+            orig_X=orig_X.double(),
             pc=self.pc,
-            dictionary=dictionary,
+            dictionary=dictionary.double(),
             descriptors=descriptors,
             k=self.k,
             device=device,
             criterion=self.criterion,
             compute_evr=self.compute_evr,
         )
+
+        return result
 
 
 @torch.no_grad()
@@ -272,37 +281,30 @@ def somp(
         len(descriptors) == dictionary.shape[0]
     ), f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
 
-    device = torch.device(device)
-    X = _as_float_tensor(X, device)
-    orig_X = _as_float_tensor(orig_X, device)
-    dictionary = _as_float_tensor(dictionary, device)
-
+    X = X.to(device)
+    orig_X = orig_X.to(device)
     orig_X_mean = orig_X.mean(dim=0)
     orig_X_centered = orig_X - orig_X_mean
+    dictionary = dictionary.to(device)
 
     std_orig = torch.std(orig_X, dim=0) ** 2
     if centering:
-        X_mean = X.mean(dim=0, keepdim=True)
+        X_mean = X.mean(dim=0, keepdims=True)
         X = X - X_mean
     else:
         X_mean = torch.zeros_like(X)
 
-    # fp16 view of dictionary and residual used only for the cross-product (atom
-    # selection). argmax is robust to fp16 rounding; lstsq stays in fp32.
-    dictionary_half = dictionary.half()
-
     chosen = []
-    notchosen = torch.ones(dictionary.shape[0], device=device)
+    notchosen = torch.ones(dictionary.shape[0]).to(device)
     results = []
-    recon = torch.zeros_like(X)
+    recon = torch.zeros_like(X)  # +X_mean
     residual = X.clone()
     evr = torch.zeros(k)
     l2 = torch.zeros(k)
     cosine = torch.zeros(k)
-    lstsq_weights = torch.zeros((dictionary.shape[0], 0), device=device)
+    lstsq_weights = torch.zeros((0, X.shape[0]), device=device, dtype=X.dtype)
     for i in range(k):
-        # NOTE: Convert to higher precision (original implementation uses double but it is not supported on MPS thus for now I will use float)
-        cross = (residual.half() @ dictionary_half.T).float()
+        cross = residual @ dictionary.T
         cross = cross * notchosen
 
         if criterion == "l1":
@@ -318,7 +320,7 @@ def somp(
         notchosen[atom_idx] = 0
         results.append(descriptors[atom_idx])
         current_atoms = torch.index_select(
-            dictionary, 0, torch.as_tensor(chosen, device=device)
+            dictionary, 0, torch.as_tensor(chosen).to(device)
         )
         lstsq_weights = torch.linalg.lstsq(current_atoms.T, X.T).solution
         recon = (current_atoms.T @ lstsq_weights).T

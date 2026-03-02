@@ -1,7 +1,6 @@
 """Simple storage for Expert Pursuit activations."""
 
 import json
-from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -95,51 +94,23 @@ def load_unembedding(path: Path) -> torch.Tensor:
         return torch.from_numpy(cast(h5py.Dataset, f["weight"])[:])
 
 
-def iter_layer_activations(
+def load_layer_h5(
     encodings_dir: Path,
-    n_layers: int,
+    layer_idx: int,
     n_experts: int,
     min_activations: int = 0,
-) -> Iterator[tuple[int, int, torch.Tensor]]:
-    """Yield (layer_idx, expert_idx, activations) for every populated expert.
+) -> dict[int, torch.Tensor]:
+    """Return {expert_id: activations} for one layer.
 
-    Streams one expert at a time — peak memory is one expert's activations.
-    Skips experts with fewer than min_activations rows.
+    Experts with fewer than min_activations rows are excluded.
+    Returns an empty dict if the layer file does not exist.
     """
-    encodings_dir = Path(encodings_dir)
-    for li in range(n_layers):
-        layer_path = encodings_dir / f"layer_{li:02d}.h5"
-        if not layer_path.exists():
-            continue
-        for ei in range(n_experts):
-            data = load_expert_h5(layer_path, ei)
-            acts = data["activations"]
-            if acts.shape[0] >= min_activations:
-                yield li, ei, acts
-
-
-def iter_layers(
-    encodings_dir: Path,
-    n_layers: int,
-    n_experts: int,
-    min_activations: int = 0,
-) -> Iterator[tuple[int, dict[int, torch.Tensor]]]:
-    """Yield (layer_idx, {expert_id: activations}) for each layer.
-
-    All experts for a layer are loaded together (one HDF5 file open at a time),
-    so peak memory is one full layer's activations. Experts below min_activations
-    are excluded from the dict.
-    """
-    encodings_dir = Path(encodings_dir)
-    for li in range(n_layers):
-        layer_path = encodings_dir / f"layer_{li:02d}.h5"
-        if not layer_path.exists():
-            continue
-        expert_acts: dict[int, torch.Tensor] = {}
-        for ei in range(n_experts):
-            data = load_expert_h5(layer_path, ei)
-            acts = data["activations"]
-            if acts.shape[0] >= min_activations:
-                expert_acts[ei] = acts
-        if expert_acts:
-            yield li, expert_acts
+    layer_path = Path(encodings_dir) / f"layer_{layer_idx:02d}.h5"
+    if not layer_path.exists():
+        return {}
+    result: dict[int, torch.Tensor] = {}
+    for ei in range(n_experts):
+        acts = load_expert_h5(layer_path, ei)["activations"]
+        if acts.shape[0] >= min_activations:
+            result[ei] = acts
+    return result

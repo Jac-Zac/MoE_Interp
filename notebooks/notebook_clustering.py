@@ -9,7 +9,7 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
-from src.cache import iter_layers, load_metadata
+from src.cache import load_layer_h5, load_metadata
 from src.environment import get_data_dir, load_env, set_seed
 
 # %% Configuration
@@ -46,7 +46,10 @@ def _l2_normalize_rows(X: np.ndarray) -> np.ndarray:
 
 
 print("Loading activations layer by layer...")
-for layer_idx, expert_acts in iter_layers(encodings_dir, n_layers, n_experts):
+for layer_idx in range(n_layers):
+    expert_acts = load_layer_h5(encodings_dir, layer_idx, n_experts)
+    if not expert_acts:
+        continue
     Xs, labels = [], []
     for expert_id, acts in expert_acts.items():
         if acts.numel() == 0:

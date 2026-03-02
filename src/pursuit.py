@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.cache import iter_layer_activations, load_metadata, load_unembedding
+from src.cache import load_layer_h5, load_metadata, load_unembedding
 from src.environment import get_device
 from src.plots import plot_evr_heatmap
 from src.sparse_decomposition import SOMP
@@ -100,8 +100,6 @@ def run_pursuit(
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]
 
-    total_experts = n_layers * n_experts
-
     # Open the JSONL log file once if output_dir is set. Each expert result is
     # flushed immediately so progress is never lost if the run is interrupted.
     jsonl_file = None
@@ -111,29 +109,27 @@ def run_pursuit(
 
     results = []
     try:
-        for li, ei, acts in tqdm(
-            iter_layer_activations(encodings_dir, n_layers, n_experts, min_activations),
-            desc="Projection pursuit",
-            total=total_experts,
-        ):
-            X = acts.float()
-            tokens, evr = projection_pursuit(
-                X, dictionary, tokenizer, k=k, device=device
-            )
-            if not tokens:
-                continue
-            record = {
-                "layer": li,
-                "expert": ei,
-                "n_activations": X.shape[0],
-                "tokens": tokens,
-                "evr": evr,
-            }
-            results.append(record)
-            if jsonl_file is not None:
-                # One JSON object per line — safe to append, readable mid-run.
-                jsonl_file.write(json.dumps(record) + "\n")
-                jsonl_file.flush()
+        for li in tqdm(range(n_layers), desc="Projection pursuit"):
+            expert_acts = load_layer_h5(encodings_dir, li, n_experts, min_activations)
+            for ei, acts in expert_acts.items():
+                X = acts.float()
+                tokens, evr = projection_pursuit(
+                    X, dictionary, tokenizer, k=k, device=device
+                )
+                if not tokens:
+                    continue
+                record = {
+                    "layer": li,
+                    "expert": ei,
+                    "n_activations": X.shape[0],
+                    "tokens": tokens,
+                    "evr": evr,
+                }
+                results.append(record)
+                if jsonl_file is not None:
+                    # One JSON object per line — safe to append, readable mid-run.
+                    jsonl_file.write(json.dumps(record) + "\n")
+                    jsonl_file.flush()
     finally:
         if jsonl_file is not None:
             jsonl_file.close()
