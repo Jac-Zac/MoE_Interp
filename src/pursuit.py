@@ -8,7 +8,9 @@ import torch
 from tqdm import tqdm
 
 from src.cache import iter_layer_activations, load_metadata, load_unembedding
+from src.environment import get_device
 from src.plots import plot_evr_heatmap
+from src.sparse_decomposition import SOMP
 
 
 def projection_pursuit(
@@ -17,44 +19,29 @@ def projection_pursuit(
     tokenizer,
     k: int = 50,
 ) -> tuple[list[str], list[float]]:
-    """Greedy projection pursuit with residualization.
-
-    At each step, select the dictionary direction that maximizes variance
-    explained by the current residual. EVR values are reported relative to
-    the original total variance.
-    """
+    """Greedy projection pursuit with SOMP."""
     if k <= 0 or X.shape[0] <= 1:
         return [], []
 
-    X_centered = X - X.mean(dim=0, keepdim=True)
-    total_var = X_centered.var(dim=0).sum()
+    X = X.float()
+    device = get_device()
+    if device.type == "mps":
+        device = torch.device("cpu")
+
+    total_var = X.var(dim=0).sum()
     if total_var < 1e-10:
         return [], []
 
-    residual = X_centered
-    selected: list[int] = []
-    evr_values: list[float] = []
+    decomposition = SOMP(k=k, criterion="l1")
+    result = decomposition(
+        X=X,
+        dictionary=dictionary,
+        descriptors=list(range(len(dictionary))),
+        device=device,
+    )
 
-    for _ in range(k):
-        projections = residual @ dictionary.T
-        evr = projections.var(dim=0) / total_var
-        best_val, best_idx = evr.max(dim=0)
-        if best_val <= 1e-6:
-            break
-
-        idx = int(best_idx.item())
-        selected.append(idx)
-        evr_values.append(float(best_val.item()))
-
-        direction = dictionary[idx]
-        residual = residual - (residual @ direction).unsqueeze(1) * direction.unsqueeze(
-            0
-        )
-
-        if residual.var(dim=0).sum() < 1e-10:
-            break
-
-    tokens = [tokenizer.decode([idx]).strip() for idx in selected]
+    tokens = [tokenizer.decode([idx]).strip() for idx in result["chosen"].tolist()]
+    evr_values = result["evr"].tolist()
     return tokens, evr_values
 
 
@@ -122,7 +109,7 @@ def run_pursuit(
     evr_matrix = np.zeros((n_layers, n_experts))
     count_matrix = np.zeros((n_layers, n_experts))
     for r in results:
-        evr_matrix[r["layer"], r["expert"]] = sum(r["evr"]) if r["evr"] else 0.0
+        evr_matrix[r["layer"], r["expert"]] = r["evr"][-1] if r["evr"] else 0.0
         count_matrix[r["layer"], r["expert"]] = r["n_activations"]
 
     if output_dir:

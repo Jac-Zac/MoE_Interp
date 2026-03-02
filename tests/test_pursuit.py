@@ -22,6 +22,7 @@ def test_projection_pursuit_greedy_monotonic():
     assert len(tokens) == len(evr)
     assert len(tokens) <= 10
     assert all(0.0 <= val <= 1.0 + 1e-6 for val in evr)
+    assert all(evr[i] <= evr[i + 1] for i in range(len(evr) - 1))
 
 
 def test_projection_pursuit_empty_on_zero_variance():

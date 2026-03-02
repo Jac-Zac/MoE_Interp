@@ -182,34 +182,6 @@ fig.update_layout(
 fig.write_html(clustering_dir / "clustering_accuracy.html")
 fig.show()
 
-# %% Plot 3 — Normalized activation magnitude per layer
-# Compare how active each expert is, normalized by sqrt(d_model).
-mag_matrix = np.zeros((n_layers, n_experts), dtype=np.float32)
-d_model = None
-for layer_idx, expert_acts in iter_layers(encodings_dir, n_layers, n_experts):
-    for expert_id, acts in expert_acts.items():
-        if acts.numel() == 0:
-            continue
-        acts_np = acts.float().numpy()
-        if d_model is None:
-            d_model = acts_np.shape[1]
-        mag = np.linalg.norm(acts_np, axis=1)
-        mag_matrix[layer_idx, expert_id] = float(np.mean(mag))
-
-if d_model is not None:
-    mag_matrix = mag_matrix / np.sqrt(d_model)
-fig = px.imshow(
-    mag_matrix,
-    x=[f"E{i}" for i in range(n_experts)],
-    y=[f"L{i}" for i in range(n_layers)],
-    color_continuous_scale="Magma",
-    labels=dict(x="Expert", y="Layer", color="Mean L2 / sqrt(d_model)"),
-    title="Mean activation magnitude (normalized)",
-)
-fig.update_layout(width=1600, height=600)
-fig.write_html(clustering_dir / "activation_magnitude_normalized.html")
-fig.show()
-
 # %% PCA visualisation — 4×4 subplot grid, one panel per layer
 # We render a single grid for readability.
 

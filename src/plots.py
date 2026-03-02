@@ -13,14 +13,14 @@ def plot_evr_heatmap(
     count_matrix: np.ndarray | None = None,
     output_path: Path | None = None,
 ) -> go.Figure:
-    """EVR heatmap (sum of EVR per expert, all layers) with optional activation counts."""
+    """EVR heatmap (final EVR per expert, all layers) with optional activation counts."""
     n_layers, n_experts = evr_matrix.shape
 
     if count_matrix is not None:
         fig = make_subplots(
             rows=1,
             cols=2,
-            subplot_titles=("Sum EVR (Top-k Tokens)", "Activation Count"),
+            subplot_titles=("Final EVR (Top-k Tokens)", "Activation Count"),
             specs=[[{"type": "heatmap"}, {"type": "heatmap"}]],
         )
         fig.add_trace(
@@ -44,10 +44,10 @@ def plot_evr_heatmap(
             col=2,
         )
         fig.update_layout(
-            title="Expert Pursuit: Sum Explained Variance & Activation Counts",
+            title="Expert Pursuit: Final Explained Variance & Activation Counts",
             width=1600,
             height=600,
-            coloraxis1=dict(colorbar=dict(title="Sum EVR"), colorscale="Blues"),
+            coloraxis1=dict(colorbar=dict(title="Final EVR"), colorscale="Blues"),
             coloraxis2=dict(colorbar=dict(title="Count"), colorscale="Blues"),
         )
     else:
@@ -56,10 +56,10 @@ def plot_evr_heatmap(
             x=[f"E{i}" for i in range(n_experts)],
             y=[f"L{i}" for i in range(n_layers)],
             color_continuous_scale="Blues",
-            labels=dict(x="Experts", y="Layers", color="Sum EVR"),
+            labels=dict(x="Experts", y="Layers", color="Final EVR"),
         )
         fig.update_layout(
-            title="Expert Pursuit: Sum of Explained Variance Ratio (Top-k Tokens)",
+            title="Expert Pursuit: Final Explained Variance Ratio (Top-k Tokens)",
             width=1400,
             height=600,
         )
