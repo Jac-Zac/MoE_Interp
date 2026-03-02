@@ -1,5 +1,7 @@
 ## Interpretability of Mixture-of-Experts (MoE)
 
+> Good Introduction on [MoE models](https://www.youtube.com/watch?v=0QQlYR1r6pQ&t=353s)
+
 ### Models
 
 #### [DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models](https://arxiv.org/abs/2401.06066)

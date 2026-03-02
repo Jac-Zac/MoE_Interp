@@ -287,6 +287,10 @@ def somp(
     else:
         X_mean = torch.zeros_like(X)
 
+    # fp16 view of dictionary and residual used only for the cross-product (atom
+    # selection). argmax is robust to fp16 rounding; lstsq stays in fp32.
+    dictionary_half = dictionary.half()
+
     chosen = []
     notchosen = torch.ones(dictionary.shape[0], device=device)
     results = []
@@ -297,7 +301,8 @@ def somp(
     cosine = torch.zeros(k)
     lstsq_weights = torch.zeros((dictionary.shape[0], 0), device=device)
     for i in range(k):
-        cross = residual @ dictionary.T
+        # NOTE: Convert to higher precision (original implementation uses double but it is not supported on MPS thus for now I will use float)
+        cross = (residual.half() @ dictionary_half.T).float()
         cross = cross * notchosen
 
         if criterion == "l1":
