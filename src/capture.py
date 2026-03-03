@@ -130,7 +130,6 @@ def capture_expert_activations(
     dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
     save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
     print(f"Saved unembedding to {unembedding_dir}")
-
     print(f"Saved activations to {output_dir}")
 
     return metadata

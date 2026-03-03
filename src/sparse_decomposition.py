@@ -1,5 +1,9 @@
 """Sparse decomposition utilities (SOMP, OMP, PCA)."""
 
+# This code is mostly taken from this repo https://github.com/Flegyas/ResiDual/blob/main/src/residual/sparse_decomposition.py
+# WARNING: The improvements are AI Generated and should be reviewd
+# It has some improvements to make it faster
+
 from abc import abstractmethod
 from typing import Optional
 
@@ -146,12 +150,12 @@ def omp(
     *args,
     **kwargs,
 ):
-    assert (
-        dictionary.shape[1] == X.shape[0]
-    ), f"Dictionary: {dictionary.shape[1]}, X: {X.shape[0]}"
-    assert (
-        len(descriptors) == dictionary.shape[0]
-    ), f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    assert dictionary.shape[1] == X.shape[0], (
+        f"Dictionary: {dictionary.shape[1]}, X: {X.shape[0]}"
+    )
+    assert len(descriptors) == dictionary.shape[0], (
+        f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    )
 
     device = torch.device(device)
     X = _as_float_tensor(X, device)
@@ -274,12 +278,12 @@ def somp(
     **kwargs,
 ):
     assert dictionary.shape[0] >= k, f"Dictionary: {dictionary.shape[0]}, k: {k}"
-    assert (
-        dictionary.shape[1] == X.shape[1]
-    ), f"Dictionary: {dictionary.shape[1]}, X: {X.shape[1]}"
-    assert (
-        len(descriptors) == dictionary.shape[0]
-    ), f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    assert dictionary.shape[1] == X.shape[1], (
+        f"Dictionary: {dictionary.shape[1]}, X: {X.shape[1]}"
+    )
+    assert len(descriptors) == dictionary.shape[0], (
+        f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    )
 
     X = X.to(device)
     orig_X = orig_X.to(device)

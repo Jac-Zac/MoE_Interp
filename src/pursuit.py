@@ -17,8 +17,8 @@ def projection_pursuit(
     X: torch.Tensor,
     dictionary: torch.Tensor,
     tokenizer,
+    device: torch.device,
     k: int = 50,
-    device: torch.device | None = None,
 ) -> tuple[list[str], list[float]]:
     """Greedy projection pursuit with SOMP.
 
@@ -35,10 +35,6 @@ def projection_pursuit(
         return [], []
 
     X = X.float()
-    if device is None:
-        device = get_device()
-        if device.type == "mps":
-            device = torch.device("cpu")
 
     total_var = X.var(dim=0).sum()
     if total_var < 1e-10:
@@ -89,8 +85,11 @@ def run_pursuit(
     # Determine device and move dictionary to it once — avoids 1024 redundant
     # host-to-device transfers of the 393 MB unembedding matrix.
     device = get_device()
+
+    # HACK: Switch device to support double precision operation
     if device.type == "mps":
         device = torch.device("cpu")
+
     dictionary = load_unembedding(data_dir / "unembedding" / "dictionary.h5").to(device)
 
     metadata_path = encodings_dir / "metadata.json"
@@ -105,27 +104,39 @@ def run_pursuit(
     jsonl_file = None
     if output_dir:
         jsonl_path = output_dir / "results.jsonl"
-        jsonl_file = open(jsonl_path, "w")  # noqa: SIM115
+        jsonl_file = open(jsonl_path, "w")
 
     results = []
+    evr_matrix = np.zeros((n_layers, n_experts))
+    count_matrix = np.zeros((n_layers, n_experts))
     try:
-        for li in tqdm(range(n_layers), desc="Projection pursuit"):
-            expert_acts = load_layer_h5(encodings_dir, li, n_experts, min_activations)
-            for ei, acts in expert_acts.items():
+        for layer_idx in tqdm(range(n_layers), desc="Projection pursuit"):
+            expert_acts = load_layer_h5(
+                encodings_dir, layer_idx, n_experts, min_activations
+            )
+            for expert_idx, acts in tqdm(
+                expert_acts.items(), desc=f"Layer {layer_idx}", leave=False
+            ):
                 X = acts.float()
                 tokens, evr = projection_pursuit(
-                    X, dictionary, tokenizer, k=k, device=device
+                    X, dictionary, tokenizer, device=device, k=k
                 )
                 if not tokens:
                     continue
+
                 record = {
-                    "layer": li,
-                    "expert": ei,
+                    "layer": layer_idx,
+                    "expert": expert_idx,
                     "n_activations": X.shape[0],
                     "tokens": tokens,
                     "evr": evr,
                 }
                 results.append(record)
+
+                # Update matrices in-place
+                evr_matrix[layer_idx, expert_idx] = evr[-1]
+                count_matrix[layer_idx, expert_idx] = X.shape[0]
+
                 if jsonl_file is not None:
                     # One JSON object per line — safe to append, readable mid-run.
                     jsonl_file.write(json.dumps(record) + "\n")
@@ -135,12 +146,6 @@ def run_pursuit(
             jsonl_file.close()
 
     print(f"Analyzed {len(results)} experts")
-
-    evr_matrix = np.zeros((n_layers, n_experts))
-    count_matrix = np.zeros((n_layers, n_experts))
-    for r in results:
-        evr_matrix[r["layer"], r["expert"]] = r["evr"][-1] if r["evr"] else 0.0
-        count_matrix[r["layer"], r["expert"]] = r["n_activations"]
 
     if output_dir:
         np.save(output_dir / "evr_matrix.npy", evr_matrix)
