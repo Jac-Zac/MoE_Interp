@@ -40,7 +40,7 @@ def projection_pursuit(
     if total_var < 1e-10:
         return [], []
 
-    decomposition = SOMP(k=k, criterion="l1")
+    decomposition = SOMP(k=k, compute_evr=True)
     result = decomposition(
         X=X,
         dictionary=dictionary,
@@ -51,6 +51,17 @@ def projection_pursuit(
     tokens = [tokenizer.decode([idx]).strip() for idx in result["chosen"].tolist()]
     evr_values = result["evr"].tolist()
     return tokens, evr_values
+
+
+def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray]:
+    """Load previously computed pursuit results from disk."""
+    pursuit_dir = Path(pursuit_dir)
+    results = []
+    with open(pursuit_dir / "results.jsonl") as f:
+        for line in f:
+            results.append(json.loads(line))
+    evr_matrix = np.load(pursuit_dir / "evr_matrix.npy")
+    return results, evr_matrix
 
 
 def run_pursuit(
@@ -84,13 +95,13 @@ def run_pursuit(
 
     # Determine device and move dictionary to it once — avoids 1024 redundant
     # host-to-device transfers of the 393 MB unembedding matrix.
+    # PERF: no longer forcing MPS to CPU here — somp() handles MPS internally
+    # by only falling back to CPU for the lstsq solve (which needs float64).
     device = get_device()
 
-    # HACK: Switch device to support double precision operation
-    if device.type == "mps":
-        device = torch.device("cpu")
-
-    dictionary = load_unembedding(data_dir / "unembedding" / "dictionary.h5").to(device)
+    dictionary = (
+        load_unembedding(data_dir / "unembedding" / "dictionary.h5").float().to(device)
+    )
 
     metadata_path = encodings_dir / "metadata.json"
     if not metadata_path.exists():

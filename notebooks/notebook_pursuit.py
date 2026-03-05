@@ -3,7 +3,7 @@
 # %% Imports
 from src.environment import get_data_dir, load_env, set_seed
 from src.plots import plot_evr_heatmap
-from src.pursuit import run_pursuit
+from src.pursuit import load_pursuit, run_pursuit
 
 # %% Configuration
 seed = 1337
@@ -20,13 +20,23 @@ if not metadata_path.exists():
     raise Exception(f"You should get activation first, in this path {metadata_path}")
 
 # %% Simple projection-based expert pursuit
+force = False
 min_activations = 5
-results, evr_matrix = run_pursuit(
-    encodings_dir,
-    min_activations=min_activations,
-    k=50,
-    data_dir=data_dir,
-)
+if (
+    not force
+    and (pursuit_dir / "results.jsonl").exists()
+    and (pursuit_dir / "evr_matrix.npy").exists()
+):
+    results, evr_matrix = load_pursuit(pursuit_dir)
+    print(f"Loaded existing pursuit results from {pursuit_dir}")
+else:
+    results, evr_matrix = run_pursuit(
+        encodings_dir,
+        min_activations=min_activations,
+        k=50,
+        output_dir=pursuit_dir,
+        data_dir=data_dir,
+    )
 
 # %% Display sample results
 for r in results[:5]:

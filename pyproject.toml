@@ -20,6 +20,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "scikit-learn>=1.5.0",
     "scipy>=1.13.0",
+    "marimo>=0.20.4",
 ]
 
 # PyTorch sources: PyPI for macOS (MPS support), CUDA index for Linux

@@ -18,7 +18,7 @@ def test_projection_pursuit_greedy_monotonic():
     dictionary = F.normalize(torch.randn(50, 16), dim=1)
     tokenizer = _DummyTokenizer()
 
-    tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=10)
+    tokens, evr = projection_pursuit(X, dictionary, tokenizer, device="cpu", k=10)
 
     assert len(tokens) == len(evr)
     assert len(tokens) <= 10
@@ -31,7 +31,7 @@ def test_projection_pursuit_empty_on_zero_variance():
     dictionary = torch.randn(10, 4)
     tokenizer = _DummyTokenizer()
 
-    tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=5)
+    tokens, evr = projection_pursuit(X, dictionary, tokenizer, device="cpu", k=5)
 
     assert tokens == []
     assert evr == []
@@ -42,7 +42,7 @@ def test_projection_pursuit_empty_on_non_positive_k():
     dictionary = torch.randn(10, 4)
     tokenizer = _DummyTokenizer()
 
-    tokens, evr = projection_pursuit(X, dictionary, tokenizer, k=0)
+    tokens, evr = projection_pursuit(X, dictionary, tokenizer, device="cpu", k=0)
 
     assert tokens == []
     assert evr == []
