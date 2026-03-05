@@ -4,7 +4,6 @@
 import argparse
 
 import torch
-from transformers import AutoTokenizer
 
 from src.capture import capture_expert_activations
 from src.data import load_triviaqa
@@ -20,6 +19,12 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     encode_parser = subparsers.add_parser("encode", help="Encode expert activations")
+    encode_parser.add_argument(
+        "--model",
+        type=str,
+        default="allenai/OLMoE-1B-7B-0924-Instruct",
+        help="Model name or path",
+    )
     encode_parser.add_argument(
         "--n_docs", type=int, default=5000, help="Number of TriviaQA documents"
     )
@@ -44,7 +49,7 @@ def main():
         from nnsight import LanguageModel
 
         model = LanguageModel(
-            "allenai/OLMoE-1B-7B-0924-Instruct",
+            args.model,
             device_map="auto",
             dtype=torch.float16,
             dispatch=True,
@@ -57,19 +62,16 @@ def main():
         data_dir = get_data_dir()
         output_dir = data_dir / "encodings"
         capture_expert_activations(
-            model, prompts, args.batch_size, output_dir, data_dir
+            model, prompts, args.batch_size, output_dir, data_dir, args.model
         )
 
     elif args.command == "pursuit":
-        tokenizer = AutoTokenizer.from_pretrained("allenai/OLMoE-1B-7B-0924-Instruct")
-
         data_dir = get_data_dir()
         encodings_dir = data_dir / "encodings"
         output_dir = data_dir / "pursuit"
 
         run_pursuit(
             encodings_dir,
-            tokenizer,
             min_activations=args.min_activations,
             k=args.k,
             output_dir=output_dir,

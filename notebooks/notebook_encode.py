@@ -14,12 +14,13 @@ from src.environment import get_data_dir, load_env, set_seed
 seed = 1337
 n_docs = 16
 batch_size = 8
+model_name = "allenai/OLMoE-1B-7B-0924-Instruct"
 
 load_env()
 set_seed(seed)
 data_dir = get_data_dir()
 model = LanguageModel(
-    "allenai/OLMoE-1B-7B-0924-Instruct",
+    model_name,
     device_map="auto",
     dtype=torch.float16,
     dispatch=True,
@@ -135,6 +136,7 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
 
 save_metadata(
     output_dir,
+    model_name=model_name,
     n_docs=total_docs,
     n_layers=n_layers,
     n_experts=n_experts,

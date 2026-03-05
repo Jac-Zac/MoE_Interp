@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 
 # %% Imports
-from transformers import AutoTokenizer
-
 from src.environment import get_data_dir, load_env, set_seed
 from src.plots import plot_evr_heatmap
 from src.pursuit import run_pursuit
@@ -11,8 +9,6 @@ from src.pursuit import run_pursuit
 seed = 1337
 load_env()
 set_seed(seed)
-
-tokenizer = AutoTokenizer.from_pretrained("allenai/OLMoE-1B-7B-0924-Instruct")
 
 # %% Setup
 data_dir = get_data_dir()
@@ -27,7 +23,6 @@ if not metadata_path.exists():
 min_activations = 5
 results, evr_matrix = run_pursuit(
     encodings_dir,
-    tokenizer,
     min_activations=min_activations,
     k=50,
     data_dir=data_dir,

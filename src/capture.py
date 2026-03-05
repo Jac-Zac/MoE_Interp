@@ -15,6 +15,7 @@ def capture_expert_activations(
     batch_size: int,
     output_dir: Path,
     data_dir: Path | None = None,
+    model_name: str | None = None,
 ) -> dict:
     """Capture expert activations for all prompts using nnsight tracing.
 
@@ -24,15 +25,19 @@ def capture_expert_activations(
         batch_size: Batch size for processing
         output_dir: Directory to save encodings
         data_dir: Parent data directory (for saving unembedding). If None, derived from output_dir.
+        model_name: Model name to store in metadata. If None, extracted from model.config._name_or_path.
 
     Returns:
-        Metadata dict with n_docs, n_layers, n_experts, d_model
+        Metadata dict with model_name, n_docs, n_layers, n_experts, d_model
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if data_dir is None:
         data_dir = output_dir.parent
+
+    if model_name is None:
+        model_name = model.config._name_or_path
 
     n_layers = model.config.num_hidden_layers
     n_experts = model.config.num_experts
@@ -119,6 +124,7 @@ def capture_expert_activations(
                 )
 
     metadata = {
+        "model_name": model_name,
         "n_docs": total_docs,
         "n_layers": n_layers,
         "n_experts": n_experts,

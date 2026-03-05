@@ -55,7 +55,6 @@ def projection_pursuit(
 
 def run_pursuit(
     encodings_dir: Path,
-    tokenizer,
     min_activations: int = 5,
     k: int = 50,
     output_dir: Path | None = None,
@@ -65,7 +64,6 @@ def run_pursuit(
 
     Args:
         encodings_dir: Directory containing expert encodings
-        tokenizer: Model tokenizer
         min_activations: Minimum activations required to analyze an expert
         k: Number of top tokens to return per expert
         output_dir: Optional output directory for results and plots
@@ -74,6 +72,8 @@ def run_pursuit(
     Returns:
         Tuple of (results list, evr_matrix)
     """
+    from transformers import AutoTokenizer
+
     encodings_dir = Path(encodings_dir)
     if output_dir:
         output_dir = Path(output_dir)
@@ -96,6 +96,14 @@ def run_pursuit(
     if not metadata_path.exists():
         raise ValueError(f"No metadata found in {encodings_dir}")
     metadata = load_metadata(metadata_path)
+
+    if "model_name" not in metadata:
+        raise ValueError(
+            "model_name not found in metadata. "
+            "Please re-encode with a newer version that saves model_name."
+        )
+
+    tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]
 
