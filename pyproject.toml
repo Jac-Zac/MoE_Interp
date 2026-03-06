@@ -36,3 +36,7 @@ required-environments = ["sys_platform == 'darwin' and platform_machine == 'arm6
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
+
+# marimo: add repo root to sys.path so notebooks/xxx.py can import src.*
+[tool.marimo.runtime]
+pythonpath = ["."]

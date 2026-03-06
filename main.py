@@ -3,11 +3,13 @@
 
 import argparse
 
+import numpy as np
 import torch
 
 from src.capture import capture_expert_activations
 from src.data import load_triviaqa
 from src.environment import get_data_dir, load_env, set_seed
+from src.plots import plot_evr_heatmap
 from src.pursuit import run_pursuit
 
 
@@ -42,6 +44,12 @@ def main():
         default=5,
         help="Minimum activations to analyze expert",
     )
+    pursuit_parser.add_argument(
+        "--concept",
+        type=str,
+        default=None,
+        help="Optional concept restriction: offensive, countries, numbers",
+    )
 
     args = parser.parse_args()
 
@@ -69,14 +77,25 @@ def main():
         data_dir = get_data_dir()
         encodings_dir = data_dir / "encodings"
         output_dir = data_dir / "pursuit"
+        if args.concept:
+            output_dir = output_dir / args.concept
 
-        run_pursuit(
+        results, evr_matrix, count_matrix = run_pursuit(
             encodings_dir,
             min_activations=args.min_activations,
             k=args.k,
             output_dir=output_dir,
             data_dir=data_dir,
+            concept=args.concept,
         )
+        np.save(output_dir / "evr_matrix.npy", evr_matrix)
+        np.save(output_dir / "count_matrix.npy", count_matrix)
+        plot_evr_heatmap(
+            evr_matrix,
+            count_matrix,
+            output_path=output_dir / "evr_heatmap.html",
+        )
+        print(f"Saved results to {output_dir}")
 
 
 if __name__ == "__main__":

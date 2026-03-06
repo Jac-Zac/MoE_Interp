@@ -8,8 +8,8 @@ import torch
 from tqdm import tqdm
 
 from src.cache import load_layer_h5, load_metadata, load_unembedding
+from src.concepts import CONCEPT_WORDS
 from src.environment import get_device
-from src.plots import plot_evr_heatmap
 from src.sparse_decomposition import SOMP
 
 
@@ -17,8 +17,9 @@ def projection_pursuit(
     X: torch.Tensor,
     dictionary: torch.Tensor,
     tokenizer,
-    device: torch.device,
+    device: torch.device | str,
     k: int = 50,
+    token_ids: list[int] | None = None,
 ) -> tuple[list[str], list[float]]:
     """Greedy projection pursuit with SOMP.
 
@@ -48,12 +49,38 @@ def projection_pursuit(
         device=device,
     )
 
-    tokens = [tokenizer.decode([idx]).strip() for idx in result["chosen"].tolist()]
+    tokens = []
+    for idx in result["chosen"].tolist():
+        token_id = idx if token_ids is None else token_ids[idx]
+        tokens.append(tokenizer.decode([token_id]).strip())
     evr_values = result["evr"].tolist()
     return tokens, evr_values
 
 
-def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray]:
+def _build_dictionary(
+    dictionary: torch.Tensor,
+    tokenizer,
+    concept: str | None,
+) -> tuple[torch.Tensor, list[int] | None]:
+    if concept is None:
+        return dictionary, None
+
+    if concept not in CONCEPT_WORDS:
+        options = ", ".join(sorted(CONCEPT_WORDS))
+        raise ValueError(f"Unknown concept '{concept}'. Available concepts: {options}")
+
+    token_ids: set[int] = set()
+    for word in CONCEPT_WORDS[concept]:
+        token_ids.update(tokenizer(word, add_special_tokens=False)["input_ids"])
+
+    sorted_token_ids = sorted(token_ids)
+    if not sorted_token_ids:
+        raise ValueError(f"Concept '{concept}' produced no token ids")
+
+    return dictionary[sorted_token_ids], sorted_token_ids
+
+
+def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray, np.ndarray | None]:
     """Load previously computed pursuit results from disk."""
     pursuit_dir = Path(pursuit_dir)
     results = []
@@ -61,7 +88,9 @@ def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray]:
         for line in f:
             results.append(json.loads(line))
     evr_matrix = np.load(pursuit_dir / "evr_matrix.npy")
-    return results, evr_matrix
+    count_path = pursuit_dir / "count_matrix.npy"
+    count_matrix = np.load(count_path) if count_path.exists() else None
+    return results, evr_matrix, count_matrix
 
 
 def run_pursuit(
@@ -70,23 +99,27 @@ def run_pursuit(
     k: int = 50,
     output_dir: Path | None = None,
     data_dir: Path | None = None,
-) -> tuple[list[dict], np.ndarray]:
+    concept: str | None = None,
+) -> tuple[list[dict], np.ndarray, np.ndarray]:
     """Run projection pursuit on all experts.
 
     Args:
         encodings_dir: Directory containing expert encodings
         min_activations: Minimum activations required to analyze an expert
         k: Number of top tokens to return per expert
-        output_dir: Optional output directory for results and plots
+        output_dir: If set, results.jsonl is written incrementally (flush per expert)
+            so progress is never lost if the run is interrupted.
         data_dir: Data directory containing unembedding. If None, derived from encodings_dir.
+        concept: Optional concept name to restrict the unembedding dictionary.
+            Must be a key in CONCEPT_WORDS (e.g. "offensive", "countries", "numbers").
 
     Returns:
-        Tuple of (results list, evr_matrix)
+        Tuple of (results list, evr_matrix, count_matrix)
     """
     from transformers import AutoTokenizer
 
     encodings_dir = Path(encodings_dir)
-    if output_dir:
+    if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -98,10 +131,6 @@ def run_pursuit(
     # PERF: no longer forcing MPS to CPU here — somp() handles MPS internally
     # by only falling back to CPU for the lstsq solve (which needs float64).
     device = get_device()
-
-    dictionary = (
-        load_unembedding(data_dir / "unembedding" / "dictionary.h5").float().to(device)
-    )
 
     metadata_path = encodings_dir / "metadata.json"
     if not metadata_path.exists():
@@ -115,19 +144,26 @@ def run_pursuit(
         )
 
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
+    dictionary = (
+        load_unembedding(data_dir / "unembedding" / "dictionary.h5").float().to(device)
+    )
+    # When a concept is given, restrict the dictionary to tokens for that concept's
+    # word list and keep sorted_token_ids for remapping SOMP row indices back to
+    # full-vocabulary ids at decode time (mirrors HeadPursuit's tokens_data[token]).
+    dictionary, token_ids = _build_dictionary(dictionary, tokenizer, concept)
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]
 
     # Open the JSONL log file once if output_dir is set. Each expert result is
     # flushed immediately so progress is never lost if the run is interrupted.
     jsonl_file = None
-    if output_dir:
-        jsonl_path = output_dir / "results.jsonl"
-        jsonl_file = open(jsonl_path, "w")
+    if output_dir is not None:
+        jsonl_file = open(output_dir / "results.jsonl", "w")
 
     results = []
     evr_matrix = np.zeros((n_layers, n_experts))
     count_matrix = np.zeros((n_layers, n_experts))
+    k = min(k, dictionary.shape[0])
     try:
         for layer_idx in tqdm(range(n_layers), desc="Projection pursuit"):
             expert_acts = load_layer_h5(
@@ -138,7 +174,12 @@ def run_pursuit(
             ):
                 X = acts.float()
                 tokens, evr = projection_pursuit(
-                    X, dictionary, tokenizer, device=device, k=k
+                    X,
+                    dictionary,
+                    tokenizer,
+                    device=device,
+                    k=k,
+                    token_ids=token_ids,
                 )
                 if not tokens:
                     continue
@@ -165,13 +206,4 @@ def run_pursuit(
             jsonl_file.close()
 
     print(f"Analyzed {len(results)} experts")
-
-    if output_dir:
-        np.save(output_dir / "evr_matrix.npy", evr_matrix)
-        np.save(output_dir / "count_matrix.npy", count_matrix)
-        plot_evr_heatmap(
-            evr_matrix, count_matrix, output_path=output_dir / "evr_heatmap.html"
-        )
-        print(f"Saved results to {output_dir}")
-
-    return results, evr_matrix
+    return results, evr_matrix, count_matrix

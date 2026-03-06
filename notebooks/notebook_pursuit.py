@@ -13,36 +13,57 @@ set_seed(seed)
 # %% Setup
 data_dir = get_data_dir()
 encodings_dir = data_dir / "encodings"
-pursuit_dir = data_dir / "pursuit"
 
 metadata_path = encodings_dir / "metadata.json"
 if not metadata_path.exists():
     raise Exception(f"You should get activation first, in this path {metadata_path}")
 
 # %% Simple projection-based expert pursuit
+# Specify a concept to restrict the unembedding dictionary ("offensive", "countries", "numbers")
+# Set to None to probe all tokens — useful as a general-purpose baseline
+concept = None
 force = False
+
 min_activations = 5
+pursuit_dir = data_dir / "pursuit"
+if concept:
+    pursuit_dir = pursuit_dir / concept
 if (
     not force
     and (pursuit_dir / "results.jsonl").exists()
     and (pursuit_dir / "evr_matrix.npy").exists()
 ):
-    results, evr_matrix = load_pursuit(pursuit_dir)
+    results, evr_matrix, count_matrix = load_pursuit(pursuit_dir)
     print(f"Loaded existing pursuit results from {pursuit_dir}")
 else:
-    results, evr_matrix = run_pursuit(
+    # output_dir enables incremental results.jsonl flushing — safe to interrupt
+    results, evr_matrix, count_matrix = run_pursuit(
         encodings_dir,
         min_activations=min_activations,
         k=50,
         output_dir=pursuit_dir,
         data_dir=data_dir,
+        concept=concept,
     )
 
-# %% Display sample results
-for r in results[:5]:
-    print(f"\nLayer {r['layer']}, Expert {r['expert']}:")
-    for t, e in zip(r["tokens"][:10], r["evr"][:10]):
-        print(f"  {t}: {e:.4f}")
+# %% Top experts for the current concept
+top_n = 10
+top_experts = sorted(
+    results,
+    key=lambda record: record["evr"][-1] if record["evr"] else 0.0,
+    reverse=True,
+)[:top_n]
+
+print(f"\nTop {len(top_experts)} experts by final EVR")
+if concept:
+    print(f"Concept: {concept}")
+for rank, record in enumerate(top_experts, start=1):
+    final_evr = record["evr"][-1] if record["evr"] else 0.0
+    top_tokens = ", ".join(record["tokens"][:5])
+    print(
+        f"{rank:>2}. L{record['layer']:02d} E{record['expert']:02d} | "
+        f"final EVR={final_evr:.4f} | n={record['n_activations']} | {top_tokens}"
+    )
 
 # %% Plot EVR heatmap per expert
-plot_evr_heatmap(evr_matrix).show()
+plot_evr_heatmap(evr_matrix, count_matrix).show()

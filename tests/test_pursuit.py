@@ -48,6 +48,25 @@ def test_projection_pursuit_empty_on_non_positive_k():
     assert evr == []
 
 
+def test_projection_pursuit_decodes_restricted_token_ids():
+    X = torch.eye(2)
+    dictionary = torch.eye(2)
+    tokenizer = _DummyTokenizer()
+
+    tokens, evr = projection_pursuit(
+        X,
+        dictionary,
+        tokenizer,
+        device="cpu",
+        k=1,
+        token_ids=[10, 42],
+    )
+
+    assert tokens == ["tok_10"]
+    assert len(evr) == 1
+    assert 0.0 <= evr[0] <= 1.0
+
+
 def test_somp_residual_shrinks():
     """Residual norm must decrease (or stay equal) at every SOMP step."""
     torch.manual_seed(42)
@@ -74,9 +93,9 @@ def test_somp_residual_shrinks():
 
     # EVR must be monotonically non-decreasing
     evr = result["evr"].tolist()
-    assert all(
-        evr[i] <= evr[i + 1] + 1e-6 for i in range(len(evr) - 1)
-    ), f"EVR not monotone: {evr}"
+    assert all(evr[i] <= evr[i + 1] + 1e-6 for i in range(len(evr) - 1)), (
+        f"EVR not monotone: {evr}"
+    )
 
     # chosen atoms must be unique
     chosen = result["chosen"].tolist()

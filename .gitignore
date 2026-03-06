@@ -29,3 +29,7 @@ AGENTS.md
 
 # Pdf from report
 *.pdf
+
+# Tmp ignore
+*/__marimo__/**
+notebooks/notebook_pursuit_marimo.py

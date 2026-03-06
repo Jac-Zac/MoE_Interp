@@ -29,49 +29,46 @@ python main.py pursuit --k 100
 ### `encode` - Capture expert activations
 
 ```bash
-python main.py encode [options]
+python main.py encode [--model MODEL] [--n_docs N] [--batch_size N]
 ```
 
-Options:
-
-- `--n_docs` (int, default: 5000): Number of documents to encode
-- `--split` (str, default: "train"): Dataset split
-- `--batch_size` (int, default: 8): Batch size for tracing
+Saves per-layer HDF5 activations and metadata to `data/encodings/`.
 
 ### `pursuit` - Run analysis and generate plots
 
+> Concept can also not be passed to obtain the general projection on the entire unembedding matrix
+
 ```bash
-python main.py pursuit [options]
+python main.py pursuit [--k N] [--min_activations N] [--concept {offensive,countries,numbers}]
 ```
 
-Options:
+Outputs to `data/pursuit/` (or `data/pursuit/<concept>/` when `--concept` is set):
 
-- `--k` (int, default: 50): Top tokens per expert by explained variance
-
-Outputs:
-
-- `data/pursuit/pursuit_results.json` - Per-expert concept decompositions
-- `data/plots/evr_heatmap.html` - EVR heatmap across all experts
-- `data/plots/concept_frequency.html` - Most frequent concepts
+- `results.jsonl` — per-expert top-k tokens with EVR scores
+- `evr_heatmap.html` — EVR heatmap across all layers and experts
 
 ## Project Structure
 
 ```
 .
-├── main.py                 # CLI entry point
+├── main.py                        # CLI entry point
 ├── notebooks/
-│   └── notebook_pursuit.py # Jupyter demo
+│   ├── notebook_encode.py         # Standalone encode walkthrough
+│   ├── notebook_pursuit.py        # Pursuit demo
+│   └── notebook_pursuit_marimo.py # Interactive Marimo explorer
 ├── src/
-│   ├── capture.py          # Expert activation extraction (nnsight)
-│   ├── cache.py            # HDF5 storage
-│   ├── constants.py        # Word lists (countries, colors, quantity)
-│   ├── data.py             # TriviaQA loading
-│   ├── environment.py      # Model loading, device, seeds
-│   ├── plot.py             # Plotly visualizations
-│   └── pursuit.py          # Projection pursuit analysis
+│   ├── capture.py                 # Expert activation extraction (nnsight)
+│   ├── cache.py                   # HDF5 storage utilities
+│   ├── concepts.py                # Word lists (offensive, countries, numbers)
+│   ├── data.py                    # TriviaQA loading + chat-template formatting
+│   ├── environment.py             # Env loading, device selection, seeds
+│   ├── plots.py                   # Plotly EVR heatmap
+│   ├── pursuit.py                 # Projection pursuit (SOMP over unembedding dict)
+│   └── sparse_decomposition.py   # PCA, OMP, SOMP implementations
 ├── tests/
-│   └── test_core.py        # Pytest suite
-├── scripts/                # SLURM cluster scripts
+│   ├── test_core.py               # HDF5 round-trip tests
+│   └── test_pursuit.py            # Projection pursuit + SOMP unit tests
+├── scripts/                       # SLURM scripts (Cineca, Orfeo)
 └── pyproject.toml
 ```
 
