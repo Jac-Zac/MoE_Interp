@@ -25,13 +25,8 @@
 #include "sections/introduction.typ"
 #include "sections/background.typ"
 #include "sections/methods.typ"
-
-= Conclusion and Future Work
-
-This work ...
-
-== Summary of Results
-
+#include "sections/results.typ"
+#include "sections/conclusion.typ"
 
 = References
 #bibliography("refs.bib")

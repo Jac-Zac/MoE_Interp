@@ -33,6 +33,25 @@ input to SOMP. Documents where expert $e$ receives no routed tokens are excluded
 
 For each expert, we run SOMP with the L2-normalized unembedding matrix as dictionary and
 $T = 50$ iterations. This produces a ranked list of vocabulary tokens that best explain
-the expert's variance across questions, along with cumulative EVR scores. To probe a
-specific concept (e.g., countries), we restrict the dictionary to the relevant token
-subset and recompute SOMP.
+the expert's variance across questions, along with cumulative EVR scores.
+
+== Two Modes of Analysis
+
+The pipeline supports two complementary analysis modes.
+
+*Full-dictionary mode.* SOMP searches the entire vocabulary ($v approx 50{,}000$ tokens).
+The output is an unrestricted ranked list of tokens that summarize the expert's aggregate
+behavior — analogous to a per-expert logit lens applied across many documents. This is the
+primary mode for discovering what each expert specializes in.
+
+*Concept-restricted mode.* The dictionary is restricted to the token IDs corresponding to
+a predefined concept word list (e.g., `numbers`, `countries`). SOMP then decomposes each
+expert's activations against only those directions, and final EVR scores rank experts by
+how strongly they respond to that concept. This allows targeted queries such as: _which
+experts are most active on numeric content?_ The concept word lists are defined in
+`src/concepts.py`.
+
+The two modes are complementary: full-dictionary pursuit discovers specialists without
+prior hypotheses, while concept-restricted pursuit quantifies specialization along a
+specific semantic axis and is directly actionable for targeted interventions such as
+activation steering.
