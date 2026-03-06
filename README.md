@@ -81,6 +81,12 @@ Outputs to `data/pursuit/` (or `data/pursuit/<concept>/` when `--concept` is set
    Semantic: "Which experts are consistently used for this question type?"
    MoE consideration: each token routes to only top-k experts (k=8).
 
+## Marimo Explorer
+
+```bash
+uv run marimo run notebooks/notebook_pursuit_marimo.py
+```
+
 ## Links
 
 - [HeadPursuit code](https://github.com/lorenzobasile/HeadPursuit)

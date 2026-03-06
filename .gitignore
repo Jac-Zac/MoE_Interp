@@ -13,7 +13,6 @@ wheels/
 AGENTS.md
 .opencode/
 
-
 # Environment variables
 .env
 
@@ -30,6 +29,8 @@ AGENTS.md
 # Pdf from report
 *.pdf
 
-# Tmp ignore
+# Marimo
 */__marimo__/**
-notebooks/notebook_pursuit_marimo.py
+
+# Tmp ignore
+# notebooks/notebook_pursuit_marimo.py
