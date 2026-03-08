@@ -7,11 +7,17 @@ import torch
 from dotenv import load_dotenv
 
 
-def load_env() -> None:
-    """Load environment variables from .env file."""
+def load_env(override: bool = False) -> None:
+    """Load environment variables from .env file.
+
+    Args:
+        override: If True, .env values overwrite variables already set in the environment
+                  (e.g. from a SLURM job script). Defaults to False so shell-exported
+                  variables always take priority.
+    """
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=override)
 
 
 def get_data_dir() -> Path:
