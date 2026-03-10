@@ -269,6 +269,8 @@ def somp(
 
     X = X.to(device)
     dictionary = dictionary.to(device)
+    # PERF: Materialize the transposed dictionary once outside the selection loop.
+    dict_T = dictionary.T.contiguous()
 
     if compute_evr:
         orig_X = orig_X.to(device)
@@ -290,15 +292,13 @@ def somp(
     chosen = torch.zeros(k, dtype=torch.long, device=device)
 
     notchosen = torch.ones(dictionary.shape[0], device=device)
-    results = []
     recon = torch.zeros_like(X)  # +X_mean
     residual = X.clone()
     evr = torch.zeros(k, device=device)
     l2 = torch.zeros(k, device=device)
     cosine = torch.zeros(k, device=device)
     for i in range(k):
-        cross = residual @ dictionary.T
-        cross = cross * notchosen
+        cross = residual @ dict_T
 
         if criterion == "l1":
             proj_scores = torch.sum(cross.abs(), dim=0)
@@ -311,7 +311,6 @@ def somp(
 
         chosen[i] = atom_idx
         notchosen[atom_idx] = 0
-        results.append(descriptors[atom_idx.item()])
 
         # PERF: Reuse the on-device prefix instead of recreating an index tensor.
         current_atoms = torch.index_select(dictionary, 0, chosen[: i + 1])
@@ -334,12 +333,13 @@ def somp(
                 cosine[i] = F.cosine_similarity(orig_X, X_recon).mean()
                 l2[i] = F.mse_loss(orig_X, X_recon)
 
-    results = np.asarray(results, dtype=object)
     weights = lstsq_weights.norm(dim=1).cpu()
     # weights = lstsq_weights.mean(dim=1).cpu()
     order = torch.argsort(weights, descending=True).cpu().numpy()
 
+    # PERF: Convert selected indices once after the loop to avoid per-step syncs.
     chosen = chosen.cpu()
+    results = np.asarray([descriptors[idx] for idx in chosen.tolist()], dtype=object)
 
     recon = X_mean + recon
     residual = X - recon
