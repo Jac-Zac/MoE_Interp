@@ -109,8 +109,14 @@ def load_layer_h5(
     if not layer_path.exists():
         return {}
     result: dict[int, torch.Tensor] = {}
-    for ei in range(n_experts):
-        acts = load_expert_h5(layer_path, ei)["activations"]
-        if acts.shape[0] >= min_activations:
-            result[ei] = acts
+    with h5py.File(layer_path, "r") as f:
+        for ei in range(n_experts):
+            group_name = _expert_group_name(ei)
+            if group_name not in f:
+                continue
+            group = cast(h5py.Group, f[group_name])
+            acts_ds = cast(h5py.Dataset, group["activations"])
+            if acts_ds.shape[0] < min_activations:
+                continue
+            result[ei] = torch.from_numpy(acts_ds[:])
     return result

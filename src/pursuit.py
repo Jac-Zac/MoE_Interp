@@ -36,12 +36,10 @@ def projection_pursuit(
         return [], []
 
     X = X.float()
-
-    total_var = X.var(dim=0).sum()
-    if total_var < 1e-10:
+    if X.device.type == "cpu" and X.var(dim=0).sum() < 1e-10:
         return [], []
 
-    decomposition = SOMP(k=k, compute_evr=True)
+    decomposition = SOMP(k=k, compute_evr=True, return_full=False)
     result = decomposition(
         X=X,
         dictionary=dictionary,
@@ -172,7 +170,11 @@ def run_pursuit(
             for expert_idx, acts in tqdm(
                 expert_acts.items(), desc=f"Layer {layer_idx}", leave=False
             ):
-                X = acts.float().to(device)
+                acts = acts.float()
+                # PERF: Keep the zero-variance guard on CPU and skip the device sync.
+                if acts.var(dim=0).sum() < 1e-10:
+                    continue
+                X = acts.to(device)
                 tokens, evr = projection_pursuit(
                     X,
                     dictionary,

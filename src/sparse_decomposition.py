@@ -200,12 +200,14 @@ class SOMP(Projection):
         criterion="l1",
         pc: Optional[int] = None,
         compute_evr: bool = False,
+        return_full: bool = True,
     ):
         super().__init__(name="somp")
         self.k = k
         self.criterion = criterion
         self.pc = pc
         self.compute_evr = compute_evr
+        self.return_full = return_full
 
     @property
     def key(self):
@@ -239,6 +241,7 @@ class SOMP(Projection):
             device=device,
             criterion=self.criterion,
             compute_evr=self.compute_evr,
+            return_full=self.return_full,
         )
 
         return result
@@ -256,6 +259,7 @@ def somp(
     criterion="l1",
     centering: bool = True,
     compute_evr: bool = False,
+    return_full: bool = True,
     *args,
     **kwargs,
 ):
@@ -278,9 +282,9 @@ def somp(
         orig_X_centered = orig_X - orig_X_mean
         std_orig = torch.std(orig_X, dim=0) ** 2
     else:
-        orig_X_mean = None
-        orig_X_centered = None
-        std_orig = None
+        orig_X_mean = torch.zeros(X.shape[1], device=device, dtype=X.dtype)
+        orig_X_centered = torch.zeros_like(X)
+        std_orig = torch.ones(X.shape[1], device=device, dtype=X.dtype)
 
     if centering:
         X_mean = X.mean(dim=0, keepdim=True)
@@ -295,8 +299,16 @@ def somp(
     recon = torch.zeros_like(X)  # +X_mean
     residual = X.clone()
     evr = torch.zeros(k, device=device)
-    l2 = torch.zeros(k, device=device)
-    cosine = torch.zeros(k, device=device)
+    lstsq_weights = torch.empty((0, X.shape[0]), device=device, dtype=X.dtype)
+    if return_full:
+        l2 = torch.zeros(k, device=device)
+        cosine = torch.zeros(k, device=device)
+    else:
+        l2 = None
+        cosine = None
+    std_orig_sum = (
+        std_orig.sum(dim=-1) if compute_evr else torch.tensor(1.0, device=device)
+    )
     for i in range(k):
         cross = residual @ dict_T
 
@@ -306,6 +318,8 @@ def somp(
             proj_scores = torch.std(cross, dim=0)
         else:
             raise ValueError(f"Criterion {criterion} not recognized")
+        # PERF: Mask the reduced scores instead of the full cross matrix.
+        proj_scores = proj_scores * notchosen
 
         atom_idx = proj_scores.argmax()
 
@@ -321,28 +335,41 @@ def somp(
         if compute_evr:
             if pc is None:
                 std_recon = torch.std((X_mean + recon), dim=0) ** 2
-                evr[i] = std_recon.sum(dim=-1) / std_orig.sum(dim=-1)
-                cosine[i] = F.cosine_similarity(orig_X, X_mean + recon).mean()
-                l2[i] = F.mse_loss(orig_X, X_mean + recon)
+                evr[i] = std_recon.sum(dim=-1) / std_orig_sum
+                if return_full:
+                    assert cosine is not None and l2 is not None
+                    cosine[i] = F.cosine_similarity(orig_X, X_mean + recon).mean()
+                    l2[i] = F.mse_loss(orig_X, X_mean + recon)
             else:
+                assert orig_X_centered is not None and orig_X_mean is not None
                 u, _, v = torch.linalg.svd(recon, full_matrices=False)
                 somp_pcs = u @ v
                 X_recon = orig_X_centered @ somp_pcs.T @ somp_pcs + orig_X_mean
                 std_recon = torch.std(X_recon, dim=0) ** 2
-                evr[i] = std_recon.sum(dim=-1) / std_orig.sum(dim=-1)
-                cosine[i] = F.cosine_similarity(orig_X, X_recon).mean()
-                l2[i] = F.mse_loss(orig_X, X_recon)
+                evr[i] = std_recon.sum(dim=-1) / std_orig_sum
+                if return_full:
+                    assert cosine is not None and l2 is not None
+                    cosine[i] = F.cosine_similarity(orig_X, X_recon).mean()
+                    l2[i] = F.mse_loss(orig_X, X_recon)
+
+    chosen = chosen.cpu()
+    evr = evr.cpu().float()
+    if not return_full:
+        return {
+            "chosen": chosen,
+            "evr": evr,
+        }
 
     weights = lstsq_weights.norm(dim=1).cpu()
     # weights = lstsq_weights.mean(dim=1).cpu()
     order = torch.argsort(weights, descending=True).cpu().numpy()
 
     # PERF: Convert selected indices once after the loop to avoid per-step syncs.
-    chosen = chosen.cpu()
     results = np.asarray([descriptors[idx] for idx in chosen.tolist()], dtype=object)
 
     recon = X_mean + recon
     residual = X - recon
+    assert l2 is not None and cosine is not None
 
     return dict(
         recon=recon.cpu().float(),
@@ -352,7 +379,8 @@ def somp(
         weights=weights.float(),
         weights_full=lstsq_weights.cpu().float().T,
         order=order,
-        evr=evr.cpu().float(),
+        evr=evr,
+        # return_full guarantees these metrics were allocated and filled.
         l2=l2.cpu().float(),
         cosine=cosine.cpu().float(),
     )
