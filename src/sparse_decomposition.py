@@ -134,12 +134,12 @@ def omp(
     *args,
     **kwargs,
 ):
-    assert (
-        dictionary.shape[1] == X.shape[0]
-    ), f"Dictionary: {dictionary.shape[1]}, X: {X.shape[0]}"
-    assert (
-        len(descriptors) == dictionary.shape[0]
-    ), f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    assert dictionary.shape[1] == X.shape[0], (
+        f"Dictionary: {dictionary.shape[1]}, X: {X.shape[0]}"
+    )
+    assert len(descriptors) == dictionary.shape[0], (
+        f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    )
 
     X = X.to(device)
     dictionary = dictionary.to(device)
@@ -260,52 +260,44 @@ def somp(
     **kwargs,
 ):
     assert dictionary.shape[0] >= k, f"Dictionary: {dictionary.shape[0]}, k: {k}"
-    assert (
-        dictionary.shape[1] == X.shape[1]
-    ), f"Dictionary: {dictionary.shape[1]}, X: {X.shape[1]}"
-    assert (
-        len(descriptors) == dictionary.shape[0]
-    ), f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
-
-    # PERF: determine whether we need to move lstsq to CPU (MPS lacks float64)
-    use_mps = (
-        isinstance(device, torch.device) and device.type == "mps"
-    ) or device == "mps"
-    lstsq_device = torch.device("cpu") if use_mps else device
+    assert dictionary.shape[1] == X.shape[1], (
+        f"Dictionary: {dictionary.shape[1]}, X: {X.shape[1]}"
+    )
+    assert len(descriptors) == dictionary.shape[0], (
+        f"descriptors: {len(descriptors)}, Dictionary: {dictionary.shape[0]}"
+    )
 
     X = X.to(device)
-    if compute_evr:
-        orig_X = orig_X.to(device)
-    orig_X_mean = orig_X.mean(dim=0)
-    orig_X_centered = orig_X - orig_X_mean
     dictionary = dictionary.to(device)
 
-    std_orig = torch.std(orig_X, dim=0) ** 2
+    if compute_evr:
+        orig_X = orig_X.to(device)
+        orig_X_mean = orig_X.mean(dim=0)
+        orig_X_centered = orig_X - orig_X_mean
+        std_orig = torch.std(orig_X, dim=0) ** 2
+    else:
+        orig_X_mean = None
+        orig_X_centered = None
+        std_orig = None
 
     if centering:
-        X_mean = X.mean(dim=0, keepdims=True)
+        X_mean = X.mean(dim=0, keepdim=True)
         X = X - X_mean
     else:
         X_mean = torch.zeros_like(X)
 
-    # PERF: pre-transpose dictionary once — avoids recomputing the transposed
-    # view at every iteration. .contiguous() ensures optimal memory layout for
-    # the (n_samples, d_model) @ (d_model, vocab_size) matmul.
-    dict_T = dictionary.T.contiguous()
+    # PERF: Keep selected indices on device instead of rebuilding them each step.
+    chosen = torch.zeros(k, dtype=torch.long, device=device)
 
-    chosen = []
     notchosen = torch.ones(dictionary.shape[0], device=device)
     results = []
-    recon = torch.zeros_like(X)
+    recon = torch.zeros_like(X)  # +X_mean
     residual = X.clone()
-    evr = torch.zeros(k)
-    l2 = torch.zeros(k)
-    cosine = torch.zeros(k)
+    evr = torch.zeros(k, device=device)
+    l2 = torch.zeros(k, device=device)
+    cosine = torch.zeros(k, device=device)
     for i in range(k):
-        # PERF: use pre-transposed dictionary for the hot-path matmul.
-        # This runs in the input dtype (typically float32), which is ~2x
-        # faster than float64 and enables MPS/CUDA acceleration.
-        cross = residual @ dict_T
+        cross = residual @ dictionary.T
         cross = cross * notchosen
 
         if criterion == "l1":
@@ -317,48 +309,37 @@ def somp(
 
         atom_idx = proj_scores.argmax()
 
-        chosen.append(atom_idx.item())
+        chosen[i] = atom_idx
         notchosen[atom_idx] = 0
-        results.append(descriptors[atom_idx])
-        current_atoms = torch.index_select(
-            dictionary, 0, torch.as_tensor(chosen, device=device)
-        )
+        results.append(descriptors[atom_idx.item()])
 
-        # PERF: upcast to float64 only for lstsq (numerically sensitive).
-        # On MPS, move to CPU first (then convert dtype) since MPS lacks float64.
-        # NOTE: an incremental QR factorization (adding one column per step)
-        # could replace the full lstsq re-solve here, but the system is small
-        # ((d_model, k) with k<=50) so the savings would be minor.
-        atoms_T_f64 = current_atoms.T.to(device=lstsq_device).to(dtype=torch.float64)
-        X_T_f64 = X.T.to(device=lstsq_device).to(dtype=torch.float64)
-        lstsq_weights = torch.linalg.lstsq(atoms_T_f64, X_T_f64).solution
-        lstsq_weights = lstsq_weights.to(device=device, dtype=X.dtype)
-
+        # PERF: Reuse the on-device prefix instead of recreating an index tensor.
+        current_atoms = torch.index_select(dictionary, 0, chosen[: i + 1])
+        lstsq_weights = torch.linalg.lstsq(current_atoms.T, X.T).solution
         recon = (current_atoms.T @ lstsq_weights).T
-        residual = X - recon
 
-        # PERF: EVR/cosine/l2 computation is skipped when compute_evr=False,
-        # saving ~50 std/cosine_similarity/mse_loss calls per expert.
+        residual = X - recon
         if compute_evr:
             if pc is None:
                 std_recon = torch.std((X_mean + recon), dim=0) ** 2
                 evr[i] = std_recon.sum(dim=-1) / std_orig.sum(dim=-1)
-                cosine[i] = F.cosine_similarity(orig_X, X_mean + recon).mean().item()
-                l2[i] = F.mse_loss(orig_X, X_mean + recon).item()
+                cosine[i] = F.cosine_similarity(orig_X, X_mean + recon).mean()
+                l2[i] = F.mse_loss(orig_X, X_mean + recon)
             else:
                 u, _, v = torch.linalg.svd(recon, full_matrices=False)
                 somp_pcs = u @ v
                 X_recon = orig_X_centered @ somp_pcs.T @ somp_pcs + orig_X_mean
                 std_recon = torch.std(X_recon, dim=0) ** 2
                 evr[i] = std_recon.sum(dim=-1) / std_orig.sum(dim=-1)
-                cosine[i] = F.cosine_similarity(orig_X, X_recon).mean().item()
-                l2[i] = F.mse_loss(orig_X, X_recon).item()
+                cosine[i] = F.cosine_similarity(orig_X, X_recon).mean()
+                l2[i] = F.mse_loss(orig_X, X_recon)
 
     results = np.asarray(results, dtype=object)
     weights = lstsq_weights.norm(dim=1).cpu()
     # weights = lstsq_weights.mean(dim=1).cpu()
     order = torch.argsort(weights, descending=True).cpu().numpy()
-    chosen = torch.tensor(chosen).cpu()
+
+    chosen = chosen.cpu()
 
     recon = X_mean + recon
     residual = X - recon
@@ -371,7 +352,7 @@ def somp(
         weights=weights.float(),
         weights_full=lstsq_weights.cpu().float().T,
         order=order,
-        evr=evr.float(),
-        l2=l2.float(),
-        cosine=cosine.float(),
+        evr=evr.cpu().float(),
+        l2=l2.cpu().float(),
+        cosine=cosine.cpu().float(),
     )

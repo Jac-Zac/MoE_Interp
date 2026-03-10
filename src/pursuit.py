@@ -172,7 +172,7 @@ def run_pursuit(
             for expert_idx, acts in tqdm(
                 expert_acts.items(), desc=f"Layer {layer_idx}", leave=False
             ):
-                X = acts.float()
+                X = acts.float().to(device)
                 tokens, evr = projection_pursuit(
                     X,
                     dictionary,
