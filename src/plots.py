@@ -6,69 +6,111 @@ from pathlib import Path
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 
-def plot_evr_heatmap(
-    evr_matrix: np.ndarray,
-    count_matrix: np.ndarray | None = None,
+def plot_scatter_grid(
+    values: np.ndarray,
+    title: str,
+    color_label: str,
     output_path: Path | None = None,
 ) -> go.Figure:
-    """EVR heatmap (final EVR per expert, all layers) with optional activation counts."""
-    n_layers, n_experts = evr_matrix.shape
+    """Scatter grid: Layer (x) vs Expert (y) with colored square markers.
 
-    if count_matrix is not None:
-        fig = make_subplots(
-            rows=1,
-            cols=2,
-            subplot_titles=("Final EVR (Top-k Tokens)", "Activation Count"),
-            specs=[[{"type": "heatmap"}, {"type": "heatmap"}]],
-        )
-        fig.add_trace(
-            go.Heatmap(
-                z=evr_matrix,
-                x=[f"E{i}" for i in range(n_experts)],
-                y=[f"L{i}" for i in range(n_layers)],
-                coloraxis="coloraxis1",
+    Args:
+        values: 2D array of shape (n_layers, n_experts) with values to visualize.
+        title: Plot title.
+        color_label: Label for the color scale legend.
+        output_path: If provided, saves the figure as an HTML file.
+
+    Returns:
+        A Plotly Figure with one scatter trace.
+    """
+    n_layers, n_experts = values.shape
+
+    layers: list[int] = []
+    experts: list[int] = []
+    flat_values: list[float] = []
+    hovers: list[str] = []
+
+    for lyr in range(n_layers):
+        for exp in range(n_experts):
+            layers.append(lyr)
+            experts.append(exp)
+            flat_values.append(values[lyr, exp])
+            hovers.append(f"L{lyr} E{exp}<br>{color_label}: {values[lyr, exp]:.4f}")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=layers,
+            y=experts,
+            mode="markers",
+            marker=dict(
+                symbol="square",
+                size=10,
+                color=flat_values,
+                colorscale="Blues",
+                line=dict(width=0),
+                showscale=True,
+                colorbar=dict(title=color_label),
             ),
-            row=1,
-            col=1,
+            text=hovers,
+            hoverinfo="text",
         )
-        fig.add_trace(
-            go.Heatmap(
-                z=count_matrix,
-                x=[f"E{i}" for i in range(n_experts)],
-                y=[f"L{i}" for i in range(n_layers)],
-                coloraxis="coloraxis2",
-            ),
-            row=1,
-            col=2,
-        )
-        fig.update_layout(
-            title="Expert Pursuit: Final Explained Variance & Activation Counts",
-            width=1600,
-            height=600,
-            coloraxis1=dict(colorbar=dict(title="Final EVR"), colorscale="Blues"),
-            coloraxis2=dict(colorbar=dict(title="Count"), colorscale="Blues"),
-        )
-    else:
-        fig = px.imshow(
-            evr_matrix,
-            x=[f"E{i}" for i in range(n_experts)],
-            y=[f"L{i}" for i in range(n_layers)],
-            color_continuous_scale="Blues",
-            labels=dict(x="Experts", y="Layers", color="Final EVR"),
-        )
-        fig.update_layout(
-            title="Expert Pursuit: Final Explained Variance Ratio (Top-k Tokens)",
-            width=1400,
-            height=600,
-        )
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis=dict(
+            title="layer",
+            tickmode="linear",
+            tick0=0,
+            dtick=1,
+            range=[-0.5, n_layers - 0.5],
+        ),
+        yaxis=dict(
+            title="expert",
+            tickmode="linear",
+            tick0=0,
+            dtick=4,
+            range=[-0.5, n_experts - 0.5],
+        ),
+        width=max(800, n_layers * 45 + 250),
+        height=max(600, n_experts * 12 + 100),
+        plot_bgcolor="white",
+    )
+
     if output_path:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         fig.write_html(str(output_path))
     return fig
+
+
+def plot_evr_heatmap(
+    evr_matrix: np.ndarray,
+    output_path: Path | None = None,
+) -> go.Figure:
+    """EVR heatmap (final EVR per expert, all layers)."""
+    return plot_scatter_grid(
+        values=evr_matrix,
+        title="Expert Pursuit: Final Explained Variance Ratio (Top-k Tokens)",
+        color_label="Final EVR",
+        output_path=output_path,
+    )
+
+
+def plot_count_heatmap(
+    count_matrix: np.ndarray,
+    output_path: Path | None = None,
+) -> go.Figure:
+    """Activation count heatmap (per expert, all layers)."""
+    return plot_scatter_grid(
+        values=count_matrix,
+        title="Expert Pursuit: Activation Count",
+        color_label="Activation Count",
+        output_path=output_path,
+    )
 
 
 def plot_label_grid(

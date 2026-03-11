@@ -73,7 +73,7 @@ def capture_expert_activations(
                     top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
                     down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
                     token_indices_list.append(token_idx.save())
-                    down_projs_list.append(down_proj.save())
+                    down_projs_list.append(model.model.norm(down_proj).save())
                     top_k_pos_list.append(top_k_pos.save())
 
                 batch_data[layer_idx] = {

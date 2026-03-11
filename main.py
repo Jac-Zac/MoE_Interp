@@ -3,13 +3,12 @@
 
 import argparse
 
-import numpy as np
 import torch
 
 from src.capture import capture_expert_activations
 from src.data import load_triviaqa
 from src.environment import get_data_dir, load_env, set_seed
-from src.plots import plot_evr_heatmap
+from src.plots import plot_count_heatmap, plot_evr_heatmap
 from src.pursuit import run_pursuit
 
 
@@ -88,12 +87,13 @@ def main():
             data_dir=data_dir,
             concept=args.concept,
         )
-        np.save(output_dir / "evr_matrix.npy", evr_matrix)
-        np.save(output_dir / "count_matrix.npy", count_matrix)
         plot_evr_heatmap(
             evr_matrix,
-            count_matrix,
             output_path=output_dir / "evr_heatmap.html",
+        )
+        plot_count_heatmap(
+            count_matrix,
+            output_path=output_dir / "count_heatmap.html",
         )
         print(f"Saved results to {output_dir}")
 

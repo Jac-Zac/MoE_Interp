@@ -208,4 +208,9 @@ def run_pursuit(
             jsonl_file.close()
 
     print(f"Analyzed {len(results)} experts")
+
+    if output_dir is not None:
+        np.save(output_dir / "evr_matrix.npy", evr_matrix)
+        np.save(output_dir / "count_matrix.npy", count_matrix)
+
     return results, evr_matrix, count_matrix

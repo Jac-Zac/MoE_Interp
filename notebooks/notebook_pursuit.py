@@ -4,7 +4,7 @@
 import json
 
 from src.environment import get_data_dir, load_env, set_seed
-from src.plots import plot_evr_heatmap, plot_label_grid
+from src.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
 from src.pursuit import load_pursuit, run_pursuit
 
 # %% Configuration
@@ -69,10 +69,12 @@ for rank, record in enumerate(top_experts, start=1):
     )
 
 # %% Plot EVR heatmap per expert
-plot_evr_heatmap(evr_matrix, count_matrix).show()
+plot_evr_heatmap(evr_matrix).show()
+if count_matrix is not None:
+    plot_count_heatmap(count_matrix).show()
 
 # %% Label grid — requires results_labeled.json (run label_experts.py first)
 # TODO: Deal with this and perhaps have this in a separate file
-if labeled_path.exists():
-    labeled_results = json.loads(labeled_path.read_text())
-    plot_label_grid(labeled_results).show()
+# if labeled_path.exists():
+#     labeled_results = json.loads(labeled_path.read_text())
+#     plot_label_grid(labeled_results).show()

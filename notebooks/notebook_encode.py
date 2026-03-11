@@ -77,6 +77,10 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
             with tracer.iter[:num_iters]:
                 top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
                 down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
+
+                # NOTE: Similarly to logit lense we apply the last normalization to the expert activations here
+                down_proj = model.model.norm(down_proj)
+
                 token_indices_list.append(token_idx.save())
                 down_projs_list.append(down_proj.save())
                 top_k_pos_list.append(top_k_pos.save())
