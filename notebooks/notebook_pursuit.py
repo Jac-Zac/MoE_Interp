@@ -25,6 +25,7 @@ if not metadata_path.exists():
 # Specify a concept to restrict the unembedding dictionary ("offensive", "countries", "numbers")
 # Set to None to probe all tokens — useful as a general-purpose baseline
 concept = None
+# force = True
 force = False
 
 min_activations = 5

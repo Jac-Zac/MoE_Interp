@@ -6,11 +6,13 @@
 #SBATCH --partition=GPU
 #SBATCH --gres=gpu:V100:1
 #SBATCH --mem=100G
-#SBATCH -t 00:45:00
+#SBATCH -t 01:00:00
 #SBATCH --job-name=analyze_moe_act
 #SBATCH -o analyze.out
 
-source scripts/setup_env.sh
+# uv sync
+source .venv/bin/activate
 module load cuda
 
-python main.py pursuit --k 25
+python main.py pursuit --k 50
+# python main.py pursuit --k 50 --concept countries

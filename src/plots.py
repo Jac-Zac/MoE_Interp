@@ -1,6 +1,7 @@
 """Plotting utilities for Expert Pursuit results."""
 
 from collections import defaultdict
+from itertools import cycle
 from pathlib import Path
 
 import numpy as np
@@ -137,7 +138,8 @@ def plot_label_grid(
     """
     palette = px.colors.qualitative.Plotly + px.colors.qualitative.D3
     color_map: dict[str, str] = {"other": "lightgray", **(label_colors or {})}
-    palette_iter = (c for c in palette if c not in color_map.values())
+    # HACK: palette is finite but we have many labels (>20), so cycle to avoid StopIteration
+    palette_iter = cycle(c for c in palette if c not in color_map.values())
 
     # Build per-label coordinate lists with hover text
     label_coords: dict[str, tuple[list[int], list[int], list[str]]] = defaultdict(
