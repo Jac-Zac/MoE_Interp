@@ -4,7 +4,13 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from tqdm import tqdm
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 from src.cache import append_expert_h5, save_metadata, save_unembedding
 
@@ -44,10 +50,21 @@ def capture_expert_activations(
     d_model = model.config.hidden_size
 
     total_docs = 0
-    for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
-        batch = prompts[start : start + batch_size]
-        total_docs += len(batch)
-        batch_data = {}
+    n_batches = (len(prompts) + batch_size - 1) // batch_size
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("Capturing batches", total=n_batches)
+
+        for start in range(0, len(prompts), batch_size):
+            batch = prompts[start : start + batch_size]
+            total_docs += len(batch)
+            batch_data = {}
 
         with torch.no_grad(), model.trace(batch) as tracer:
             input_ids = model.inputs[1]["input_ids"].save()
@@ -122,6 +139,8 @@ def capture_expert_activations(
                     gated_output.half(),
                     last_token_ids,
                 )
+
+            progress.advance(task)
 
     metadata = {
         "model_name": model_name,

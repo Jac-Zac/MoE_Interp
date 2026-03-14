@@ -16,3 +16,5 @@ module load cuda
 
 python main.py pursuit --k 50
 # python main.py pursuit --k 50 --concept countries
+# python main.py pursuit --k 50 --concept offensive
+# python main.py pursuit --k 50 --concept numbers

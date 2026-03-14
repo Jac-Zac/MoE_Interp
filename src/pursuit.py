@@ -5,6 +5,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 from tqdm import tqdm
 
 from src.cache import load_layer_h5, load_metadata, load_unembedding
@@ -162,47 +169,63 @@ def run_pursuit(
     evr_matrix = np.zeros((n_layers, n_experts))
     count_matrix = np.zeros((n_layers, n_experts))
     k = min(k, dictionary.shape[0])
+
     try:
-        for layer_idx in tqdm(range(n_layers), desc="Projection pursuit"):
-            expert_acts = load_layer_h5(
-                encodings_dir, layer_idx, n_experts, min_activations
-            )
-            for expert_idx, acts in tqdm(
-                expert_acts.items(), desc=f"Layer {layer_idx}", leave=False
-            ):
-                acts = acts.float()
-                # PERF: Keep the zero-variance guard on CPU and skip the device sync.
-                if acts.var(dim=0).sum() < 1e-10:
-                    continue
-                X = acts.to(device)
-                tokens, evr = projection_pursuit(
-                    X,
-                    dictionary,
-                    tokenizer,
-                    device=device,
-                    k=k,
-                    token_ids=token_ids,
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+        ) as progress:
+            layer_task = progress.add_task("Projection pursuit", total=n_layers)
+
+            for layer_idx in range(n_layers):
+                expert_acts = load_layer_h5(
+                    encodings_dir, layer_idx, n_experts, min_activations
                 )
-                if not tokens:
-                    continue
+                expert_task = progress.add_task(
+                    f"Layer {layer_idx}", total=len(expert_acts), parent=layer_task
+                )
 
-                record = {
-                    "layer": layer_idx,
-                    "expert": expert_idx,
-                    "n_activations": X.shape[0],
-                    "tokens": tokens,
-                    "evr": evr,
-                }
-                results.append(record)
+                for expert_idx, acts in expert_acts.items():
+                    acts = acts.float()
+                    if acts.var(dim=0).sum() < 1e-10:
+                        progress.advance(expert_task)
+                        continue
+                    X = acts.to(device)
+                    tokens, evr = projection_pursuit(
+                        X,
+                        dictionary,
+                        tokenizer,
+                        device=device,
+                        k=k,
+                        token_ids=token_ids,
+                    )
+                    if not tokens:
+                        progress.advance(expert_task)
+                        continue
 
-                # Update matrices in-place
-                evr_matrix[layer_idx, expert_idx] = evr[-1]
-                count_matrix[layer_idx, expert_idx] = X.shape[0]
+                    record = {
+                        "layer": layer_idx,
+                        "expert": expert_idx,
+                        "n_activations": X.shape[0],
+                        "tokens": tokens,
+                        "evr": evr,
+                    }
+                    results.append(record)
 
-                if jsonl_file is not None:
-                    # One JSON object per line — safe to append, readable mid-run.
-                    jsonl_file.write(json.dumps(record) + "\n")
-                    jsonl_file.flush()
+                    evr_matrix[layer_idx, expert_idx] = evr[-1]
+                    count_matrix[layer_idx, expert_idx] = X.shape[0]
+
+                    if jsonl_file is not None:
+                        jsonl_file.write(json.dumps(record) + "\n")
+                        jsonl_file.flush()
+
+                    progress.advance(expert_task)
+
+                progress.remove_task(expert_task)
+                progress.advance(layer_task)
     finally:
         if jsonl_file is not None:
             jsonl_file.close()

@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 # %% Imports
-import json
+from rich import print
+from rich.table import Table
 
 from src.environment import get_data_dir, load_env, set_seed
 from src.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
@@ -61,13 +62,27 @@ top_experts = sorted(
 print(f"\nTop {len(top_experts)} experts by final EVR")
 if concept:
     print(f"Concept: {concept}")
+
+table = Table(show_header=True, header_style="bold")
+table.add_column("Rank", justify="right")
+table.add_column("Layer", justify="right")
+table.add_column("Expert", justify="right")
+table.add_column("EVR", justify="right")
+table.add_column("n", justify="right")
+table.add_column("Top Tokens")
+
 for rank, record in enumerate(top_experts, start=1):
     final_evr = record["evr"][-1] if record["evr"] else 0.0
-    top_tokens = ", ".join(record["tokens"][:5])
-    print(
-        f"{rank:>2}. L{record['layer']:02d} E{record['expert']:02d} | "
-        f"final EVR={final_evr:.4f} | n={record['n_activations']} | {top_tokens}"
+    table.add_row(
+        str(rank),
+        str(record["layer"]),
+        str(record["expert"]),
+        f"{final_evr:.4f}",
+        str(record["n_activations"]),
+        ", ".join(record["tokens"][:5]),
     )
+
+print(table)
 
 # %% Plot EVR heatmap per expert
 plot_evr_heatmap(evr_matrix).show()
