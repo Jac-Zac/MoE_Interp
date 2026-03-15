@@ -16,4 +16,4 @@
 source .venv/bin/activate
 module load cuda
 
-python main.py encode --n_docs 25000 --batch_size 32
+python main.py encode --n_docs 25000

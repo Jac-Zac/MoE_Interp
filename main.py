@@ -29,7 +29,6 @@ def main():
     encode_parser.add_argument(
         "--n_docs", type=int, default=5000, help="Number of TriviaQA documents"
     )
-    encode_parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
 
     pursuit_parser = subparsers.add_parser(
         "pursuit", help="Run projection pursuit analysis"
@@ -68,9 +67,7 @@ def main():
 
         data_dir = get_data_dir()
         output_dir = data_dir / "encodings"
-        capture_expert_activations(
-            model, prompts, args.batch_size, output_dir, data_dir, args.model
-        )
+        capture_expert_activations(model, prompts, output_dir, data_dir, args.model)
 
     elif args.command == "pursuit":
         data_dir = get_data_dir()

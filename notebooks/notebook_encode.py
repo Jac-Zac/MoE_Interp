@@ -13,7 +13,6 @@ from src.environment import get_data_dir, load_env, set_seed
 # %% Configuration
 seed = 1337
 n_docs = 16
-batch_size = 8
 model_name = "allenai/OLMoE-1B-7B-0924-Instruct"
 
 load_env()
@@ -40,15 +39,18 @@ print(f"Loaded {len(prompts)} TriviaQA prompts")
 output_dir = data_dir / "encodings"
 output_dir.mkdir(parents=True, exist_ok=True)
 
-# %% Batched capture: process each batch, collect per-expert activations
-total_docs = 0
-for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
-    batch = prompts[start : start + batch_size]
-    total_docs += len(batch)
-    batch_data = {}
+# %% Capture: process one prompt at a time, collect per-expert activations
+# NOTE: Batching is intentionally avoided. nnsight left-pads shorter sequences
+# to match the longest in the batch, which shifts positional embeddings for all
+# padded documents. Because OLMoE uses RoPE, positional encoding directly affects
+# attention and expert routing, so a token that sits at position 5 in a standalone
+# forward pass would appear at a different position inside a padded batch, producing
+# different activations. Processing one prompt at a time guarantees no padding is ever introduced.
+for prompt in tqdm(prompts, desc="Capturing prompts"):
+    prompt_data = {}
 
-    with torch.no_grad(), model.trace(batch) as tracer:
-        # nnsight left-pads by default, so last token is always at seq_len - 1
+    with torch.no_grad(), model.trace(prompt) as tracer:
+        # Single prompt: no padding, last real token is always at seq_len - 1
         input_ids = model.inputs[1]["input_ids"].save()
 
         for layer_idx, layer in enumerate(model.model.layers):
@@ -65,7 +67,7 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
 
             # NOTE: One must be very careful of what to get
             # I need to get expert_hit after the nonzero_0
-            # expert_mask_sum_0  ->  9 expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+            # expert_mask_sum_0  ->  expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
             # torch_greater_0    ->  + ...
             # nonzero_0          ->  + ...
             expert_hit = layer.mlp.experts.source.nonzero_0.output
@@ -78,15 +80,15 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
                 top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
                 down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
 
-                # NOTE: Similarly to logit lense we apply the last normalization to the expert activations here
+                # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
                 down_proj = model.model.norm(down_proj)
 
                 token_indices_list.append(token_idx.save())
                 down_projs_list.append(down_proj.save())
                 top_k_pos_list.append(top_k_pos.save())
 
-            # Store for post-processing in this batch
-            batch_data[layer_idx] = {
+            # Store for post-processing after the trace
+            prompt_data[layer_idx] = {
                 "active_experts": active_experts,
                 "token_indices": token_indices_list,
                 "down_projs": down_projs_list,
@@ -94,11 +96,12 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
                 "weights": top_k_weights,
             }
 
+    # Post-process: filter to last token only, write per-expert to disk
     seq_len = input_ids.shape[1]
+    last_token_id = input_ids[0, -1]
 
-    # Process this batch: filter to last token, collect per-expert
     for layer_idx in range(n_layers):
-        d = batch_data[layer_idx]
+        d = prompt_data[layer_idx]
         active_experts = d["active_experts"]
         token_indices = d["token_indices"]
         down_projs = d["down_projs"]
@@ -110,23 +113,18 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
             down_proj = down_projs[i]
             top_k_pos = top_k_positions[i]
 
-            # Filter to last token only (nnsight left-pads, so last token is at seq_len - 1)
-            last_token_mask = (token_idx % seq_len) == (seq_len - 1)
+            # Single prompt: last token is always at seq_len - 1
+            last_token_mask = token_idx == (seq_len - 1)
             if not last_token_mask.any():
                 continue
 
-            last_token_idx = token_idx[last_token_mask]
             last_down_proj = down_proj[last_token_mask]
-            last_top_k_pos = top_k_positions[i][last_token_mask]
+            last_top_k_pos = top_k_pos[last_token_mask]
 
             # Get gate weights and compute weighted output
             # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
-            gate_weights = weights[last_token_idx, last_top_k_pos]
+            gate_weights = weights[seq_len - 1, last_top_k_pos]
             gated_output = gate_weights.unsqueeze(-1) * last_down_proj
-
-            # Get the actual last token IDs for these documents
-            last_doc_indices = last_token_idx // seq_len
-            last_token_ids = input_ids[last_doc_indices, -1]
 
             if gated_output.shape[0] == 0:
                 continue
@@ -135,13 +133,13 @@ for start in tqdm(range(0, len(prompts), batch_size), desc="Capturing batches"):
                 layer_path,
                 expert_id,
                 gated_output.half(),
-                last_token_ids,
+                last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
             )
 
 save_metadata(
     output_dir,
     model_name=model_name,
-    n_docs=total_docs,
+    n_docs=len(prompts),
     n_layers=n_layers,
     n_experts=n_experts,
     d_model=d_model,

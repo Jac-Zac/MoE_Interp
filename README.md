@@ -18,7 +18,7 @@ source scripts/setup_env.sh
 python -m pytest
 
 # Encode documents (capture expert activations)
-python main.py encode --n_docs 5000 --batch_size 8
+python main.py encode --n_docs 5000
 
 # Run pursuit analysis (generates plots)
 python main.py pursuit --k 100
@@ -29,7 +29,7 @@ python main.py pursuit --k 100
 ### `encode` - Capture expert activations
 
 ```bash
-python main.py encode [--model MODEL] [--n_docs N] [--batch_size N]
+python main.py encode [--model MODEL] [--n_docs N]
 ```
 
 Saves per-layer HDF5 activations and metadata to `data/encodings/`.

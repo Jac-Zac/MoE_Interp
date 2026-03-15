@@ -18,17 +18,23 @@ from src.cache import append_expert_h5, save_metadata, save_unembedding
 def capture_expert_activations(
     model,
     prompts: list[list[int]],
-    batch_size: int,
     output_dir: Path,
     data_dir: Path | None = None,
     model_name: str | None = None,
 ) -> dict:
     """Capture expert activations for all prompts using nnsight tracing.
 
+    Processes one prompt at a time. Batching is intentionally avoided: nnsight
+    left-pads shorter sequences to match the longest in the batch, which shifts
+    positional embeddings for all padded documents. Because OLMoE uses RoPE,
+    positional encoding directly affects attention and expert routing, so a token
+    that sits at position 5 in a standalone forward pass would appear at a
+    different position inside a padded batch, producing different activations.
+    Processing one prompt at a time guarantees no padding is ever introduced.
+
     Args:
         model: NNsight LanguageModel
         prompts: List of tokenized prompts (list of token IDs)
-        batch_size: Batch size for processing
         output_dir: Directory to save encodings
         data_dir: Parent data directory (for saving unembedding). If None, derived from output_dir.
         model_name: Model name to store in metadata. If None, extracted from model.config._name_or_path.
@@ -49,9 +55,6 @@ def capture_expert_activations(
     n_experts = model.config.num_experts
     d_model = model.config.hidden_size
 
-    total_docs = 0
-    n_batches = (len(prompts) + batch_size - 1) // batch_size
-
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -59,92 +62,95 @@ def capture_expert_activations(
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TimeRemainingColumn(),
     ) as progress:
-        task = progress.add_task("Capturing batches", total=n_batches)
+        task = progress.add_task("Capturing prompts", total=len(prompts))
 
-        for start in range(0, len(prompts), batch_size):
-            batch = prompts[start : start + batch_size]
-            total_docs += len(batch)
-            batch_data = {}
+        # HACK: No batching of prompt is done to avoid incorrect results due to the
+        # effect of left padding on the positional embeddings
+        for prompt in prompts:
+            with torch.no_grad(), model.trace(prompt) as tracer:
+                input_ids = model.inputs[1]["input_ids"].save()
 
-        with torch.no_grad(), model.trace(batch) as tracer:
-            input_ids = model.inputs[1]["input_ids"].save()
+                for layer_idx, layer in enumerate(model.model.layers):
+                    # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
+                    _, weights, indices = layer.mlp.source.self_gate_0.output
+                    top_k_weights = weights.save()
 
-            for layer_idx, layer in enumerate(model.model.layers):
-                _, weights, indices = layer.mlp.source.self_gate_0.output
-                top_k_weights = weights.save()
-                top_k_indices = indices.save()
+                    token_indices_list: list[torch.Tensor] = []
+                    down_projs_list: list[torch.Tensor] = []
+                    top_k_pos_list: list[torch.Tensor] = []
 
-                token_indices_list: list[torch.Tensor] = []
-                down_projs_list: list[torch.Tensor] = []
-                top_k_pos_list: list[torch.Tensor] = []
+                    # NOTE: One must be very careful of what to get
+                    # I need to get expert_hit after the nonzero_0
+                    # expert_mask_sum_0  ->  expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+                    # torch_greater_0    ->  + ...
+                    # nonzero_0          ->  + ...
+                    expert_hit = layer.mlp.experts.source.nonzero_0.output
+                    active_experts = (
+                        expert_hit[expert_hit != model.config.num_experts]
+                        .squeeze(-1)
+                        .save()
+                    )
+                    num_iters = active_experts.numel()
 
-                expert_hit = layer.mlp.experts.source.nonzero_0.output
-                active_experts = (
-                    expert_hit[expert_hit != model.config.num_experts]
-                    .squeeze(-1)
-                    .save()
-                )
-                num_iters = active_experts.numel()
+                    with tracer.iter[:num_iters]:
+                        top_k_pos, token_idx = (
+                            layer.mlp.experts.source.torch_where_0.output
+                        )
+                        down_proj = (
+                            layer.mlp.experts.source.nn_functional_linear_1.output
+                        )
 
-                with tracer.iter[:num_iters]:
-                    top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
-                    down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
-                    token_indices_list.append(token_idx.save())
-                    down_projs_list.append(model.model.norm(down_proj).save())
-                    top_k_pos_list.append(top_k_pos.save())
+                        # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
+                        token_indices_list.append(token_idx.save())
+                        down_projs_list.append(model.model.norm(down_proj).save())
+                        top_k_pos_list.append(top_k_pos.save())
 
-                batch_data[layer_idx] = {
-                    "active_experts": active_experts,
-                    "token_indices": token_indices_list,
-                    "down_projs": down_projs_list,
-                    "top_k_pos": top_k_pos_list,
-                    "weights": top_k_weights,
-                }
+                    layer_data = {
+                        "active_experts": active_experts,
+                        "token_indices": token_indices_list,
+                        "down_projs": down_projs_list,
+                        "top_k_pos": top_k_pos_list,
+                        "weights": top_k_weights,
+                    }
 
-        seq_len = input_ids.shape[1]
+                    # Single prompt: no padding, last real token is always at seq_len - 1
+                    seq_len = input_ids.shape[1]
+                    # FIX: Here I take the last token but average over tokens can also be performed instaed
+                    last_token_id = input_ids[0, -1]
 
-        for layer_idx in range(n_layers):
-            d = batch_data[layer_idx]
-            active_experts = d["active_experts"]
-            token_indices = d["token_indices"]
-            down_projs = d["down_projs"]
-            top_k_positions = d["top_k_pos"]
-            weights = d["weights"]
+                    for i, expert_id in enumerate(active_experts.tolist()):
+                        token_idx = layer_data["token_indices"][i]
+                        down_proj = layer_data["down_projs"][i]
+                        top_k_pos = layer_data["top_k_pos"][i]
 
-            for i, expert_id in enumerate(active_experts.tolist()):
-                token_idx = token_indices[i]
-                down_proj = down_projs[i]
-                top_k_pos = top_k_positions[i]
+                        last_token_mask = token_idx == (seq_len - 1)
+                        if not last_token_mask.any():
+                            continue
 
-                last_token_mask = (token_idx % seq_len) == (seq_len - 1)
-                if not last_token_mask.any():
-                    continue
+                        last_down_proj = down_proj[last_token_mask]
+                        last_top_k_pos = top_k_pos[last_token_mask]
 
-                last_token_idx = token_idx[last_token_mask]
-                last_down_proj = down_proj[last_token_mask]
-                last_top_k_pos = top_k_positions[i][last_token_mask]
+                        # Get gate weights and compute weighted output
+                        # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
+                        gate_weights = top_k_weights[seq_len - 1, last_top_k_pos]
+                        gated_output = gate_weights.unsqueeze(-1) * last_down_proj
 
-                gate_weights = weights[last_token_idx, last_top_k_pos]
-                gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+                        if gated_output.shape[0] == 0:
+                            continue
 
-                last_doc_indices = last_token_idx // seq_len
-                last_token_ids = input_ids[last_doc_indices, -1]
-
-                if gated_output.shape[0] == 0:
-                    continue
-                layer_path = output_dir / f"layer_{layer_idx:02d}.h5"
-                append_expert_h5(
-                    layer_path,
-                    expert_id,
-                    gated_output.half(),
-                    last_token_ids,
-                )
+                        layer_path = output_dir / f"layer_{layer_idx:02d}.h5"
+                        append_expert_h5(
+                            layer_path,
+                            expert_id,
+                            gated_output.half(),
+                            last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
+                        )
 
             progress.advance(task)
 
     metadata = {
         "model_name": model_name,
-        "n_docs": total_docs,
+        "n_docs": len(prompts),
         "n_layers": n_layers,
         "n_experts": n_experts,
         "d_model": d_model,

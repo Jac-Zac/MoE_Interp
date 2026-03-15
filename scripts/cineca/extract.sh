@@ -14,4 +14,4 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
 source scripts/setup_env.sh
-python main.py encode --n_docs 50000 --batch_size 128
+python main.py encode --n_docs 50000
