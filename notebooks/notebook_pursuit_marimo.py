@@ -51,11 +51,14 @@ def _(load_env, set_seed):
 @app.cell
 def _(get_data_dir):
     data_dir = get_data_dir()
-    encodings_dir = data_dir / "encodings"
+    data_dir = data_dir / "orfeo"  # NOTE: Get the orfeo data for now
+    extractions_dir = data_dir / "extractions"
     pursuit_base = data_dir / "pursuit"
-    if not (encodings_dir / "metadata.json").exists():
-        raise Exception(f"Run encode first — missing {encodings_dir / 'metadata.json'}")
-    return data_dir, encodings_dir, pursuit_base
+    if not (extractions_dir / "metadata.json").exists():
+        raise Exception(
+            f"Run extract first — missing {extractions_dir / 'metadata.json'}"
+        )
+    return data_dir, extractions_dir, pursuit_base
 
 
 @app.cell
@@ -88,7 +91,7 @@ def _(concept_dd, pursuit_base):
 def _(
     concept,
     data_dir,
-    encodings_dir,
+    extractions_dir,
     load_pursuit,
     pursuit_dir,
     run_pursuit,
@@ -104,7 +107,7 @@ def _(
     else:
         # output_dir enables incremental results.jsonl flushing — safe to interrupt
         results, _evr_matrix, _count_matrix = run_pursuit(
-            encodings_dir,
+            extractions_dir,
             min_activations=5,
             k=50,
             output_dir=pursuit_dir,

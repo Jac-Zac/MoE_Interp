@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""CLI for Expert Pursuit encoding and pursuit."""
+"""CLI for Expert Pursuit extraction and pursuit."""
 
 import argparse
 
@@ -19,14 +19,14 @@ def main():
     parser = argparse.ArgumentParser(description="Expert Pursuit CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    encode_parser = subparsers.add_parser("encode", help="Encode expert activations")
-    encode_parser.add_argument(
+    extract_parser = subparsers.add_parser("extract", help="Extract expert activations")
+    extract_parser.add_argument(
         "--model",
         type=str,
         default="allenai/OLMoE-1B-7B-0924-Instruct",
         help="Model name or path",
     )
-    encode_parser.add_argument(
+    extract_parser.add_argument(
         "--n_docs", type=int, default=5000, help="Number of TriviaQA documents"
     )
 
@@ -51,7 +51,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "encode":
+    if args.command == "extract":
         from nnsight import LanguageModel
 
         model = LanguageModel(
@@ -66,18 +66,18 @@ def main():
         print(f"Loaded {len(prompts)} TriviaQA prompts")
 
         data_dir = get_data_dir()
-        output_dir = data_dir / "encodings"
+        output_dir = data_dir / "extractions"
         capture_expert_activations(model, prompts, output_dir, data_dir, args.model)
 
     elif args.command == "pursuit":
         data_dir = get_data_dir()
-        encodings_dir = data_dir / "encodings"
+        extractions_dir = data_dir / "extractions"
         output_dir = data_dir / "pursuit"
         if args.concept:
             output_dir = output_dir / args.concept
 
         results, evr_matrix, count_matrix = run_pursuit(
-            encodings_dir,
+            extractions_dir,
             min_activations=args.min_activations,
             k=args.k,
             output_dir=output_dir,

@@ -15,10 +15,10 @@ set_seed(seed)
 
 # %% Setup
 data_dir = get_data_dir()
-encodings_dir = data_dir / "encodings"
+extractions_dir = data_dir / "extractions"
 labeled_path = data_dir / "pursuit" / "results_labeled.json"
 
-metadata_path = encodings_dir / "metadata.json"
+metadata_path = extractions_dir / "metadata.json"
 if not metadata_path.exists():
     raise Exception(f"You should get activation first, in this path {metadata_path}")
 
@@ -43,7 +43,7 @@ if (
 else:
     # output_dir enables incremental results.jsonl flushing — safe to interrupt
     results, evr_matrix, count_matrix = run_pursuit(
-        encodings_dir,
+        extractions_dir,
         min_activations=min_activations,
         k=50,
         output_dir=pursuit_dir,

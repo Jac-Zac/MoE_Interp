@@ -99,7 +99,7 @@ def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray, np.ndarray 
 
 
 def run_pursuit(
-    encodings_dir: Path,
+    extractions_dir: Path,
     min_activations: int = 5,
     k: int = 50,
     output_dir: Path | None = None,
@@ -109,12 +109,12 @@ def run_pursuit(
     """Run projection pursuit on all experts.
 
     Args:
-        encodings_dir: Directory containing expert encodings
+        extractions_dir: Directory containing expert extractions
         min_activations: Minimum activations required to analyze an expert
         k: Number of top tokens to return per expert
         output_dir: If set, results.jsonl is written incrementally (flush per expert)
             so progress is never lost if the run is interrupted.
-        data_dir: Data directory containing unembedding. If None, derived from encodings_dir.
+        data_dir: Data directory containing unembedding. If None, derived from extractions_dir.
         concept: Optional concept name to restrict the unembedding dictionary.
             Must be a key in CONCEPT_WORDS (e.g. "offensive", "countries", "numbers").
 
@@ -123,13 +123,13 @@ def run_pursuit(
     """
     from transformers import AutoTokenizer
 
-    encodings_dir = Path(encodings_dir)
+    extractions_dir = Path(extractions_dir)
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
     if data_dir is None:
-        data_dir = encodings_dir.parent
+        data_dir = extractions_dir.parent
 
     # Determine device and move dictionary to it once — avoids 1024 redundant
     # host-to-device transfers of the 393 MB unembedding matrix.
@@ -137,15 +137,15 @@ def run_pursuit(
     # by only falling back to CPU for the lstsq solve (which needs float64).
     device = get_device()
 
-    metadata_path = encodings_dir / "metadata.json"
+    metadata_path = extractions_dir / "metadata.json"
     if not metadata_path.exists():
-        raise ValueError(f"No metadata found in {encodings_dir}")
+        raise ValueError(f"No metadata found in {extractions_dir}")
     metadata = load_metadata(metadata_path)
 
     if "model_name" not in metadata:
         raise ValueError(
             "model_name not found in metadata. "
-            "Please re-encode with a newer version that saves model_name."
+            "Please re-extract with a newer version that saves model_name."
         )
 
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
@@ -182,7 +182,7 @@ def run_pursuit(
 
             for layer_idx in range(n_layers):
                 expert_acts = load_layer_h5(
-                    encodings_dir, layer_idx, n_experts, min_activations
+                    extractions_dir, layer_idx, n_experts, min_activations
                 )
                 expert_task = progress.add_task(
                     f"Layer {layer_idx}", total=len(expert_acts), parent=layer_task

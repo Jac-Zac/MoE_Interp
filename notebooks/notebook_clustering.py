@@ -21,15 +21,17 @@ set_seed(seed)
 
 # %% Setup
 data_dir = get_data_dir()
-encodings_dir = data_dir / "encodings"
+extractions_dir = data_dir / "extractions"
 clustering_dir = data_dir / "clustering"
 clustering_dir.mkdir(parents=True, exist_ok=True)
 
-metadata_path = encodings_dir / "metadata.json"
+metadata_path = extractions_dir / "metadata.json"
 if not metadata_path.exists():
-    raise FileNotFoundError(f"Run encode first — metadata not found at {metadata_path}")
+    raise FileNotFoundError(
+        f"Run extract first — metadata not found at {metadata_path}"
+    )
 
-metadata = load_metadata(encodings_dir)
+metadata = load_metadata(extractions_dir)
 n_layers = metadata["n_layers"]
 n_experts = metadata["n_experts"]
 
@@ -49,7 +51,7 @@ def _l2_normalize_rows(X: np.ndarray) -> np.ndarray:
 
 print("Loading activations layer by layer...")
 for layer_idx in range(n_layers):
-    expert_acts = load_layer_h5(encodings_dir, layer_idx, n_experts)
+    expert_acts = load_layer_h5(extractions_dir, layer_idx, n_experts)
     if not expert_acts:
         continue
     Xs, labels = [], []

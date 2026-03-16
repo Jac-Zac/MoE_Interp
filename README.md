@@ -24,8 +24,8 @@ python scripts/download.py --all
 # Run tests
 python -m pytest
 
-# Encode documents (capture expert activations)
-python main.py encode --n_docs 5000
+# Run extraction (capture expert activations)
+python main.py extract --n_docs 5000
 
 # Run pursuit analysis (generates plots)
 python main.py pursuit --k 100
@@ -33,13 +33,13 @@ python main.py pursuit --k 100
 
 ## Commands
 
-### `encode` - Capture expert activations
+### `extract` - Capture expert activations
 
 ```bash
-python main.py encode [--model MODEL] [--n_docs N]
+python main.py extract [--model MODEL] [--n_docs N]
 ```
 
-Saves per-layer HDF5 activations and metadata to `data/encodings/`.
+Saves per-layer HDF5 activations and metadata to `data/extractions/`.
 
 ### `pursuit` - Run analysis and generate plots
 
@@ -60,7 +60,7 @@ Outputs to `data/pursuit/` (or `data/pursuit/<concept>/` when `--concept` is set
 .
 ├── main.py                        # CLI entry point
 ├── notebooks/
-│   ├── notebook_encode.py         # Standalone encode walkthrough
+│   ├── notebook_extract.py         # Standalone extraction walkthrough
 │   ├── notebook_pursuit.py        # Pursuit demo
 │   └── notebook_pursuit_marimo.py # Interactive Marimo explorer
 ├── src/

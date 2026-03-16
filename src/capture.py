@@ -35,7 +35,7 @@ def capture_expert_activations(
     Args:
         model: NNsight LanguageModel
         prompts: List of tokenized prompts (list of token IDs)
-        output_dir: Directory to save encodings
+        output_dir: Directory to save extractions
         data_dir: Parent data directory (for saving unembedding). If None, derived from output_dir.
         model_name: Model name to store in metadata. If None, extracted from model.config._name_or_path.
 

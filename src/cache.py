@@ -95,7 +95,7 @@ def load_unembedding(path: Path) -> torch.Tensor:
 
 
 def load_layer_h5(
-    encodings_dir: Path,
+    extractions_dir: Path,
     layer_idx: int,
     n_experts: int,
     min_activations: int = 0,
@@ -105,7 +105,7 @@ def load_layer_h5(
     Experts with fewer than min_activations rows are excluded.
     Returns an empty dict if the layer file does not exist.
     """
-    layer_path = Path(encodings_dir) / f"layer_{layer_idx:02d}.h5"
+    layer_path = Path(extractions_dir) / f"layer_{layer_idx:02d}.h5"
     if not layer_path.exists():
         return {}
     result: dict[int, torch.Tensor] = {}

@@ -36,7 +36,7 @@ prompts = load_triviaqa(tokenizer, n_docs=n_docs)
 print(f"Loaded {len(prompts)} TriviaQA prompts")
 
 # %% Setup: per-expert storage (variable length, stored on disk)
-output_dir = data_dir / "encodings"
+output_dir = data_dir / "extractions"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # %% Capture: process one prompt at a time, collect per-expert activations
