@@ -12,7 +12,7 @@ Target model: `allenai/OLMoE-1B-7B-0924-Instruct` (16 layers, 64 experts/layer, 
 
 ```bash
 # Setup
-source scripts/setup_env.sh
+python scripts/download.py
 
 # Run tests
 python -m pytest
