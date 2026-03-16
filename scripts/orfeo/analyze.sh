@@ -10,8 +10,11 @@
 #SBATCH --job-name=analyze_moe_act
 #SBATCH -o analyze.out
 
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+
 # uv sync
-source .venv/bin/activate
+source scripts/setup_env.sh
 module load cuda
 
 python main.py pursuit --k 50

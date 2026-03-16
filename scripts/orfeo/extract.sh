@@ -10,10 +10,10 @@
 #SBATCH --job-name=extract_moe_act
 #SBATCH -o extract.out
 
-# export TRANSFORMERS_OFFLINE=1
-# export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
 
-source .venv/bin/activate
+source scripts/setup_env.sh
 module load cuda
 
 python main.py encode --n_docs 25000

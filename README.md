@@ -11,8 +11,15 @@ Target model: `allenai/OLMoE-1B-7B-0924-Instruct` (16 layers, 64 experts/layer, 
 ## Quickstart
 
 ```bash
-# Setup
-python scripts/download.py
+# Setup: copy and edit .env
+cp .env.example .env
+# Edit .env with your HF_TOKEN and cache directories
+
+# Load environment (run once per shell session)
+source scripts/setup_env.sh
+
+# Download model and datasets
+python scripts/download.py --all
 
 # Run tests
 python -m pytest
