@@ -8,18 +8,24 @@ from tqdm import tqdm
 
 from src.cache import append_expert_h5, save_metadata, save_unembedding
 from src.data import load_triviaqa
-from src.environment import get_data_dir, load_env, set_seed
+from src.environment import (
+    get_data_dir,
+    get_extractions_dir,
+    get_unembedding_dir,
+    load_env,
+    set_seed,
+)
 
 # %% Configuration
 seed = 1337
 n_docs = 16
-model_name = "allenai/OLMoE-1B-7B-0924-Instruct"
+MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
 
 load_env()
 set_seed(seed)
 data_dir = get_data_dir()
 model = LanguageModel(
-    model_name,
+    MODEL_NAME,
     device_map="auto",
     dtype=torch.float16,
     dispatch=True,
@@ -36,7 +42,7 @@ prompts = load_triviaqa(tokenizer, n_docs=n_docs)
 print(f"Loaded {len(prompts)} TriviaQA prompts")
 
 # %% Setup: per-expert storage (variable length, stored on disk)
-output_dir = data_dir / "extractions"
+output_dir = get_extractions_dir(MODEL_NAME)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # %% Capture: process one prompt at a time, collect per-expert activations
@@ -138,7 +144,7 @@ for prompt in tqdm(prompts, desc="Capturing prompts"):
 
 save_metadata(
     output_dir,
-    model_name=model_name,
+    model_name=MODEL_NAME,
     n_docs=len(prompts),
     n_layers=n_layers,
     n_experts=n_experts,
@@ -147,7 +153,7 @@ save_metadata(
 print(f"Saved activations to {output_dir}")
 
 # %% Save unembedding dictionary
-unembedding_dir = data_dir / "unembedding"
+unembedding_dir = get_unembedding_dir(MODEL_NAME)
 dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
 save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
 print(f"Saved unembedding to {unembedding_dir}")

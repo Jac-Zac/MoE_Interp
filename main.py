@@ -7,7 +7,14 @@ import torch
 
 from src.capture import capture_expert_activations
 from src.data import load_triviaqa
-from src.environment import get_data_dir, load_env, set_seed
+from src.environment import (
+    get_data_dir,
+    get_extractions_dir,
+    get_pursuit_dir,
+    get_unembedding_dir,
+    load_env,
+    set_seed,
+)
 from src.plots import plot_count_heatmap, plot_evr_heatmap
 from src.pursuit import run_pursuit
 
@@ -32,6 +39,12 @@ def main():
 
     pursuit_parser = subparsers.add_parser(
         "pursuit", help="Run projection pursuit analysis"
+    )
+    pursuit_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model name (if not specified, reads from metadata.json)",
     )
     pursuit_parser.add_argument(
         "--k", type=int, default=50, help="Top-k tokens per expert"
@@ -79,8 +92,8 @@ def main():
         prompts = load_triviaqa(tokenizer, n_docs=args.n_docs)
         print(f"Loaded {len(prompts)} TriviaQA prompts")
 
+        output_dir = get_extractions_dir(args.model)
         data_dir = get_data_dir()
-        output_dir = data_dir / "extractions"
         capture_expert_activations(model, prompts, output_dir, data_dir, args.model)
 
     elif args.command == "pursuit":
@@ -92,21 +105,23 @@ def main():
         data_dir = get_data_dir()
         extractions_dir = data_dir / "extractions"
 
+        model_name = args.model or "allenai/OLMoE-1B-7B-0924-Instruct"
+
+        extractions_dir = get_extractions_dir(model_name)
+
         word_dictionary = None
         if args.word_top_k:
-            output_dir = data_dir / "pursuit_words"
+            output_dir = get_pursuit_dir(model_name, "words")
             metadata = load_metadata(extractions_dir / "metadata.json")
             tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
             base_dictionary = load_unembedding(
-                data_dir / "unembedding" / "dictionary.h5"
+                get_unembedding_dir(model_name) / "dictionary.h5"
             ).float()
             word_dictionary = build_word_dictionary(
                 tokenizer, base_dictionary, top_k=args.word_top_k
             )
         else:
-            output_dir = data_dir / "pursuit"
-            if args.concept:
-                output_dir = output_dir / args.concept
+            output_dir = get_pursuit_dir(model_name, args.concept)
 
         results, evr_matrix, count_matrix = run_pursuit(
             extractions_dir,

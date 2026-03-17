@@ -10,7 +10,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MODEL_REPO = "allenai/OLMoE-1B-7B-0924-Instruct"
+DEFAULT_MODELS = [
+    "allenai/OLMoE-1B-7B-0924-Instruct",
+    "openai/gpt-oss-20b",
+]
 DATASET_NAME = "mandarjoshi/trivia_qa"
 DATASET_CONFIG = "rc"
 
@@ -19,27 +22,37 @@ def main():
     parser = argparse.ArgumentParser(
         description="Download model and datasets for offline use"
     )
-    parser.add_argument("--model", action="store_true", help="Download model only")
+    parser.add_argument(
+        "--model",
+        nargs="*",
+        help="Model repo ID(s) to download (default: download both OLMoE and gpt-oss)",
+    )
     parser.add_argument(
         "--datasets", action="store_true", help="Download datasets only"
     )
-    parser.add_argument("--all", action="store_true", help="Download both (default)")
+    parser.add_argument(
+        "--all", action="store_true", help="Download both models and datasets"
+    )
     args = parser.parse_args()
 
     load_dotenv()
 
     hf_token = os.environ.get("HF_TOKEN")
 
-    download_all = args.all or (not args.model and not args.datasets)
+    download_models = args.all or args.model is not None or (not args.datasets)
+    download_datasets = args.all or args.datasets
 
-    if download_all or args.model:
-        logger.info(f"Downloading model: {MODEL_REPO}")
-        from huggingface_hub import snapshot_download
+    models_to_download = args.model if args.model else DEFAULT_MODELS
 
-        snapshot_download(repo_id=MODEL_REPO, token=hf_token)
-        logger.info("Model downloaded successfully")
+    if download_models:
+        for repo_id in models_to_download:
+            logger.info(f"Downloading model: {repo_id}")
+            from huggingface_hub import snapshot_download
 
-    if download_all or args.datasets:
+            snapshot_download(repo_id=repo_id, token=hf_token)
+            logger.info(f"Model downloaded successfully")
+
+    if download_datasets:
         logger.info(f"Downloading dataset: {DATASET_NAME}/{DATASET_CONFIG}")
         load_dataset(DATASET_NAME, DATASET_CONFIG, split="train", token=hf_token)
         load_dataset(DATASET_NAME, DATASET_CONFIG, split="validation", token=hf_token)
