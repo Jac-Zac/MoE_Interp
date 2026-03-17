@@ -3,8 +3,6 @@
 
 import argparse
 
-import torch
-
 from src.capture import capture_expert_activations
 from src.data import load_triviaqa
 from src.environment import (
@@ -84,7 +82,7 @@ def main():
         model = LanguageModel(
             args.model,
             device_map="auto",
-            dtype=torch.float16,
+            dtype="auto",
             dispatch=True,
         )
         tokenizer = model.tokenizer

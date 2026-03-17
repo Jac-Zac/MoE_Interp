@@ -5,6 +5,42 @@ from pathlib import Path
 import numpy as np
 import torch
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.table import Table
+
+
+def get_model_config(model, verbose: bool = False) -> dict:
+    """Extract model configuration with multi-model support."""
+    model_type = model.config.model_type
+    n_layers = model.config.num_hidden_layers
+    d_model = model.config.hidden_size
+
+    if model_type == "gpt_oss":
+        n_experts = model.config.num_local_experts
+        experts_per_tok = model.config.num_experts_per_tok
+    else:
+        n_experts = model.config.num_experts
+        experts_per_tok = model.config.experts_per_token
+
+    if verbose:
+        console = Console()
+        model_table = Table(title="Model Config")
+        model_table.add_column("Property", style="cyan")
+        model_table.add_column("Value", style="magenta")
+        model_table.add_row("Model", model.config._name_or_path)
+        model_table.add_row("Model Type", model_type)
+        model_table.add_row("Layers", str(n_layers))
+        model_table.add_row("Hidden Size", str(d_model))
+        model_table.add_row("Experts", str(n_experts))
+        model_table.add_row("Experts per Token", str(experts_per_tok))
+        console.print(model_table)
+
+    return {
+        "n_layers": n_layers,
+        "n_experts": n_experts,
+        "d_model": d_model,
+        "experts_per_tok": experts_per_tok,
+    }
 
 
 def load_env(override: bool = False) -> None:

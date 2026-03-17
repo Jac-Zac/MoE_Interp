@@ -11,6 +11,7 @@ from src.data import load_triviaqa
 from src.environment import (
     get_data_dir,
     get_extractions_dir,
+    get_model_config,
     get_unembedding_dir,
     load_env,
     set_seed,
@@ -20,6 +21,7 @@ from src.environment import (
 seed = 1337
 n_docs = 16
 MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
+# MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
 
 load_env()
 set_seed(seed)
@@ -27,15 +29,17 @@ data_dir = get_data_dir()
 model = LanguageModel(
     MODEL_NAME,
     device_map="auto",
-    dtype=torch.float16,
+    dtype="auto",  # automatically dispatch bfloat16 usually
     dispatch=True,
 )
 
+print(model.dtype)  # Show dtype
 tokenizer = model.tokenizer
 
-n_layers = model.config.num_hidden_layers
-n_experts = model.config.num_experts
-d_model = model.config.hidden_size
+model_config = get_model_config(model, verbose=True)
+n_layers = model_config["n_layers"]
+n_experts = model_config["n_experts"]
+d_model = model_config["d_model"]
 
 # %% Load TriviaQA prompts
 prompts = load_triviaqa(tokenizer, n_docs=n_docs)
