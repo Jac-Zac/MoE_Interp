@@ -48,8 +48,22 @@ def main():
         default=None,
         help="Optional concept restriction: offensive, countries, numbers",
     )
+    pursuit_parser.add_argument(
+        "--word_top_k",
+        type=int,
+        default=None,
+        nargs="?",
+        const=10000,
+        help="Use augmented dictionary with top-k common words. "
+        "Pass no value for default (10000), or a number. "
+        "Mutually exclusive with --concept.",
+    )
 
     args = parser.parse_args()
+
+    # Enforce mutually exclusive
+    if args.concept and args.word_top_k:
+        parser.error("--concept and --word_top_k are mutually exclusive")
 
     if args.command == "extract":
         from nnsight import LanguageModel
@@ -70,11 +84,29 @@ def main():
         capture_expert_activations(model, prompts, output_dir, data_dir, args.model)
 
     elif args.command == "pursuit":
+        from transformers import AutoTokenizer
+
+        from src.cache import load_metadata, load_unembedding
+        from src.word_dictionary import build_word_dictionary
+
         data_dir = get_data_dir()
         extractions_dir = data_dir / "extractions"
-        output_dir = data_dir / "pursuit"
-        if args.concept:
-            output_dir = output_dir / args.concept
+
+        word_dictionary = None
+        if args.word_top_k:
+            output_dir = data_dir / "pursuit_words"
+            metadata = load_metadata(extractions_dir / "metadata.json")
+            tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
+            base_dictionary = load_unembedding(
+                data_dir / "unembedding" / "dictionary.h5"
+            ).float()
+            word_dictionary = build_word_dictionary(
+                tokenizer, base_dictionary, top_k=args.word_top_k
+            )
+        else:
+            output_dir = data_dir / "pursuit"
+            if args.concept:
+                output_dir = output_dir / args.concept
 
         results, evr_matrix, count_matrix = run_pursuit(
             extractions_dir,
@@ -83,6 +115,7 @@ def main():
             output_dir=output_dir,
             data_dir=data_dir,
             concept=args.concept,
+            word_dictionary=word_dictionary,
         )
         plot_evr_heatmap(
             evr_matrix,

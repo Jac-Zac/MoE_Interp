@@ -12,12 +12,12 @@ from rich.progress import (
     TextColumn,
     TimeRemainingColumn,
 )
-from tqdm import tqdm
 
 from src.cache import load_layer_h5, load_metadata, load_unembedding
 from src.concepts import CONCEPT_WORDS
 from src.environment import get_device
 from src.sparse_decomposition import SOMP
+from src.word_dictionary import WordDictionary
 
 
 def projection_pursuit(
@@ -27,6 +27,8 @@ def projection_pursuit(
     device: torch.device | str,
     k: int = 50,
     token_ids: list[int] | None = None,
+    labels: list[str] | None = None,
+    base_vocab_size: int | None = None,
 ) -> tuple[list[str], list[float]]:
     """Greedy projection pursuit with SOMP.
 
@@ -56,6 +58,13 @@ def projection_pursuit(
 
     tokens = []
     for idx in result["chosen"].tolist():
+        if (
+            labels is not None
+            and base_vocab_size is not None
+            and idx >= base_vocab_size
+        ):
+            tokens.append(labels[idx - base_vocab_size])
+            continue
         token_id = idx if token_ids is None else token_ids[idx]
         tokens.append(tokenizer.decode([token_id]).strip())
     evr_values = result["evr"].tolist()
@@ -105,6 +114,7 @@ def run_pursuit(
     output_dir: Path | None = None,
     data_dir: Path | None = None,
     concept: str | None = None,
+    word_dictionary: WordDictionary | None = None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray]:
     """Run projection pursuit on all experts.
 
@@ -149,13 +159,30 @@ def run_pursuit(
         )
 
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
-    dictionary = (
-        load_unembedding(data_dir / "unembedding" / "dictionary.h5").float().to(device)
-    )
-    # When a concept is given, restrict the dictionary to tokens for that concept's
-    # word list and keep sorted_token_ids for remapping SOMP row indices back to
-    # full-vocabulary ids at decode time (mirrors HeadPursuit's tokens_data[token]).
-    dictionary, token_ids = _build_dictionary(dictionary, tokenizer, concept)
+    if word_dictionary is None:
+        dictionary = (
+            load_unembedding(data_dir / "unembedding" / "dictionary.h5")
+            .float()
+            .to(device)
+        )
+        # When a concept is given, restrict the dictionary to tokens for that concept's
+        # word list and keep sorted_token_ids for remapping SOMP row indices back to
+        # full-vocabulary ids at decode time (mirrors HeadPursuit's tokens_data[token]).
+        dictionary, token_ids = _build_dictionary(dictionary, tokenizer, concept)
+        labels = None
+        base_vocab_size = None
+    else:
+        dictionary = word_dictionary.embeddings.float().to(device)
+        labels = word_dictionary.labels
+        base_vocab_size = word_dictionary.base_vocab_size
+        if base_vocab_size > dictionary.shape[0]:
+            raise ValueError("word_dictionary base_vocab_size exceeds embedding rows")
+        if len(labels) != dictionary.shape[0] - base_vocab_size:
+            raise ValueError(
+                "word_dictionary labels must match appended embedding rows"
+            )
+        token_ids = None
+
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]
 
@@ -201,6 +228,8 @@ def run_pursuit(
                         device=device,
                         k=k,
                         token_ids=token_ids,
+                        labels=labels,
+                        base_vocab_size=base_vocab_size,
                     )
                     if not tokens:
                         progress.advance(expert_task)

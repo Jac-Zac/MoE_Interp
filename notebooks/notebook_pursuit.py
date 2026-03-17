@@ -1,12 +1,17 @@
 #!/usr/bin/env python
 
 # %% Imports
+import json
+
 from rich import print
 from rich.table import Table
+from transformers import AutoTokenizer
 
+from src.cache import load_metadata, load_unembedding
 from src.environment import get_data_dir, load_env, set_seed
 from src.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
 from src.pursuit import load_pursuit, run_pursuit
+from src.word_dictionary import build_word_dictionary
 
 # %% Configuration
 seed = 1337
@@ -16,7 +21,8 @@ set_seed(seed)
 # %% Setup
 data_dir = get_data_dir()
 extractions_dir = data_dir / "extractions"
-labeled_path = data_dir / "pursuit" / "results_labeled.json"
+output_dir = data_dir / "pursuit"
+# labeled_path = output_dir / "results_labeled.json"
 
 metadata_path = extractions_dir / "metadata.json"
 if not metadata_path.exists():
@@ -25,16 +31,31 @@ if not metadata_path.exists():
 # %% Simple projection-based expert pursuit
 # Specify a concept to restrict the unembedding dictionary ("offensive", "countries", "numbers")
 # Set to None to probe all tokens — useful as a general-purpose baseline
-concept = None
-# force = True
-force = False
+CONCEPT = None
+USE_WORD_DICTIONARY = True
+FORCE = True
+
+word_top_k = 50000
 
 min_activations = 5
 pursuit_dir = data_dir / "pursuit"
-if concept:
-    pursuit_dir = pursuit_dir / concept
+if CONCEPT:
+    pursuit_dir = pursuit_dir / CONCEPT
+word_dictionary = None
+if USE_WORD_DICTIONARY:
+    metadata = load_metadata(metadata_path)
+    tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
+    base_dictionary = load_unembedding(
+        data_dir / "unembedding" / "dictionary.h5"
+    ).float()
+    word_dictionary = build_word_dictionary(
+        tokenizer,
+        base_dictionary,
+        top_k=word_top_k,
+    )
+    pursuit_dir = data_dir / "pursuit_words"
 if (
-    not force
+    not FORCE
     and (pursuit_dir / "results.jsonl").exists()
     and (pursuit_dir / "evr_matrix.npy").exists()
 ):
@@ -48,7 +69,8 @@ else:
         k=50,
         output_dir=pursuit_dir,
         data_dir=data_dir,
-        concept=concept,
+        concept=CONCEPT,
+        word_dictionary=word_dictionary,
     )
 
 # %% Top experts for the current concept
@@ -60,8 +82,8 @@ top_experts = sorted(
 )[:top_n]
 
 print(f"\nTop {len(top_experts)} experts by final EVR")
-if concept:
-    print(f"Concept: {concept}")
+if CONCEPT:
+    print(f"Concept: {CONCEPT}")
 
 table = Table(show_header=True, header_style="bold")
 table.add_column("Rank", justify="right")
