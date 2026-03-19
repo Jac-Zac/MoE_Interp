@@ -34,6 +34,9 @@ def main():
     extract_parser.add_argument(
         "--n_docs", type=int, default=5000, help="Number of TriviaQA documents"
     )
+    extract_parser.add_argument(
+        "--batch_size", type=int, default=8, help="Batch size for capture"
+    )
 
     pursuit_parser = subparsers.add_parser(
         "pursuit", help="Run projection pursuit analysis"
@@ -87,7 +90,9 @@ def main():
         print(f"Loaded {len(prompts)} TriviaQA prompts")
 
         output_dir = get_extractions_dir(args.model)
-        capture_expert_activations(model, prompts, output_dir, args.model)
+        capture_expert_activations(
+            model, prompts, output_dir, args.model, batch_size=args.batch_size
+        )
 
     elif args.command == "pursuit":
         if args.concept and args.word_top_k:
