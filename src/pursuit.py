@@ -15,7 +15,7 @@ from rich.progress import (
 
 from src.cache import load_layer_h5, load_metadata, load_unembedding
 from src.concepts import CONCEPT_WORDS
-from src.environment import get_device
+from src.environment import get_device, get_unembedding_dir
 from src.sparse_decomposition import SOMP
 from src.word_dictionary import WordDictionary
 
@@ -161,7 +161,9 @@ def run_pursuit(
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
     if word_dictionary is None:
         dictionary = (
-            load_unembedding(data_dir / "unembedding" / "dictionary.h5")
+            load_unembedding(
+                get_unembedding_dir(metadata["model_name"]) / "dictionary.h5",
+            )
             .float()
             .to(device)
         )

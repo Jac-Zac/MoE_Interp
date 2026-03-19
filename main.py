@@ -72,10 +72,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Enforce mutually exclusive
-    if args.concept and args.word_top_k:
-        parser.error("--concept and --word_top_k are mutually exclusive")
-
     if args.command == "extract":
         from nnsight import LanguageModel
 
@@ -95,6 +91,9 @@ def main():
         capture_expert_activations(model, prompts, output_dir, data_dir, args.model)
 
     elif args.command == "pursuit":
+        if args.concept and args.word_top_k:
+            parser.error("--concept and --word_top_k are mutually exclusive")
+
         from transformers import AutoTokenizer
 
         from src.cache import load_metadata, load_unembedding

@@ -22,7 +22,8 @@ from src.word_dictionary import build_word_dictionary
 
 # %% Configuration
 seed = 1337
-MODEL_NAME = "openai/gpt-oss-20b"
+# MODEL_NAME = "openai/gpt-oss-20b"
+MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"
 load_env()
 set_seed(seed)
 
@@ -30,9 +31,9 @@ set_seed(seed)
 data_dir = get_data_dir()
 extractions_dir = get_extractions_dir(MODEL_NAME)
 output_dir = get_pursuit_dir(MODEL_NAME)
+metadata_path = extractions_dir / "metadata.json"
 # labeled_path = output_dir / "results_labeled.json"
 
-metadata_path = extractions_dir / "metadata.json"
 if not metadata_path.exists():
     raise Exception(f"You should get activation first, in this path {metadata_path}")
 
@@ -43,7 +44,7 @@ CONCEPT = None
 USE_WORD_DICTIONARY = True
 FORCE = True
 
-word_top_k = 50000
+word_top_k = 25000
 
 min_activations = 5
 pursuit_dir = get_pursuit_dir(MODEL_NAME, CONCEPT)

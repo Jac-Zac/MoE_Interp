@@ -11,17 +11,17 @@ from src.data import load_triviaqa
 from src.environment import (
     get_data_dir,
     get_extractions_dir,
-    get_model_config,
     get_unembedding_dir,
     load_env,
     set_seed,
 )
+from src.model_adapter import get_model_adapter
 
 # %% Configuration
 seed = 1337
 n_docs = 16
-MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
-# MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
+# MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
+MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
 
 load_env()
 set_seed(seed)
@@ -36,10 +36,11 @@ model = LanguageModel(
 print(model.dtype)  # Show dtype
 tokenizer = model.tokenizer
 
-model_config = get_model_config(model, verbose=True)
-n_layers = model_config["n_layers"]
-n_experts = model_config["n_experts"]
-d_model = model_config["d_model"]
+adapter = get_model_adapter(model=model)
+print(repr(adapter))
+n_layers = adapter.n_layers
+n_experts = adapter.n_experts
+d_model = adapter.d_model
 
 # %% Load TriviaQA prompts
 prompts = load_triviaqa(tokenizer, n_docs=n_docs)
@@ -68,27 +69,23 @@ for prompt in tqdm(prompts, desc="Capturing prompts"):
             # top_k_weights: weight for each expert
             # top_k_indices: expert id active for each token
             # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-            _, weights, indices = layer.mlp.source.self_gate_0.output
+            _, weights, indices = adapter.get_router_output(layer)
+
             top_k_weights = weights.save()
             # Lists to store per-expert activations for this layer
             token_indices_list: list[torch.Tensor] = []
             down_projs_list: list[torch.Tensor] = []
             top_k_pos_list: list[torch.Tensor] = []
 
-            # NOTE: One must be very careful of what to get
-            # I need to get expert_hit after the nonzero_0
-            # expert_mask_sum_0  ->  expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-            # torch_greater_0    ->  + ...
-            # nonzero_0          ->  + ...
-            expert_hit = layer.mlp.experts.source.nonzero_0.output
+            expert_hit = adapter.get_expert_hit(layer)
             active_experts = (
-                expert_hit[expert_hit != model.config.num_experts].squeeze(-1).save()
+                expert_hit[expert_hit != adapter.n_experts].squeeze(-1).save()
             )
             num_iters = active_experts.numel()
 
             with tracer.iter[:num_iters]:
-                top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
-                down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
+                top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
+                down_proj = adapter.get_expert_output(layer)
 
                 # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
                 down_proj = model.model.norm(down_proj)

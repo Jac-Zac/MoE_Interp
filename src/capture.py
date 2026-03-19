@@ -13,6 +13,8 @@ from rich.progress import (
 )
 
 from src.cache import append_expert_h5, save_metadata, save_unembedding
+from src.environment import get_unembedding_dir
+from src.model_adapter import get_model_adapter
 
 
 def capture_expert_activations(
@@ -49,11 +51,12 @@ def capture_expert_activations(
         data_dir = output_dir.parent
 
     if model_name is None:
-        model_name = model.config._name_or_path
+        model_name: str = model.config._name_or_path
 
-    n_layers = model.config.num_hidden_layers
-    n_experts = model.config.num_experts
-    d_model = model.config.hidden_size
+    adapter = get_model_adapter(model=model)
+    n_layers = adapter.n_layers
+    n_experts = adapter.n_experts
+    d_model = adapter.d_model
 
     with Progress(
         SpinnerColumn(),
@@ -71,34 +74,22 @@ def capture_expert_activations(
                 input_ids = model.inputs[1]["input_ids"].save()
 
                 for layer_idx, layer in enumerate(model.model.layers):
-                    # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-                    _, weights, indices = layer.mlp.source.self_gate_0.output
+                    _, weights, indices = adapter.get_router_output(layer)
                     top_k_weights = weights.save()
 
                     token_indices_list: list[torch.Tensor] = []
                     down_projs_list: list[torch.Tensor] = []
                     top_k_pos_list: list[torch.Tensor] = []
 
-                    # NOTE: One must be very careful of what to get
-                    # I need to get expert_hit after the nonzero_0
-                    # expert_mask_sum_0  ->  expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-                    # torch_greater_0    ->  + ...
-                    # nonzero_0          ->  + ...
-                    expert_hit = layer.mlp.experts.source.nonzero_0.output
+                    expert_hit = adapter.get_expert_hit(layer)
                     active_experts = (
-                        expert_hit[expert_hit != model.config.num_experts]
-                        .squeeze(-1)
-                        .save()
+                        expert_hit[expert_hit != adapter.n_experts].squeeze(-1).save()
                     )
                     num_iters = active_experts.numel()
 
                     with tracer.iter[:num_iters]:
-                        top_k_pos, token_idx = (
-                            layer.mlp.experts.source.torch_where_0.output
-                        )
-                        down_proj = (
-                            layer.mlp.experts.source.nn_functional_linear_1.output
-                        )
+                        top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
+                        down_proj = adapter.get_expert_output(layer)
 
                         # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
                         token_indices_list.append(token_idx.save())
@@ -157,7 +148,7 @@ def capture_expert_activations(
     }
     save_metadata(output_dir, **metadata)
 
-    unembedding_dir = data_dir / "unembedding"
+    unembedding_dir = get_unembedding_dir(model_name)
     dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
     save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
     print(f"Saved unembedding to {unembedding_dir}")
