@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import h5py
 import torch
 import torch.nn.functional as F
 from rich.progress import (
@@ -12,7 +13,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.cache import append_expert_h5, save_metadata, save_unembedding
+from src.cache import _append_to_file, save_metadata, save_unembedding
 from src.environment import get_unembedding_dir
 from src.model_adapter import get_model_adapter
 
@@ -21,7 +22,6 @@ def capture_expert_activations(
     model,
     prompts: list[list[int]],
     output_dir: Path,
-    data_dir: Path | None = None,
     model_name: str | None = None,
 ) -> dict:
     """Capture expert activations for all prompts using nnsight tracing.
@@ -38,7 +38,6 @@ def capture_expert_activations(
         model: NNsight LanguageModel
         prompts: List of tokenized prompts (list of token IDs)
         output_dir: Directory to save extractions
-        data_dir: Parent data directory (for saving unembedding). If None, derived from output_dir.
         model_name: Model name to store in metadata. If None, extracted from model.config._name_or_path.
 
     Returns:
@@ -47,11 +46,8 @@ def capture_expert_activations(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if data_dir is None:
-        data_dir = output_dir.parent
-
     if model_name is None:
-        model_name: str = model.config._name_or_path
+        model_name = model.config._name_or_path
 
     adapter = get_model_adapter(model=model)
     n_layers = adapter.n_layers
@@ -67,11 +63,16 @@ def capture_expert_activations(
     ) as progress:
         task = progress.add_task("Capturing prompts", total=len(prompts))
 
+        layer_files = {
+            i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a") for i in range(n_layers)
+        }
+
         # HACK: No batching of prompt is done to avoid incorrect results due to the
         # effect of left padding on the positional embeddings
         for prompt in prompts:
             with torch.no_grad(), model.trace(prompt) as tracer:
                 input_ids = model.inputs[1]["input_ids"].save()
+                norm_layer = model.model.norm
 
                 for layer_idx, layer in enumerate(model.model.layers):
                     _, weights, indices = adapter.get_router_output(layer)
@@ -93,7 +94,7 @@ def capture_expert_activations(
 
                         # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
                         token_indices_list.append(token_idx.save())
-                        down_projs_list.append(model.model.norm(down_proj).save())
+                        down_projs_list.append(norm_layer(down_proj).save())
                         top_k_pos_list.append(top_k_pos.save())
 
                     layer_data = {
@@ -135,16 +136,17 @@ def capture_expert_activations(
                         if gated_output.shape[0] == 0:
                             continue
 
-                        layer_path = output_dir / f"layer_{layer_idx:02d}.h5"
-                        append_expert_h5(
-                            layer_path,
+                        _append_to_file(
+                            layer_files[layer_idx],
                             expert_id,
                             gated_output.half(),
                             last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
-                            overwrite=True,
                         )
 
             progress.advance(task)
+
+        for f in layer_files.values():
+            f.close()
 
     metadata = {
         "model_name": model_name,

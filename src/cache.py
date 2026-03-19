@@ -27,47 +27,53 @@ def load_metadata(path: Path) -> dict:
     return json.loads(_metadata_path(path).read_text())
 
 
-def append_expert_h5(
-    path: Path,
+def _append_to_file(
+    f: h5py.File,
     expert_id: int,
     activations: torch.Tensor,
     tokens: torch.Tensor,
-    overwrite: bool = False,
 ) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     group_name = _expert_group_name(expert_id)
     acts = activations.detach().cpu()
     toks = tokens.detach().cpu()
     if acts.numel() == 0:
         return
+    group = f.require_group(group_name)
+    if "activations" not in group:
+        group.create_dataset(
+            "activations",
+            data=acts,
+            maxshape=(None, acts.shape[1]),
+            chunks=(max(acts.shape[0], 1), acts.shape[1]),
+            dtype=acts.numpy().dtype,
+        )
+        group.create_dataset(
+            "tokens",
+            data=toks,
+            maxshape=(None,),
+            chunks=(max(toks.shape[0], 1),),
+            dtype=toks.numpy().dtype,
+        )
+        return
+    act_ds = cast(h5py.Dataset, group["activations"])
+    tok_ds = cast(h5py.Dataset, group["tokens"])
+    new_size = act_ds.shape[0] + acts.shape[0]
+    act_ds.resize((new_size, act_ds.shape[1]))
+    act_ds[-acts.shape[0] :] = acts
+    tok_ds.resize((new_size,))
+    tok_ds[-toks.shape[0] :] = toks
+
+
+def append_expert_h5(
+    path: Path,
+    expert_id: int,
+    activations: torch.Tensor,
+    tokens: torch.Tensor,
+) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "a") as f:
-        if overwrite and group_name in f:
-            del f[group_name]
-        group = f.require_group(group_name)
-        if "activations" not in group:
-            group.create_dataset(
-                "activations",
-                data=acts,
-                maxshape=(None, acts.shape[1]),
-                chunks=(max(acts.shape[0], 1), acts.shape[1]),
-                dtype=acts.numpy().dtype,
-            )
-            group.create_dataset(
-                "tokens",
-                data=toks,
-                maxshape=(None,),
-                chunks=(max(toks.shape[0], 1),),
-                dtype=toks.numpy().dtype,
-            )
-            return
-        act_ds = cast(h5py.Dataset, group["activations"])
-        tok_ds = cast(h5py.Dataset, group["tokens"])
-        new_size = act_ds.shape[0] + acts.shape[0]
-        act_ds.resize((new_size, act_ds.shape[1]))
-        act_ds[-acts.shape[0] :] = acts
-        tok_ds.resize((new_size,))
-        tok_ds[-toks.shape[0] :] = toks
+        _append_to_file(f, expert_id, activations, tokens)
 
 
 def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:

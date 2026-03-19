@@ -87,8 +87,7 @@ def main():
         print(f"Loaded {len(prompts)} TriviaQA prompts")
 
         output_dir = get_extractions_dir(args.model)
-        data_dir = get_data_dir()
-        capture_expert_activations(model, prompts, output_dir, data_dir, args.model)
+        capture_expert_activations(model, prompts, output_dir, args.model)
 
     elif args.command == "pursuit":
         if args.concept and args.word_top_k:

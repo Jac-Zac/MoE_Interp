@@ -141,7 +141,6 @@ for prompt in tqdm(prompts, desc="Capturing prompts"):
                 expert_id,
                 gated_output.half(),
                 last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
-                overwrite=True,
             )
 
 save_metadata(

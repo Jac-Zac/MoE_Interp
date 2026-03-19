@@ -38,8 +38,7 @@ def projection_pursuit(
             when called in a loop — avoids repeated host-to-device transfers.
         tokenizer: Tokenizer for decoding chosen atom indices.
         k: Number of atoms to select.
-        device: Device to run on. If None, determined automatically (adds overhead
-            per call — prefer passing a pre-determined device in loops).
+        device: Device to run on.
     """
     if k <= 0 or X.shape[0] <= 1:
         return [], []
