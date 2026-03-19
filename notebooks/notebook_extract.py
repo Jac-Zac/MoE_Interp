@@ -7,7 +7,12 @@ import torch.nn.functional as F
 from nnsight import LanguageModel
 from tqdm import trange
 
-from src.cache import _append_to_file, save_metadata, save_unembedding
+from src.cache import (
+    _append_to_file,
+    get_model_unembedding,
+    save_metadata,
+    save_unembedding,
+)
 from src.data import load_triviaqa
 from src.environment import (
     get_data_dir,
@@ -17,6 +22,24 @@ from src.environment import (
     set_seed,
 )
 from src.model_adapter import get_model_adapter
+
+
+def apply_component_rmsnorm_like_hf(
+    hidden_states: torch.Tensor,
+    second_moment: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+) -> torch.Tensor:
+    """Apply RMSNorm to a component using residual-stream second moments.
+
+    Math: component contribution at output is
+    weight * (component / sqrt(E[residual^2] + eps)).
+    """
+    input_dtype = hidden_states.dtype
+    hidden_states = hidden_states.to(torch.float32)
+    hidden_states = hidden_states * torch.rsqrt(second_moment.unsqueeze(-1) + eps)
+    return weight * hidden_states.to(input_dtype)
+
 
 # %% Configuration
 seed = 1337
@@ -43,6 +66,8 @@ print(repr(adapter))
 n_layers = adapter.n_layers
 n_experts = adapter.n_experts
 d_model = adapter.d_model
+norm_weight = model.model.norm.weight
+norm_eps = model.model.norm.variance_epsilon
 
 # %% Load TriviaQA prompts
 prompts = load_triviaqa(tokenizer, n_docs=n_docs)
@@ -67,11 +92,11 @@ model.tokenizer.padding_side = "right"
 for batch_start in trange(0, len(sorted_prompts), batch_size):
     batch = sorted_prompts[batch_start : batch_start + batch_size]
     prompt_lengths = [len(p) for p in batch]
-    batch_size = len(batch)
+    b_size = len(batch)
 
     with torch.no_grad(), model.trace(batch) as tracer:
         input_ids = model.inputs[1]["input_ids"].save()
-        norm_layer = model.model.norm
+        pre_norm_hidden = model.model.norm.input[0].save()
 
         for layer_idx, layer in enumerate(model.model.layers):
             _, weights, indices = adapter.get_router_output(layer)
@@ -91,9 +116,10 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
                 down_proj = adapter.get_expert_output(layer)
 
-                # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
+                # NOTE: Keep expert outputs raw here. RMSNorm denominator must come
+                # from the full residual stream, not from each expert independently.
                 token_indices_list.append(token_idx.save())
-                down_projs_list.append(norm_layer(down_proj).save())
+                down_projs_list.append(down_proj.save())
                 top_k_pos_list.append(top_k_pos.save())
 
             layer_data = {
@@ -109,13 +135,14 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
             # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
 
             # Pre-compute last-token positions for all batches (vectorized)
-            batch_offsets = (
-                torch.arange(batch_size, device=active_experts.device) * max_len
-            )
+            batch_offsets = torch.arange(b_size, device=active_experts.device) * max_len
             actual_lens_tensor = torch.tensor(
                 prompt_lengths, device=active_experts.device, dtype=torch.long
             )
             last_positions = batch_offsets + actual_lens_tensor - 1
+            sample_indices = torch.arange(b_size, device=active_experts.device)
+            pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
+            second_moment_last = pre_norm_last.float().pow(2).mean(dim=-1)
 
             for i, expert_id in enumerate(active_experts.tolist()):
                 token_idx = layer_data["token_indices"][i]
@@ -123,7 +150,7 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 top_k_pos = layer_data["top_k_pos"][i]
 
                 # Vectorized: single mask
-                is_last = torch.isin(token_idx, last_positions)
+                is_last = torch.isin(token_idx.to(down_proj.device), last_positions)
 
                 if not is_last.any():
                     continue
@@ -136,6 +163,13 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 # Compute gate weights and weighted output
                 gate_weights = top_k_weights[last_token_idx_flat, last_top_k_pos]
                 gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+                batch_indices = (last_token_idx_flat // max_len).long()
+                gated_output = apply_component_rmsnorm_like_hf(
+                    hidden_states=gated_output,
+                    second_moment=second_moment_last[batch_indices],
+                    weight=norm_weight,
+                    eps=norm_eps,
+                )
 
                 if gated_output.shape[0] == 0:
                     continue
@@ -171,6 +205,6 @@ print(f"Saved activations to {output_dir}")
 
 # %% Save unembedding dictionary
 unembedding_dir = get_unembedding_dir(MODEL_NAME)
-dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
+dictionary = F.normalize(get_model_unembedding(model), dim=1)
 save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
 print(f"Saved unembedding to {unembedding_dir}")

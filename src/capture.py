@@ -13,7 +13,12 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.cache import _append_to_file, save_metadata, save_unembedding
+from src.cache import (
+    _append_to_file,
+    get_model_unembedding,
+    save_metadata,
+    save_unembedding,
+)
 from src.environment import get_unembedding_dir
 from src.model_adapter import get_model_adapter
 
@@ -74,7 +79,7 @@ def capture_expert_activations(
         for batch_start in range(0, len(sorted_prompts), batch_size):
             batch = sorted_prompts[batch_start : batch_start + batch_size]
             prompt_lengths = [len(p) for p in batch]
-            batch_size = len(batch)
+            b_size = len(batch)
 
             with torch.no_grad(), model.trace(batch) as tracer:
                 input_ids = model.inputs[1]["input_ids"].save()
@@ -118,7 +123,7 @@ def capture_expert_activations(
 
                     # Pre-compute last-token positions for all batches (vectorized)
                     batch_offsets = (
-                        torch.arange(batch_size, device=active_experts.device) * max_len
+                        torch.arange(b_size, device=active_experts.device) * max_len
                     )
                     actual_lens_tensor = torch.tensor(
                         prompt_lengths, device=active_experts.device, dtype=torch.long
@@ -131,7 +136,9 @@ def capture_expert_activations(
                         top_k_pos = layer_data["top_k_pos"][i]
 
                         # Vectorized: single mask instead of inner loop over batch
-                        is_last = torch.isin(token_idx, last_positions)
+                        is_last = torch.isin(
+                            token_idx.to(down_proj.device), last_positions
+                        )
 
                         if not is_last.any():
                             continue
@@ -155,7 +162,7 @@ def capture_expert_activations(
                         pos_in_batch = last_token_idx_flat % max_len
                         last_token_ids = input_ids[batch_indices, pos_in_batch]
 
-                        # Single write per expert (was batch_size writes)
+                        # Single write per expert (was b_size writes)
                         _append_to_file(
                             layer_files[layer_idx],
                             expert_id,
@@ -180,7 +187,7 @@ def capture_expert_activations(
     save_metadata(output_dir, **metadata)
 
     unembedding_dir = get_unembedding_dir(model_name)
-    dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
+    dictionary = F.normalize(get_model_unembedding(model), dim=1)
     save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
     print(f"Saved unembedding to {unembedding_dir}")
     print(f"Saved activations to {output_dir}")

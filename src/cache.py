@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import h5py
 import torch
@@ -101,6 +101,18 @@ def save_unembedding(path: Path, tensor: torch.Tensor) -> None:
 def load_unembedding(path: Path) -> torch.Tensor:
     with h5py.File(path, "r") as f:
         return torch.from_numpy(cast(h5py.Dataset, f["weight"])[:])
+
+
+def get_model_unembedding(model: Any) -> torch.Tensor:
+    """Extract lm_head weight from a model, handling meta-device tensors.
+
+    When a model is loaded with device_map="auto", some parameters (e.g. lm_head)
+    may remain on the meta device. This safely moves them to CPU before use.
+    """
+    weight = model.lm_head.weight
+    if weight.device.type == "meta":
+        weight = weight.to("cpu")
+    return weight.detach().float()
 
 
 def load_layer_h5(
