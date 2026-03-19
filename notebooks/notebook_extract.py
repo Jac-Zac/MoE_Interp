@@ -67,7 +67,7 @@ model.tokenizer.padding_side = "right"
 for batch_start in trange(0, len(sorted_prompts), batch_size):
     batch = sorted_prompts[batch_start : batch_start + batch_size]
     prompt_lengths = [len(p) for p in batch]
-    bs = len(batch)
+    batch_size = len(batch)
 
     with torch.no_grad(), model.trace(batch) as tracer:
         input_ids = model.inputs[1]["input_ids"].save()
@@ -106,50 +106,52 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
 
             max_len = input_ids.shape[1]
 
-            # NOTE: Here we take the last token but averaging over content
-            # tokens can also be performed instead
+            # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
+
+            # Pre-compute last-token positions for all batches (vectorized)
+            batch_offsets = (
+                torch.arange(batch_size, device=active_experts.device) * max_len
+            )
+            actual_lens_tensor = torch.tensor(
+                prompt_lengths, device=active_experts.device, dtype=torch.long
+            )
+            last_positions = batch_offsets + actual_lens_tensor - 1
+
             for i, expert_id in enumerate(active_experts.tolist()):
                 token_idx = layer_data["token_indices"][i]
                 down_proj = layer_data["down_projs"][i]
                 top_k_pos = layer_data["top_k_pos"][i]
 
-                for b in range(bs):
-                    actual_len = prompt_lengths[b]
-                    # With right-padding, prompt b's last real token is at
-                    # position b * max_len + actual_len - 1 in the flattened
-                    # expert output tensor
-                    prompt_offset = b * max_len
-                    last_token_pos = prompt_offset + actual_len - 1
+                # Vectorized: single mask
+                is_last = torch.isin(token_idx, last_positions)
 
-                    last_token_mask = token_idx == last_token_pos
-                    if not last_token_mask.any():
-                        continue
+                if not is_last.any():
+                    continue
 
-                    # Multi-GPU: ensure mask is on same device as target tensors
-                    last_down_proj = down_proj[last_token_mask]
-                    last_top_k_pos = top_k_pos[last_token_mask]
+                # Extract all last-token data at once
+                last_down_proj = down_proj[is_last]
+                last_top_k_pos = top_k_pos[is_last]
+                last_token_idx_flat = token_idx[is_last]
 
-                    # Get gate weights and compute weighted output
-                    # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
-                    gate_weights = top_k_weights[
-                        last_token_pos, last_top_k_pos.to(top_k_weights.device)
-                    ]
-                    gated_output = (
-                        gate_weights.unsqueeze(-1).to(last_down_proj.device)
-                        * last_down_proj
-                    )
+                # Compute gate weights and weighted output
+                gate_weights = top_k_weights[last_token_idx_flat, last_top_k_pos]
+                gated_output = gate_weights.unsqueeze(-1) * last_down_proj
 
-                    if gated_output.shape[0] == 0:
-                        continue
+                if gated_output.shape[0] == 0:
+                    continue
 
-                    last_token_id = input_ids[b, actual_len - 1]
+                # Map flat indices back to get token IDs
+                batch_indices = last_token_idx_flat // max_len
+                pos_in_batch = last_token_idx_flat % max_len
+                last_token_ids = input_ids[batch_indices, pos_in_batch]
 
-                    _append_to_file(
-                        layer_files[layer_idx],
-                        expert_id,
-                        gated_output.half(),
-                        last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
-                    )
+                # Single write per expert (was batch_size writes)
+                _append_to_file(
+                    layer_files[layer_idx],
+                    expert_id,
+                    gated_output.half(),
+                    last_token_ids,
+                )
 
 # Set back tokenizer to padd to the left
 model.tokenizer.padding_side = "left"

@@ -41,7 +41,7 @@ if not metadata_path.exists():
 # Specify a concept to restrict the unembedding dictionary ("offensive", "countries", "numbers")
 # Set to None to probe all tokens — useful as a general-purpose baseline
 CONCEPT = None
-USE_WORD_DICTIONARY = True
+USE_WORD_DICTIONARY = False
 FORCE = True
 
 word_top_k = 25000

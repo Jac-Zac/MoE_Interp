@@ -16,4 +16,4 @@ export HF_DATASETS_OFFLINE=1
 source scripts/setup_env.sh
 module load cuda
 
-python main.py extract --n_docs 25000 --batch_size 128
+python main.py extract --n_docs 25000 --batch_size 256
