@@ -32,6 +32,7 @@ def append_expert_h5(
     expert_id: int,
     activations: torch.Tensor,
     tokens: torch.Tensor,
+    overwrite: bool = False,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +42,8 @@ def append_expert_h5(
     if acts.numel() == 0:
         return
     with h5py.File(path, "a") as f:
+        if overwrite and group_name in f:
+            del f[group_name]
         group = f.require_group(group_name)
         if "activations" not in group:
             group.create_dataset(

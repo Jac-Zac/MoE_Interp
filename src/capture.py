@@ -141,6 +141,7 @@ def capture_expert_activations(
                             expert_id,
                             gated_output.half(),
                             last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
+                            overwrite=True,
                         )
 
             progress.advance(task)
