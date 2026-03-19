@@ -118,13 +118,19 @@ def capture_expert_activations(
                         if not last_token_mask.any():
                             continue
 
-                        last_down_proj = down_proj[last_token_mask]
-                        last_top_k_pos = top_k_pos[last_token_mask]
+                        # Multi-GPU: ensure mask is on same device as target tensors
+                        last_down_proj = down_proj[last_token_mask.to(down_proj.device)]
+                        last_top_k_pos = top_k_pos[last_token_mask.to(top_k_pos.device)]
 
                         # Get gate weights and compute weighted output
                         # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
-                        gate_weights = top_k_weights[seq_len - 1, last_top_k_pos]
-                        gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+                        gate_weights = top_k_weights[
+                            seq_len - 1, last_top_k_pos.to(top_k_weights.device)
+                        ]
+                        gated_output = (
+                            gate_weights.unsqueeze(-1).to(last_down_proj.device)
+                            * last_down_proj
+                        )
 
                         if gated_output.shape[0] == 0:
                             continue
