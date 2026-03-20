@@ -82,12 +82,12 @@ def capture_expert_activations(
             b_size = len(batch)
 
             with torch.no_grad(), model.trace(batch) as tracer:
-                input_ids = model.inputs[1]["input_ids"].save()
+                input_ids = model.inputs[1]["input_ids"].save().detach().cpu()
                 norm_layer = model.model.norm
 
                 for layer_idx, layer in enumerate(model.model.layers):
                     _, weights, indices = adapter.get_router_output(layer)
-                    top_k_weights = weights.save()
+                    top_k_weights = weights.save().detach().cpu()
 
                     token_indices_list: list = []
                     down_projs_list: list = []
@@ -95,7 +95,11 @@ def capture_expert_activations(
 
                     expert_hit = adapter.get_expert_hit(layer)
                     active_experts = (
-                        expert_hit[expert_hit != adapter.n_experts].squeeze(-1).save()
+                        expert_hit[expert_hit != adapter.n_experts]
+                        .squeeze(-1)
+                        .save()
+                        .detach()
+                        .cpu()
                     )
                     num_iters = active_experts.numel()
 
@@ -104,9 +108,11 @@ def capture_expert_activations(
                         down_proj = adapter.get_expert_output(layer)
 
                         # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
-                        token_indices_list.append(token_idx.save())
-                        down_projs_list.append(norm_layer(down_proj).save())
-                        top_k_pos_list.append(top_k_pos.save())
+                        token_indices_list.append(token_idx.save().detach().cpu())
+                        down_projs_list.append(
+                            norm_layer(down_proj).save().detach().cpu()
+                        )
+                        top_k_pos_list.append(top_k_pos.save().detach().cpu())
 
                     layer_data = {
                         "active_experts": active_experts,
@@ -122,11 +128,9 @@ def capture_expert_activations(
                     # tokens can also be performed instead
 
                     # Pre-compute last-token positions for all batches (vectorized)
-                    batch_offsets = (
-                        torch.arange(b_size, device=active_experts.device) * max_len
-                    )
+                    batch_offsets = torch.arange(b_size, device="cpu") * max_len
                     actual_lens_tensor = torch.tensor(
-                        prompt_lengths, device=active_experts.device, dtype=torch.long
+                        prompt_lengths, device="cpu", dtype=torch.long
                     )
                     last_positions = batch_offsets + actual_lens_tensor - 1
 
@@ -136,16 +140,14 @@ def capture_expert_activations(
                         top_k_pos = layer_data["top_k_pos"][i]
 
                         # Vectorized: single mask instead of inner loop over batch
-                        is_last = torch.isin(
-                            token_idx, last_positions.to(token_idx.device)
-                        )
+                        is_last = torch.isin(token_idx, last_positions)
                         if not is_last.any():
                             continue
 
                         # Extract all last-token data at once
-                        last_down_proj = down_proj[is_last.to(down_proj.device)]
-                        last_top_k_pos = top_k_pos[is_last.to(top_k_pos.device)]
-                        last_token_idx_flat = token_idx[is_last.to(token_idx.device)]
+                        last_down_proj = down_proj[is_last]
+                        last_top_k_pos = top_k_pos[is_last]
+                        last_token_idx_flat = token_idx[is_last]
 
                         # Compute gate weights and weighted output
                         gate_weights = top_k_weights[
