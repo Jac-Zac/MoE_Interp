@@ -113,8 +113,8 @@ class OLMoEAdapter(MoEAdapter):
     def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
         # top_k_weights: weight for each expert
         # top_k_indices: expert id active for each token
-        # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-        return layer.mlp.source.self_gate_0.output
+        # source.self_gate_0 outputs: (_, top_k_weights, top_k_indices)
+        return layer.mlp.gate.output  # we can directly get gate output
 
     def get_expert_hit(self, layer: Any) -> Any:
         # NOTE: One must be very careful of what to get.
@@ -138,7 +138,7 @@ class GPTOSSAdapter(MoEAdapter):
         return cfg.num_local_experts
 
     def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
-        return layer.mlp.source.self_router_0.output
+        return layer.mlp.router.output
 
     def get_expert_hit(self, layer: Any) -> Any:
         return layer.mlp.experts.source.nonzero_0.output

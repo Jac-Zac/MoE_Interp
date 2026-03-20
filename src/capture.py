@@ -137,16 +137,15 @@ def capture_expert_activations(
 
                         # Vectorized: single mask instead of inner loop over batch
                         is_last = torch.isin(
-                            token_idx.to(down_proj.device), last_positions
+                            token_idx, last_positions.to(token_idx.device)
                         )
-
                         if not is_last.any():
                             continue
 
                         # Extract all last-token data at once
-                        last_down_proj = down_proj[is_last]
-                        last_top_k_pos = top_k_pos[is_last]
-                        last_token_idx_flat = token_idx[is_last]
+                        last_down_proj = down_proj[is_last.to(down_proj.device)]
+                        last_top_k_pos = top_k_pos[is_last.to(top_k_pos.device)]
+                        last_token_idx_flat = token_idx[is_last.to(token_idx.device)]
 
                         # Compute gate weights and weighted output
                         gate_weights = top_k_weights[

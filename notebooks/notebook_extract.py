@@ -34,6 +34,14 @@ def apply_component_rmsnorm_like_hf(
 
     Math: component contribution at output is
     weight * (component / sqrt(E[residual^2] + eps)).
+
+    Approximation: RMSNorm(sum_i c_i) ≠ sum_i c_i / sqrt(E[(sum_j c_j)^2]).
+    We assume the denominator from the full residual stream applies linearly to
+    each expert's gated contribution. This ignores cross-terms E[c_i · c_j] in
+    the variance, which is reasonable when each expert adds a small delta to the
+    residual (top-8 of 64). The alternative — recomputing variance per-component
+    — isn't possible since we only capture isolated expert outputs, not the full
+    residual at each intermediate point.
     """
     input_dtype = hidden_states.dtype
     hidden_states = hidden_states.to(torch.float32)
@@ -96,8 +104,8 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
 
     with torch.no_grad(), model.trace(batch) as tracer:
         input_ids = model.inputs[1]["input_ids"].save()
-        pre_norm_hidden = model.model.norm.input[0].save()
 
+        layer_datas: list = []
         for layer_idx, layer in enumerate(model.model.layers):
             _, weights, indices = adapter.get_router_output(layer)
             top_k_weights = weights.save()
@@ -116,34 +124,37 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
                 down_proj = adapter.get_expert_output(layer)
 
-                # NOTE: Keep expert outputs raw here. RMSNorm denominator must come
-                # from the full residual stream, not from each expert independently.
                 token_indices_list.append(token_idx.save())
                 down_projs_list.append(down_proj.save())
                 top_k_pos_list.append(top_k_pos.save())
 
-            layer_data = {
-                "active_experts": active_experts,
-                "token_indices": token_indices_list,
-                "down_projs": down_projs_list,
-                "top_k_pos": top_k_pos_list,
-                "weights": top_k_weights,
-            }
-
-            max_len = input_ids.shape[1]
-
-            # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
-
-            # Pre-compute last-token positions for all batches (vectorized)
-            batch_offsets = torch.arange(b_size, device=active_experts.device) * max_len
-            actual_lens_tensor = torch.tensor(
-                prompt_lengths, device=active_experts.device, dtype=torch.long
+            layer_datas.append(
+                {
+                    "active_experts": active_experts,
+                    "token_indices": token_indices_list,
+                    "down_projs": down_projs_list,
+                    "top_k_pos": top_k_pos_list,
+                    "weights": top_k_weights,
+                }
             )
-            last_positions = batch_offsets + actual_lens_tensor - 1
-            sample_indices = torch.arange(b_size, device=active_experts.device)
-            pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
-            second_moment_last = pre_norm_last.float().pow(2).mean(dim=-1)
 
+        pre_norm_hidden = model.model.norm.input[0].save()
+        max_len = input_ids.shape[1]
+
+        # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
+
+        # Pre-compute last-token positions for all batches (vectorized)
+        batch_offsets = torch.arange(b_size, device=pre_norm_hidden.device) * max_len
+        actual_lens_tensor = torch.tensor(
+            prompt_lengths, device=pre_norm_hidden.device, dtype=torch.long
+        )
+        last_positions = batch_offsets + actual_lens_tensor - 1
+        sample_indices = torch.arange(b_size, device=pre_norm_hidden.device)
+        pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
+        second_moment_last = pre_norm_last.float().pow(2).mean(dim=-1)
+
+        for layer_idx, layer_data in enumerate(layer_datas):
+            active_experts = layer_data["active_experts"]
             for i, expert_id in enumerate(active_experts.tolist()):
                 token_idx = layer_data["token_indices"][i]
                 down_proj = layer_data["down_projs"][i]
@@ -161,7 +172,9 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 last_token_idx_flat = token_idx[is_last]
 
                 # Compute gate weights and weighted output
-                gate_weights = top_k_weights[last_token_idx_flat, last_top_k_pos]
+                gate_weights = layer_data["weights"][
+                    last_token_idx_flat, last_top_k_pos
+                ]
                 gated_output = gate_weights.unsqueeze(-1) * last_down_proj
                 batch_indices = (last_token_idx_flat // max_len).long()
                 gated_output = apply_component_rmsnorm_like_hf(
