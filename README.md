@@ -28,7 +28,7 @@ python -m pytest
 python main.py extract --n_docs 5000
 
 # For tensor parallelism (2 GPUs), use torchrun for better GPU utilization:
-torchrun --nproc_per_node=2 python main.py extract --model "openai_gpt_oss_20b"
+torchrun --nproc_per_node=2 main.py extract --model "openai/gpt-oss-20b" --n_docs=10000
 
 # Run pursuit analysis (generates plots)
 python main.py pursuit --k 100

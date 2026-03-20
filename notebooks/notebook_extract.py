@@ -109,12 +109,12 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
     b_size = len(batch)
 
     with torch.no_grad(), model.trace(batch) as tracer:
-        input_ids = model.inputs[1]["input_ids"].save().detach().cpu()
+        input_ids = model.inputs[1]["input_ids"].save().detach()
 
         layer_datas: list = []
         for layer_idx, layer in enumerate(model.model.layers):
             _, weights, indices = adapter.get_router_output(layer)
-            top_k_weights = weights.save().detach().cpu()
+            top_k_weights = weights.save().detach()
 
             token_indices_list: list[torch.Tensor] = []
             down_projs_list: list[torch.Tensor] = []
@@ -122,11 +122,7 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
 
             expert_hit = adapter.get_expert_hit(layer)
             active_experts = (
-                expert_hit[expert_hit != adapter.n_experts]
-                .squeeze(-1)
-                .save()
-                .detach()
-                .cpu()
+                expert_hit[expert_hit != adapter.n_experts].squeeze(-1).save().detach()
             )
             num_iters = active_experts.numel()
 
@@ -134,9 +130,9 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
                 down_proj = adapter.get_expert_output(layer)
 
-                token_indices_list.append(token_idx.save().detach().cpu())
-                down_projs_list.append(down_proj.save().detach().cpu())
-                top_k_pos_list.append(top_k_pos.save().detach().cpu())
+                token_indices_list.append(token_idx.save().detach())
+                down_projs_list.append(down_proj.save().detach())
+                top_k_pos_list.append(top_k_pos.save().detach())
 
             layer_datas.append(
                 {
@@ -148,18 +144,16 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 }
             )
 
-        pre_norm_hidden = model.model.norm.input[0].save().detach().cpu()
+        pre_norm_hidden = model.model.norm.input[0].save().detach()
         max_len = input_ids.shape[1]
 
         # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
 
         # Pre-compute last-token positions for all batches (vectorized)
-        batch_offsets = torch.arange(b_size, device="cpu") * max_len
-        actual_lens_tensor = torch.tensor(
-            prompt_lengths, device="cpu", dtype=torch.long
-        )
+        batch_offsets = torch.arange(b_size) * max_len
+        actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
         last_positions = batch_offsets + actual_lens_tensor - 1
-        sample_indices = torch.arange(b_size, device="cpu")
+        sample_indices = torch.arange(b_size)
         pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
         second_moment_last = pre_norm_last.float().pow(2).mean(dim=-1)
 
@@ -170,8 +164,14 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 down_proj = layer_data["down_projs"][i]
                 top_k_pos = layer_data["top_k_pos"][i]
 
+                target_device = down_proj.device
+                lp = last_positions.to(target_device)
+                ids = input_ids.to(target_device)
+                tw = layer_data["weights"].to(target_device)
+                sm_last = second_moment_last.to(target_device)
+
                 # Vectorized: single mask
-                is_last = torch.isin(token_idx, last_positions)
+                is_last = torch.isin(token_idx, lp)
 
                 if not is_last.any():
                     continue
@@ -182,15 +182,13 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 last_token_idx_flat = token_idx[is_last]
 
                 # Compute gate weights and weighted output
-                gate_weights = layer_data["weights"][
-                    last_token_idx_flat, last_top_k_pos
-                ]
+                gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                 gated_output = gate_weights.unsqueeze(-1) * last_down_proj
                 batch_indices = (last_token_idx_flat // max_len).long()
                 gated_output = apply_component_rmsnorm_like_hf(
                     hidden_states=gated_output,
-                    second_moment=second_moment_last[batch_indices],
-                    weight=norm_weight,
+                    second_moment=sm_last[batch_indices],
+                    weight=norm_weight.to(target_device),
                     eps=norm_eps,
                 )
 
@@ -200,14 +198,14 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
                 # Map flat indices back to get token IDs
                 batch_indices = last_token_idx_flat // max_len
                 pos_in_batch = last_token_idx_flat % max_len
-                last_token_ids = input_ids[batch_indices, pos_in_batch]
+                last_token_ids = ids[batch_indices, pos_in_batch]
 
                 # Single write per expert (was batch_size writes)
                 _append_to_file(
                     layer_files[layer_idx],
                     expert_id,
-                    gated_output.half(),
-                    last_token_ids,
+                    gated_output.half().cpu(),
+                    last_token_ids.cpu(),
                 )
 
 # Set back tokenizer to padd to the left
