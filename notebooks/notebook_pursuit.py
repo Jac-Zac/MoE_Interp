@@ -8,23 +8,32 @@ from rich.table import Table
 from transformers import AutoTokenizer
 
 from src.cache import load_metadata, load_unembedding
-from src.environment import get_data_dir, load_env, set_seed
+from src.environment import (
+    get_data_dir,
+    get_extractions_dir,
+    get_pursuit_dir,
+    get_unembedding_dir,
+    load_env,
+    set_seed,
+)
 from src.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
 from src.pursuit import load_pursuit, run_pursuit
 from src.word_dictionary import build_word_dictionary
 
 # %% Configuration
 seed = 1337
+# MODEL_NAME = "openai/gpt-oss-20b"
+MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"
 load_env()
 set_seed(seed)
 
 # %% Setup
 data_dir = get_data_dir()
-extractions_dir = data_dir / "extractions"
-output_dir = data_dir / "pursuit"
+extractions_dir = get_extractions_dir(MODEL_NAME)
+output_dir = get_pursuit_dir(MODEL_NAME)
+metadata_path = extractions_dir / "metadata.json"
 # labeled_path = output_dir / "results_labeled.json"
 
-metadata_path = extractions_dir / "metadata.json"
 if not metadata_path.exists():
     raise Exception(f"You should get activation first, in this path {metadata_path}")
 
@@ -32,28 +41,26 @@ if not metadata_path.exists():
 # Specify a concept to restrict the unembedding dictionary ("offensive", "countries", "numbers")
 # Set to None to probe all tokens — useful as a general-purpose baseline
 CONCEPT = None
-USE_WORD_DICTIONARY = True
+USE_WORD_DICTIONARY = False
 FORCE = True
 
-word_top_k = 50000
+word_top_k = 25000
 
 min_activations = 5
-pursuit_dir = data_dir / "pursuit"
-if CONCEPT:
-    pursuit_dir = pursuit_dir / CONCEPT
+pursuit_dir = get_pursuit_dir(MODEL_NAME, CONCEPT)
 word_dictionary = None
 if USE_WORD_DICTIONARY:
     metadata = load_metadata(metadata_path)
     tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
     base_dictionary = load_unembedding(
-        data_dir / "unembedding" / "dictionary.h5"
+        get_unembedding_dir(MODEL_NAME) / "dictionary.h5"
     ).float()
     word_dictionary = build_word_dictionary(
         tokenizer,
         base_dictionary,
         top_k=word_top_k,
     )
-    pursuit_dir = data_dir / "pursuit_words"
+    pursuit_dir = get_pursuit_dir(MODEL_NAME, "words")
 if (
     not FORCE
     and (pursuit_dir / "results.jsonl").exists()

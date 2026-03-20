@@ -16,11 +16,26 @@ class WordDictionary:
     base_vocab_size: int
 
 
-def load_common_words(top_k: int = 10000) -> list[str]:
-    """Load common words from HuggingFace dataset, sorted by frequency."""
-    ds = load_dataset("jaagli/common-words-79k")["whole"]
-    sorted_ds = ds.sort("frequency", reverse=True)
-    return [w.strip().lower() for w in sorted_ds["alias"][:top_k] if w.strip()]
+def load_common_words(top_k: int = 10000, source: str = "default") -> list[str]:
+    """Load common words from HuggingFace dataset, sorted by frequency.
+
+    Args:
+        top_k: Number of words to return
+        source: Dataset source - "default" for jaagli/common-words-79k (missing common words),
+                "full" for Maximax67/English-Valid-Words (includes the, a, is, etc.)
+    """
+    if source == "default":
+        ds = load_dataset("jaagli/common-words-79k")["whole"]
+        sorted_ds = ds.sort("frequency", reverse=True)
+        return [w.strip().lower() for w in sorted_ds["alias"][:top_k] if w.strip()]
+    elif source == "full":
+        ds = load_dataset(
+            "Maximax67/English-Valid-Words",
+            subset="sorted_by_frequency",
+        )["train"]
+        return [w.strip().lower() for w in ds["Word"][:top_k] if w.strip()]
+    else:
+        raise ValueError(f"Unknown source: {source}. Use 'default' or 'full'")
 
 
 def build_word_dictionary(
@@ -28,14 +43,23 @@ def build_word_dictionary(
     dictionary: torch.Tensor,
     words: Sequence[str] | None = None,
     top_k: int = 10000,
+    source: str = "default",
 ) -> WordDictionary:
     """Append averaged word atoms for words that split into multiple tokens,
     then remove the constituent sub-tokens from the base vocabulary.
 
     Uses a two-pass approach: first identifies multi-token words and their sub-tokens,
-    then filters out sub-tokens that are also standalone promoted words."""
+    then filters out sub-tokens that are also standalone promoted words.
+
+    Args:
+        tokenizer: Tokenizer for encoding words
+        dictionary: Unembedding matrix (L2-normalized)
+        words: Custom word list (if None, loads from source)
+        top_k: Number of words to load from source
+        source: "default" (jaagli) or "full" (Maximax67 with all common words)
+    """
     if words is None:
-        words = load_common_words(top_k)
+        words = load_common_words(top_k, source=source)
     elif isinstance(words, (list, tuple)):
         words = list(words)[:top_k]
 
@@ -76,6 +100,8 @@ def build_word_dictionary(
     rows = [filtered_base]
     for word in labels:
         token_ids = tokenizer(" " + word, add_special_tokens=False)["input_ids"]
+        # NOTE: Re-normalize after averaging — averaging k unit vectors produces
+        # a vector with norm < 1, which would bias SOMP against merged words.
         rows.append(F.normalize(dictionary[token_ids].mean(dim=0, keepdim=True), dim=1))
 
     added = len(labels)

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import h5py
 import torch
@@ -27,6 +27,43 @@ def load_metadata(path: Path) -> dict:
     return json.loads(_metadata_path(path).read_text())
 
 
+def _append_to_file(
+    f: h5py.File,
+    expert_id: int,
+    activations: torch.Tensor,
+    tokens: torch.Tensor,
+) -> None:
+    group_name = _expert_group_name(expert_id)
+    acts = activations.detach().cpu()
+    toks = tokens.detach().cpu()
+    if acts.numel() == 0:
+        return
+    group = f.require_group(group_name)
+    if "activations" not in group:
+        group.create_dataset(
+            "activations",
+            data=acts,
+            maxshape=(None, acts.shape[1]),
+            chunks=(max(acts.shape[0], 1), acts.shape[1]),
+            dtype=acts.numpy().dtype,
+        )
+        group.create_dataset(
+            "tokens",
+            data=toks,
+            maxshape=(None,),
+            chunks=(max(toks.shape[0], 1),),
+            dtype=toks.numpy().dtype,
+        )
+        return
+    act_ds = cast(h5py.Dataset, group["activations"])
+    tok_ds = cast(h5py.Dataset, group["tokens"])
+    new_size = act_ds.shape[0] + acts.shape[0]
+    act_ds.resize((new_size, act_ds.shape[1]))
+    act_ds[-acts.shape[0] :] = acts
+    tok_ds.resize((new_size,))
+    tok_ds[-toks.shape[0] :] = toks
+
+
 def append_expert_h5(
     path: Path,
     expert_id: int,
@@ -35,36 +72,8 @@ def append_expert_h5(
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    group_name = _expert_group_name(expert_id)
-    acts = activations.detach().cpu()
-    toks = tokens.detach().cpu()
-    if acts.numel() == 0:
-        return
     with h5py.File(path, "a") as f:
-        group = f.require_group(group_name)
-        if "activations" not in group:
-            group.create_dataset(
-                "activations",
-                data=acts,
-                maxshape=(None, acts.shape[1]),
-                chunks=(max(acts.shape[0], 1), acts.shape[1]),
-                dtype=acts.numpy().dtype,
-            )
-            group.create_dataset(
-                "tokens",
-                data=toks,
-                maxshape=(None,),
-                chunks=(max(toks.shape[0], 1),),
-                dtype=toks.numpy().dtype,
-            )
-            return
-        act_ds = cast(h5py.Dataset, group["activations"])
-        tok_ds = cast(h5py.Dataset, group["tokens"])
-        new_size = act_ds.shape[0] + acts.shape[0]
-        act_ds.resize((new_size, act_ds.shape[1]))
-        act_ds[-acts.shape[0] :] = acts
-        tok_ds.resize((new_size,))
-        tok_ds[-toks.shape[0] :] = toks
+        _append_to_file(f, expert_id, activations, tokens)
 
 
 def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
@@ -92,6 +101,18 @@ def save_unembedding(path: Path, tensor: torch.Tensor) -> None:
 def load_unembedding(path: Path) -> torch.Tensor:
     with h5py.File(path, "r") as f:
         return torch.from_numpy(cast(h5py.Dataset, f["weight"])[:])
+
+
+def get_model_unembedding(model: Any) -> torch.Tensor:
+    """Extract lm_head weight from a model, handling meta-device tensors.
+
+    When a model is loaded with device_map="auto", some parameters (e.g. lm_head)
+    may remain on the meta device. This safely moves them to CPU before use.
+    """
+    weight = model.lm_head.weight
+    if weight.device.type == "meta":
+        weight = weight.to("cpu")
+    return weight.detach().float()
 
 
 def load_layer_h5(

@@ -4,7 +4,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from dotenv import load_dotenv
+
+
+def is_rank0() -> bool:
+    """Return True if we are on rank 0 or not in a distributed setup."""
+    return not dist.is_initialized() or dist.get_rank() == 0
 
 
 def load_env(override: bool = False) -> None:
@@ -52,3 +58,31 @@ def get_device() -> torch.device:
         return torch.device("mps")
     else:
         return torch.device("cpu")
+
+
+def get_model_dir(model_name: str) -> Path:
+    """Convert model name to safe directory name.
+
+    'openai/gpt-oss-20b' -> 'openai_gpt_oss_20b'
+    'allenai/OLMoE-1B-7B-0924-Instruct' -> 'allenai_OLMoE_1B_7B_0924_Instruct'
+    """
+    safe_name = model_name.replace("/", "_").replace("-", "_")
+    return get_data_dir() / safe_name
+
+
+def get_extractions_dir(model_name: str) -> Path:
+    """Get the extractions directory for a specific model."""
+    return get_model_dir(model_name) / "extractions"
+
+
+def get_unembedding_dir(model_name: str) -> Path:
+    """Get the unembedding directory for a specific model."""
+    return get_model_dir(model_name) / "unembedding"
+
+
+def get_pursuit_dir(model_name: str, concept: str | None = None) -> Path:
+    """Get the pursuit output directory for a specific model."""
+    pursuit_dir = get_model_dir(model_name) / "pursuit"
+    if concept:
+        pursuit_dir = pursuit_dir / concept
+    return pursuit_dir

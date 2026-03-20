@@ -31,7 +31,7 @@ if not metadata_path.exists():
         f"Run extract first — metadata not found at {metadata_path}"
     )
 
-metadata = load_metadata(extractions_dir)
+metadata = load_metadata(metadata_path)
 n_layers = metadata["n_layers"]
 n_experts = metadata["n_experts"]
 

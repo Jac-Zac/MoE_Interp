@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import h5py
 import torch
 import torch.nn.functional as F
 from rich.progress import (
@@ -12,48 +13,52 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.cache import append_expert_h5, save_metadata, save_unembedding
+from src.cache import (
+    _append_to_file,
+    get_model_unembedding,
+    save_metadata,
+    save_unembedding,
+)
+from src.environment import get_unembedding_dir, is_rank0
+from src.model_adapter import get_model_adapter
 
 
 def capture_expert_activations(
     model,
     prompts: list[list[int]],
     output_dir: Path,
-    data_dir: Path | None = None,
     model_name: str | None = None,
+    batch_size: int = 8,
 ) -> dict:
     """Capture expert activations for all prompts using nnsight tracing.
 
-    Processes one prompt at a time. Batching is intentionally avoided: nnsight
-    left-pads shorter sequences to match the longest in the batch, which shifts
-    positional embeddings for all padded documents. Because OLMoE uses RoPE,
-    positional encoding directly affects attention and expert routing, so a token
-    that sits at position 5 in a standalone forward pass would appear at a
-    different position inside a padded batch, producing different activations.
-    Processing one prompt at a time guarantees no padding is ever introduced.
+    Processes prompts in batches with right-padding so each prompt's tokens
+    stay at their true positions, preserving RoPE positional encodings.
 
     Args:
         model: NNsight LanguageModel
         prompts: List of tokenized prompts (list of token IDs)
         output_dir: Directory to save extractions
-        data_dir: Parent data directory (for saving unembedding). If None, derived from output_dir.
         model_name: Model name to store in metadata. If None, extracted from model.config._name_or_path.
+        batch_size: Number of prompts per batch.
 
     Returns:
         Metadata dict with model_name, n_docs, n_layers, n_experts, d_model
     """
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if data_dir is None:
-        data_dir = output_dir.parent
+    if is_rank0():
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     if model_name is None:
         model_name = model.config._name_or_path
 
-    n_layers = model.config.num_hidden_layers
-    n_experts = model.config.num_experts
-    d_model = model.config.hidden_size
+    adapter = get_model_adapter(model=model)
+    n_layers = adapter.n_layers
+    n_experts = adapter.n_experts
+    d_model = adapter.d_model
+
+    # Sort by length so similar-length prompts land in the same batches
+    sorted_prompts = sorted(prompts, key=len, reverse=True)
 
     with Progress(
         SpinnerColumn(),
@@ -64,46 +69,51 @@ def capture_expert_activations(
     ) as progress:
         task = progress.add_task("Capturing prompts", total=len(prompts))
 
-        # HACK: No batching of prompt is done to avoid incorrect results due to the
-        # effect of left padding on the positional embeddings
-        for prompt in prompts:
-            with torch.no_grad(), model.trace(prompt) as tracer:
-                input_ids = model.inputs[1]["input_ids"].save()
+        layer_files = {}
+        if is_rank0():
+            layer_files = {
+                i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
+                for i in range(n_layers)
+            }
+
+        # Right-pad so token positions are preserved (RoPE stays correct)
+        model.tokenizer.padding_side = "right"
+
+        # NOTE: Sorted prompts favours batching of prompt of similar size together
+        for batch_start in range(0, len(sorted_prompts), batch_size):
+            batch = sorted_prompts[batch_start : batch_start + batch_size]
+            prompt_lengths = [len(p) for p in batch]
+            b_size = len(batch)
+
+            with torch.no_grad(), model.trace(batch) as tracer:
+                input_ids = model.inputs[1]["input_ids"].save().detach()
+                norm_layer = model.model.norm
 
                 for layer_idx, layer in enumerate(model.model.layers):
-                    # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-                    _, weights, indices = layer.mlp.source.self_gate_0.output
-                    top_k_weights = weights.save()
+                    _, weights, indices = adapter.get_router_output(layer)
+                    top_k_weights = weights.save().detach()
 
-                    token_indices_list: list[torch.Tensor] = []
-                    down_projs_list: list[torch.Tensor] = []
-                    top_k_pos_list: list[torch.Tensor] = []
+                    token_indices_list: list = []
+                    down_projs_list: list = []
+                    top_k_pos_list: list = []
 
-                    # NOTE: One must be very careful of what to get
-                    # I need to get expert_hit after the nonzero_0
-                    # expert_mask_sum_0  ->  expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-                    # torch_greater_0    ->  + ...
-                    # nonzero_0          ->  + ...
-                    expert_hit = layer.mlp.experts.source.nonzero_0.output
+                    expert_hit = adapter.get_expert_hit(layer)
                     active_experts = (
-                        expert_hit[expert_hit != model.config.num_experts]
+                        expert_hit[expert_hit != adapter.n_experts]
                         .squeeze(-1)
                         .save()
+                        .detach()
                     )
                     num_iters = active_experts.numel()
 
                     with tracer.iter[:num_iters]:
-                        top_k_pos, token_idx = (
-                            layer.mlp.experts.source.torch_where_0.output
-                        )
-                        down_proj = (
-                            layer.mlp.experts.source.nn_functional_linear_1.output
-                        )
+                        top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
+                        down_proj = adapter.get_expert_output(layer)
 
                         # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
-                        token_indices_list.append(token_idx.save())
-                        down_projs_list.append(model.model.norm(down_proj).save())
-                        top_k_pos_list.append(top_k_pos.save())
+                        token_indices_list.append(token_idx.save().detach())
+                        down_projs_list.append(norm_layer(down_proj).save().detach())
+                        top_k_pos_list.append(top_k_pos.save().detach())
 
                     layer_data = {
                         "active_experts": active_experts,
@@ -113,40 +123,66 @@ def capture_expert_activations(
                         "weights": top_k_weights,
                     }
 
-                    # Single prompt: no padding, last real token is always at seq_len - 1
-                    seq_len = input_ids.shape[1]
-                    # FIX: Here I take the last token but average over tokens can also be performed instaed
-                    last_token_id = input_ids[0, -1]
+                    max_len = input_ids.shape[1]
+
+                    # NOTE: Here we take the last token but averaging over content
+                    # tokens can also be performed instead
+
+                    # Pre-compute last-token positions for all batches (vectorized)
+                    batch_offsets = torch.arange(b_size) * max_len
+                    actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
+                    last_positions = batch_offsets + actual_lens_tensor - 1
 
                     for i, expert_id in enumerate(active_experts.tolist()):
                         token_idx = layer_data["token_indices"][i]
                         down_proj = layer_data["down_projs"][i]
                         top_k_pos = layer_data["top_k_pos"][i]
 
-                        last_token_mask = token_idx == (seq_len - 1)
-                        if not last_token_mask.any():
+                        target_device = down_proj.device
+                        lp = last_positions.to(target_device)
+                        ids = input_ids.to(target_device)
+                        tw = top_k_weights.to(target_device)
+                        token_idx = token_idx.to(target_device)
+                        top_k_pos = top_k_pos.to(target_device)
+
+                        # Vectorized: single mask instead of inner loop over batch
+                        is_last = torch.isin(token_idx, lp)
+                        if not is_last.any():
                             continue
 
-                        last_down_proj = down_proj[last_token_mask]
-                        last_top_k_pos = top_k_pos[last_token_mask]
+                        # Extract all last-token data at once
+                        last_down_proj = down_proj[is_last]
+                        last_top_k_pos = top_k_pos[is_last]
+                        last_token_idx_flat = token_idx[is_last]
 
-                        # Get gate weights and compute weighted output
-                        # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
-                        gate_weights = top_k_weights[seq_len - 1, last_top_k_pos]
+                        # Compute gate weights and weighted output
+                        gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                         gated_output = gate_weights.unsqueeze(-1) * last_down_proj
 
                         if gated_output.shape[0] == 0:
                             continue
 
-                        layer_path = output_dir / f"layer_{layer_idx:02d}.h5"
-                        append_expert_h5(
-                            layer_path,
-                            expert_id,
-                            gated_output.half(),
-                            last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
-                        )
+                        # Map flat indices back to get token IDs
+                        batch_indices = last_token_idx_flat // max_len
+                        pos_in_batch = last_token_idx_flat % max_len
+                        last_token_ids = ids[batch_indices, pos_in_batch]
 
-            progress.advance(task)
+                        # Single write per expert (was b_size writes)
+                        if is_rank0():
+                            _append_to_file(
+                                layer_files[layer_idx],
+                                expert_id,
+                                gated_output.half().cpu(),
+                                last_token_ids.cpu(),
+                            )
+
+            progress.advance(task, len(batch))
+
+        model.tokenizer.padding_side = "left"
+
+        if is_rank0():
+            for f in layer_files.values():
+                f.close()
 
     metadata = {
         "model_name": model_name,
@@ -155,12 +191,13 @@ def capture_expert_activations(
         "n_experts": n_experts,
         "d_model": d_model,
     }
-    save_metadata(output_dir, **metadata)
+    if is_rank0():
+        save_metadata(output_dir, **metadata)
 
-    unembedding_dir = data_dir / "unembedding"
-    dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
-    save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
-    print(f"Saved unembedding to {unembedding_dir}")
-    print(f"Saved activations to {output_dir}")
+        unembedding_dir = get_unembedding_dir(model_name)
+        dictionary = F.normalize(get_model_unembedding(model), dim=1)
+        save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
+        print(f"Saved unembedding to {unembedding_dir}")
+        print(f"Saved activations to {output_dir}")
 
     return metadata

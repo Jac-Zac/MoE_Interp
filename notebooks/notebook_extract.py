@@ -1,144 +1,222 @@
 #!/usr/bin/env python
 
 # %% Imports
+import h5py
 import torch
 import torch.nn.functional as F
 from nnsight import LanguageModel
-from tqdm import tqdm
+from tqdm import trange
 
-from src.cache import append_expert_h5, save_metadata, save_unembedding
+from src.cache import (
+    _append_to_file,
+    get_model_unembedding,
+    save_metadata,
+    save_unembedding,
+)
 from src.data import load_triviaqa
-from src.environment import get_data_dir, load_env, set_seed
+from src.environment import (
+    get_data_dir,
+    get_extractions_dir,
+    get_unembedding_dir,
+    load_env,
+    set_seed,
+)
+from src.model_adapter import get_model_adapter
+
+
+def apply_component_rmsnorm_like_hf(
+    hidden_states: torch.Tensor,
+    second_moment: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+) -> torch.Tensor:
+    """Apply RMSNorm to a component using residual-stream second moments.
+
+    Math: component contribution at output is
+    weight * (component / sqrt(E[residual^2] + eps)).
+
+    Approximation: RMSNorm(sum_i c_i) ≠ sum_i c_i / sqrt(E[(sum_j c_j)^2]).
+    We assume the denominator from the full residual stream applies linearly to
+    each expert's gated contribution. This ignores cross-terms E[c_i · c_j] in
+    the variance, which is reasonable when each expert adds a small delta to the
+    residual (top-8 of 64). The alternative — recomputing variance per-component
+    — isn't possible since we only capture isolated expert outputs, not the full
+    residual at each intermediate point.
+    """
+    input_dtype = hidden_states.dtype
+    hidden_states = hidden_states.to(torch.float32)
+    hidden_states = hidden_states * torch.rsqrt(second_moment.unsqueeze(-1) + eps)
+    return weight * hidden_states.to(input_dtype)
+
 
 # %% Configuration
 seed = 1337
 n_docs = 16
-model_name = "allenai/OLMoE-1B-7B-0924-Instruct"
+batch_size = 1
+
+# NOTE: gpt-oss doesn't fit in a V100 but current code support pipeline parallelism by default
+# Thus the model will be shared between two gpus.
+# MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
+MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
 
 load_env()
 set_seed(seed)
 data_dir = get_data_dir()
+# The main.py CLI automatically detects distributed setup and uses tp_plan="auto"
 model = LanguageModel(
-    model_name,
+    MODEL_NAME,
     device_map="auto",
-    dtype=torch.float16,
+    # automatically dispatch bfloat16 usually
+    # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
+    dtype="auto",
     dispatch=True,
 )
 
+print(model.dtype)  # Show dtype
 tokenizer = model.tokenizer
 
-n_layers = model.config.num_hidden_layers
-n_experts = model.config.num_experts
-d_model = model.config.hidden_size
+adapter = get_model_adapter(model=model)
+print(repr(adapter))
+n_layers = adapter.n_layers
+n_experts = adapter.n_experts
+d_model = adapter.d_model
+norm_weight = model.model.norm.weight
+norm_eps = model.model.norm.variance_epsilon
 
 # %% Load TriviaQA prompts
 prompts = load_triviaqa(tokenizer, n_docs=n_docs)
 print(f"Loaded {len(prompts)} TriviaQA prompts")
 
 # %% Setup: per-expert storage (variable length, stored on disk)
-output_dir = data_dir / "extractions"
+output_dir = get_extractions_dir(MODEL_NAME)
 output_dir.mkdir(parents=True, exist_ok=True)
 
-# %% Capture: process one prompt at a time, collect per-expert activations
-# NOTE: Batching is intentionally avoided. nnsight left-pads shorter sequences
-# to match the longest in the batch, which shifts positional embeddings for all
-# padded documents. Because OLMoE uses RoPE, positional encoding directly affects
-# attention and expert routing, so a token that sits at position 5 in a standalone
-# forward pass would appear at a different position inside a padded batch, producing
-# different activations. Processing one prompt at a time guarantees no padding is ever introduced.
-for prompt in tqdm(prompts, desc="Capturing prompts"):
-    prompt_data = {}
+# %% Capture: batched with right-padding to preserve RoPE positional encodings
+# Sort by length so similar-length prompts land in the same batches
+sorted_prompts = sorted(prompts, key=len, reverse=True)
 
-    with torch.no_grad(), model.trace(prompt) as tracer:
-        # Single prompt: no padding, last real token is always at seq_len - 1
-        input_ids = model.inputs[1]["input_ids"].save()
+# Keep HDF5 files open for the full run (much faster than open/close per write)
+layer_files = {
+    i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a") for i in range(n_layers)
+}
 
+# Right-pad so token positions are preserved (RoPE stays correct)
+model.tokenizer.padding_side = "right"
+
+for batch_start in trange(0, len(sorted_prompts), batch_size):
+    batch = sorted_prompts[batch_start : batch_start + batch_size]
+    prompt_lengths = [len(p) for p in batch]
+    b_size = len(batch)
+
+    with torch.no_grad(), model.trace(batch) as tracer:
+        input_ids = model.inputs[1]["input_ids"].save().detach()
+
+        layer_datas: list = []
         for layer_idx, layer in enumerate(model.model.layers):
-            # Get routing info from the gate
-            # top_k_weights: weight for each expert
-            # top_k_indices: expert id active for each token
-            # self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-            _, weights, indices = layer.mlp.source.self_gate_0.output
-            top_k_weights = weights.save()
-            # Lists to store per-expert activations for this layer
+            _, weights, indices = adapter.get_router_output(layer)
+            top_k_weights = weights.save().detach()
+
             token_indices_list: list[torch.Tensor] = []
             down_projs_list: list[torch.Tensor] = []
             top_k_pos_list: list[torch.Tensor] = []
 
-            # NOTE: One must be very careful of what to get
-            # I need to get expert_hit after the nonzero_0
-            # expert_mask_sum_0  ->  expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-            # torch_greater_0    ->  + ...
-            # nonzero_0          ->  + ...
-            expert_hit = layer.mlp.experts.source.nonzero_0.output
+            expert_hit = adapter.get_expert_hit(layer)
             active_experts = (
-                expert_hit[expert_hit != model.config.num_experts].squeeze(-1).save()
+                expert_hit[expert_hit != adapter.n_experts].squeeze(-1).save().detach()
             )
             num_iters = active_experts.numel()
 
             with tracer.iter[:num_iters]:
-                top_k_pos, token_idx = layer.mlp.experts.source.torch_where_0.output
-                down_proj = layer.mlp.experts.source.nn_functional_linear_1.output
+                top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
+                down_proj = adapter.get_expert_output(layer)
 
-                # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
-                down_proj = model.model.norm(down_proj)
+                token_indices_list.append(token_idx.save().detach())
+                down_projs_list.append(down_proj.save().detach())
+                top_k_pos_list.append(top_k_pos.save().detach())
 
-                token_indices_list.append(token_idx.save())
-                down_projs_list.append(down_proj.save())
-                top_k_pos_list.append(top_k_pos.save())
-
-            # Store for post-processing after the trace
-            prompt_data[layer_idx] = {
-                "active_experts": active_experts,
-                "token_indices": token_indices_list,
-                "down_projs": down_projs_list,
-                "top_k_pos": top_k_pos_list,
-                "weights": top_k_weights,
-            }
-
-    # Post-process: filter to last token only, write per-expert to disk
-    seq_len = input_ids.shape[1]
-    last_token_id = input_ids[0, -1]
-
-    for layer_idx in range(n_layers):
-        d = prompt_data[layer_idx]
-        active_experts = d["active_experts"]
-        token_indices = d["token_indices"]
-        down_projs = d["down_projs"]
-        top_k_positions = d["top_k_pos"]
-        weights = d["weights"]
-
-        for i, expert_id in enumerate(active_experts.tolist()):
-            token_idx = token_indices[i]
-            down_proj = down_projs[i]
-            top_k_pos = top_k_positions[i]
-
-            # Single prompt: last token is always at seq_len - 1
-            last_token_mask = token_idx == (seq_len - 1)
-            if not last_token_mask.any():
-                continue
-
-            last_down_proj = down_proj[last_token_mask]
-            last_top_k_pos = top_k_pos[last_token_mask]
-
-            # Get gate weights and compute weighted output
-            # weights is [seq_len, top_k], indexed by [token_position, top_k_position]
-            gate_weights = weights[seq_len - 1, last_top_k_pos]
-            gated_output = gate_weights.unsqueeze(-1) * last_down_proj
-
-            if gated_output.shape[0] == 0:
-                continue
-            layer_path = output_dir / f"layer_{layer_idx:02d}.h5"
-            append_expert_h5(
-                layer_path,
-                expert_id,
-                gated_output.half(),
-                last_token_id.unsqueeze(0).expand(gated_output.shape[0]),
+            layer_datas.append(
+                {
+                    "active_experts": active_experts,
+                    "token_indices": token_indices_list,
+                    "down_projs": down_projs_list,
+                    "top_k_pos": top_k_pos_list,
+                    "weights": top_k_weights,
+                }
             )
+
+        pre_norm_hidden = model.model.norm.input[0].save().detach()
+        max_len = input_ids.shape[1]
+
+        # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
+
+        # Pre-compute last-token positions for all batches (vectorized)
+        batch_offsets = torch.arange(b_size) * max_len
+        actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
+        last_positions = batch_offsets + actual_lens_tensor - 1
+        sample_indices = torch.arange(b_size)
+        pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
+        second_moment_last = pre_norm_last.float().pow(2).mean(dim=-1)
+
+        for layer_idx, layer_data in enumerate(layer_datas):
+            active_experts = layer_data["active_experts"]
+            for i, expert_id in enumerate(active_experts.tolist()):
+                token_idx = layer_data["token_indices"][i]
+                down_proj = layer_data["down_projs"][i]
+                top_k_pos = layer_data["top_k_pos"][i]
+
+                target_device = down_proj.device
+                lp = last_positions.to(target_device)
+                ids = input_ids.to(target_device)
+                tw = layer_data["weights"].to(target_device)
+                sm_last = second_moment_last.to(target_device)
+
+                # Vectorized: single mask
+                is_last = torch.isin(token_idx, lp)
+
+                if not is_last.any():
+                    continue
+
+                # Extract all last-token data at once
+                last_down_proj = down_proj[is_last]
+                last_top_k_pos = top_k_pos[is_last]
+                last_token_idx_flat = token_idx[is_last]
+
+                # Compute gate weights and weighted output
+                gate_weights = tw[last_token_idx_flat, last_top_k_pos]
+                gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+                batch_indices = (last_token_idx_flat // max_len).long()
+                gated_output = apply_component_rmsnorm_like_hf(
+                    hidden_states=gated_output,
+                    second_moment=sm_last[batch_indices],
+                    weight=norm_weight.to(target_device),
+                    eps=norm_eps,
+                )
+
+                if gated_output.shape[0] == 0:
+                    continue
+
+                # Map flat indices back to get token IDs
+                batch_indices = last_token_idx_flat // max_len
+                pos_in_batch = last_token_idx_flat % max_len
+                last_token_ids = ids[batch_indices, pos_in_batch]
+
+                # Single write per expert (was batch_size writes)
+                _append_to_file(
+                    layer_files[layer_idx],
+                    expert_id,
+                    gated_output.half().cpu(),
+                    last_token_ids.cpu(),
+                )
+
+# Set back tokenizer to padd to the left
+model.tokenizer.padding_side = "left"
+
+for f in layer_files.values():
+    f.close()
 
 save_metadata(
     output_dir,
-    model_name=model_name,
+    model_name=MODEL_NAME,
     n_docs=len(prompts),
     n_layers=n_layers,
     n_experts=n_experts,
@@ -147,7 +225,7 @@ save_metadata(
 print(f"Saved activations to {output_dir}")
 
 # %% Save unembedding dictionary
-unembedding_dir = data_dir / "unembedding"
-dictionary = F.normalize(model.lm_head.weight.detach().float(), dim=1).cpu()
+unembedding_dir = get_unembedding_dir(MODEL_NAME)
+dictionary = F.normalize(get_model_unembedding(model), dim=1)
 save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
 print(f"Saved unembedding to {unembedding_dir}")
