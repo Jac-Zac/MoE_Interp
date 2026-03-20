@@ -29,6 +29,7 @@ def capture_expert_activations(
     prompts: Dataset | list[list[int]],
     output_dir: Path,
     model_name: str | None = None,
+    dataset_name: str | None = None,
     batch_size: int = 8,
 ) -> dict:
     """Capture expert activations for all prompts using nnsight tracing.
@@ -197,15 +198,16 @@ def capture_expert_activations(
 
     metadata = {
         "model_name": model_name,
+        "dataset_name": dataset_name,
         "n_docs": n_docs,
         "n_layers": n_layers,
         "n_experts": n_experts,
         "d_model": d_model,
     }
-    if is_rank0():
+    if is_rank0() and model_name is not None:
         save_metadata(output_dir, **metadata)
 
-        unembedding_dir = get_unembedding_dir(model_name)  # type: ignore[arg-type]
+        unembedding_dir = get_unembedding_dir(model_name)
         dictionary = F.normalize(get_model_unembedding(model), dim=1)
         save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
         print(f"Saved unembedding to {unembedding_dir}")

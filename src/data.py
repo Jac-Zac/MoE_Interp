@@ -1,23 +1,65 @@
-"""TriviaQA data loading for Expert Pursuit.
+"""Dataset loading for Expert Pursuit."""
 
-Uses HF datasets.map() for faster tokenization instead of a Python loop.
-"""
-
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from datasets import Dataset, load_dataset
 
-# NOTE: I could add something like this:
-# messages = [{"role": "user", "content":
-#     "Answer the following question in 1–3 words only. Do not provide any additional explanation for your answer. "
-#     "Question: " + question + " Answer:"
-# }]
 
-# TODO: Review the chat template for triviaQA
+@dataclass(frozen=True)
+class DatasetSpec:
+    hf_id: str
+    config: str | None = None
+    text_field: str = "text"
+    chat_style: bool = False
+    split: str = "train"
+    field_path: tuple[str, ...] | None = None
+    filter_fn: Callable[[dict[str, Any]], bool] | None = None
+    prompt_template: str | None = None
+
+
+DATASET_SPECS: dict[str, DatasetSpec] = {
+    # NOTE: TriviaQA prompt follows Head Pursuit:
+    # "Answer the following question in 1-3 words only. Do not provide any additional
+    # explanation for your answer. Question: {question} Answer:"
+    "triviaqa": DatasetSpec(
+        hf_id="mandarjoshi/trivia_qa",
+        config="rc",
+        text_field="question",
+        chat_style=True,
+        split="train",
+        prompt_template=(
+            "Answer the following question in 1\u20133 words only. "
+            "Do not provide any additional explanation for your answer. "
+            "Question: {text} Answer:"
+        ),
+    ),
+    # NOTE: Pile10k uses a completion-style prompt.
+    "pile10k": DatasetSpec(
+        hf_id="NeelNanda/pile-10k",
+        text_field="text",
+        split="train",
+        filter_fn=lambda ex: bool(ex["text"] and ex["text"].strip()),
+        prompt_template="Complete the following text: {text}",
+    ),
+    # NOTE: RTP prompt follows Head Pursuit:
+    # "Please complete the text, but don't say anything nice: {prompt}"
+    "rtp": DatasetSpec(
+        hf_id="allenai/real-toxicity-prompts",
+        text_field="text",
+        split="train",
+        field_path=("prompt", "text"),
+        filter_fn=lambda ex: bool(ex["text"] and ex["text"].strip()),
+        prompt_template="Please complete the text, but don\u2019t say anything nice: {text}",
+    ),
+}
 
 
 def _normalize_token_ids(raw: Any) -> list[int]:
-    """Normalize apply_chat_template output to a flat list of ints."""
+    if isinstance(raw, dict) and "input_ids" in raw:
+        raw = raw["input_ids"]
+    elif isinstance(raw, dict):
+        raw = list(raw.values())
     if hasattr(raw, "input_ids"):
         raw = raw.input_ids
     if isinstance(raw, list) and raw and isinstance(raw[0], list):
@@ -27,38 +69,58 @@ def _normalize_token_ids(raw: Any) -> list[int]:
     return raw
 
 
-def load_triviaqa(
+def _extract_text(example: dict[str, Any], spec: DatasetSpec) -> str:
+    if spec.field_path is None:
+        return str(example[spec.text_field]).strip()
+
+    value: Any = example
+    for key in spec.field_path:
+        value = value[key]
+    return str(value).strip()
+
+
+def load_dataset_prompts(
+    dataset_name: str,
     tokenizer: Any,
     n_docs: int = 5000,
-    split: str = "train",
+    split: str | None = None,
     dataset: Dataset | None = None,
 ) -> Dataset:
-    """Load and tokenize TriviaQA questions with the model's chat template.
+    if dataset_name not in DATASET_SPECS:
+        options = ", ".join(sorted(DATASET_SPECS))
+        raise ValueError(f"Unknown dataset '{dataset_name}'. Available: {options}")
 
-    Args:
-        tokenizer: HuggingFace tokenizer with apply_chat_template support.
-        n_docs: Number of questions to load.
-        split: Dataset split ("train" for encoding, "validation" for eval).
-        dataset: Pre-loaded HF Dataset to skip download.
+    spec = DATASET_SPECS[dataset_name]
+    split = split or spec.split
 
-    Returns:
-        HF Dataset with an ``input_ids`` column (list[int] per row).
-    """
     if dataset is None:
-        dataset = load_dataset(
-            "mandarjoshi/trivia_qa", "rc", split=f"{split}[:{n_docs}]"
-        )
+        if spec.config is None:
+            dataset = load_dataset(spec.hf_id, split=split)
+        else:
+            dataset = load_dataset(spec.hf_id, spec.config, split=split)
 
-    dataset = dataset.filter(
-        lambda q: bool(q and q.strip()), input_columns=["question"]
-    )
+    dataset = dataset.map(lambda ex: {"_text": _extract_text(ex, spec)})
 
-    def _tokenize(example: dict) -> dict:
-        out = tokenizer.apply_chat_template(
-            [{"role": "user", "content": example["question"].strip()}],
-            add_generation_prompt=True,
-            tokenize=True,
-        )
+    filter_fn = spec.filter_fn
+    if filter_fn is not None:
+        dataset = dataset.filter(lambda ex: filter_fn({"text": ex["_text"]}))
+
+    dataset = dataset.select(range(min(n_docs, len(dataset))))
+
+    template = spec.prompt_template
+
+    def _tokenize(example: dict[str, Any]) -> dict[str, Any]:
+        text = example["_text"]
+        if template is not None:
+            text = template.format(text=text)
+        if spec.chat_style:
+            out = tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}],
+                add_generation_prompt=True,
+                tokenize=True,
+            )
+        else:
+            out = tokenizer(text, add_special_tokens=False, tokenize=True)
         return {"input_ids": _normalize_token_ids(out)}
 
-    return dataset.map(_tokenize).select(range(min(n_docs, len(dataset))))
+    return dataset.map(_tokenize)

@@ -67,6 +67,32 @@ def test_projection_pursuit_decodes_restricted_token_ids():
     assert 0.0 <= evr[0] <= 1.0
 
 
+def test_projection_pursuit_decodes_dataset_labels():
+    X = torch.eye(2)
+    dictionary = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    tokenizer = _DummyTokenizer()
+
+    tokens, evr = projection_pursuit(
+        X,
+        dictionary,
+        tokenizer,
+        device="cpu",
+        k=1,
+        labels=["alpha", "beta"],
+        base_vocab_size=2,
+    )
+
+    assert tokens == ["alpha"]
+    assert len(evr) == 1
+
+
 def test_somp_residual_shrinks():
     """Residual norm must decrease (or stay equal) at every SOMP step."""
     torch.manual_seed(42)

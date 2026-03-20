@@ -29,8 +29,9 @@ set_seed(seed)
 
 # %% Setup
 data_dir = get_data_dir()
-extractions_dir = get_extractions_dir(MODEL_NAME)
-output_dir = get_pursuit_dir(MODEL_NAME)
+DATASET_NAME = "triviaqa"
+extractions_dir = get_extractions_dir(MODEL_NAME, DATASET_NAME)
+output_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME)
 metadata_path = extractions_dir / "metadata.json"
 # labeled_path = output_dir / "results_labeled.json"
 
@@ -47,7 +48,7 @@ FORCE = True
 word_top_k = 25000
 
 min_activations = 5
-pursuit_dir = get_pursuit_dir(MODEL_NAME, CONCEPT)
+pursuit_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME, CONCEPT)
 word_dictionary = None
 if USE_WORD_DICTIONARY:
     metadata = load_metadata(metadata_path)
@@ -60,7 +61,7 @@ if USE_WORD_DICTIONARY:
         base_dictionary,
         top_k=word_top_k,
     )
-    pursuit_dir = get_pursuit_dir(MODEL_NAME, "words")
+    pursuit_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME, "words")
 if (
     not FORCE
     and (pursuit_dir / "results.jsonl").exists()

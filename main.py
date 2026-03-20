@@ -4,7 +4,7 @@
 import argparse
 
 from src.capture import capture_expert_activations
-from src.data import load_triviaqa
+from src.data import DATASET_SPECS, load_dataset_prompts
 from src.environment import (
     get_data_dir,
     get_extractions_dir,
@@ -35,6 +35,14 @@ def main():
         "--n_docs", type=int, default=5000, help="Number of TriviaQA documents"
     )
     extract_parser.add_argument(
+        "--dataset",
+        type=str,
+        default="triviaqa",
+        choices=sorted(DATASET_SPECS),
+        required=False,
+        help="Dataset to extract from (default: triviaqa)",
+    )
+    extract_parser.add_argument(
         "--batch_size", type=int, default=8, help="Batch size for capture"
     )
 
@@ -46,6 +54,14 @@ def main():
         type=str,
         default=None,
         help="Model name (if not specified, reads from metadata.json)",
+    )
+    pursuit_parser.add_argument(
+        "--dataset",
+        type=str,
+        default="triviaqa",
+        choices=sorted(DATASET_SPECS),
+        required=False,
+        help="Dataset used for the extractions (default: triviaqa)",
     )
     pursuit_parser.add_argument(
         "--k", type=int, default=50, help="Top-k tokens per expert"
@@ -76,8 +92,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "extract":
-        from nnsight import LanguageModel
         import torch.distributed as dist
+        from nnsight import LanguageModel
 
         model_kwargs = dict(dtype="auto", dispatch=True)
         if dist.is_initialized() and dist.get_world_size() > 1:
@@ -85,15 +101,21 @@ def main():
         else:
             model_kwargs["device_map"] = "auto"
 
-        model = LanguageModel(args.model, **model_kwargs)
+        model_name = args.model
+        model = LanguageModel(model_name, **model_kwargs)  # type: ignore[arg-type, call-arg]
         tokenizer = model.tokenizer
 
-        prompts = load_triviaqa(tokenizer, n_docs=args.n_docs)
-        print(f"Loaded {len(prompts)} TriviaQA prompts")
+        prompts = load_dataset_prompts(args.dataset, tokenizer, n_docs=args.n_docs)
+        print(f"Loaded {len(prompts)} {args.dataset} prompts")
 
-        output_dir = get_extractions_dir(args.model)
+        output_dir = get_extractions_dir(model_name, args.dataset)
         capture_expert_activations(
-            model, prompts, output_dir, args.model, batch_size=args.batch_size
+            model,
+            prompts,
+            output_dir,
+            model_name=model_name,
+            dataset_name=args.dataset,
+            batch_size=args.batch_size,
         )
 
     elif args.command == "pursuit":
@@ -106,15 +128,15 @@ def main():
         from src.word_dictionary import build_word_dictionary
 
         data_dir = get_data_dir()
-        extractions_dir = data_dir / "extractions"
 
         model_name = args.model or "allenai/OLMoE-1B-7B-0924-Instruct"
+        dataset_name = args.dataset
 
-        extractions_dir = get_extractions_dir(model_name)
+        extractions_dir = get_extractions_dir(model_name, dataset_name)
 
         word_dictionary = None
         if args.word_top_k:
-            output_dir = get_pursuit_dir(model_name, "words")
+            output_dir = get_pursuit_dir(model_name, dataset_name, "words")
             metadata = load_metadata(extractions_dir / "metadata.json")
             tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
             base_dictionary = load_unembedding(
@@ -124,7 +146,7 @@ def main():
                 tokenizer, base_dictionary, top_k=args.word_top_k
             )
         else:
-            output_dir = get_pursuit_dir(model_name, args.concept)
+            output_dir = get_pursuit_dir(model_name, dataset_name, args.concept)
 
         results, evr_matrix, count_matrix = run_pursuit(
             extractions_dir,

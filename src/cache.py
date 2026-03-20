@@ -64,18 +64,6 @@ def _append_to_file(
     tok_ds[-toks.shape[0] :] = toks
 
 
-def append_expert_h5(
-    path: Path,
-    expert_id: int,
-    activations: torch.Tensor,
-    tokens: torch.Tensor,
-) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(path, "a") as f:
-        _append_to_file(f, expert_id, activations, tokens)
-
-
 def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
     path = Path(path)
     group_name = _expert_group_name(expert_id)

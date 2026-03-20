@@ -70,9 +70,12 @@ def get_model_dir(model_name: str) -> Path:
     return get_data_dir() / safe_name
 
 
-def get_extractions_dir(model_name: str) -> Path:
+def get_extractions_dir(model_name: str, dataset: str | None = None) -> Path:
     """Get the extractions directory for a specific model."""
-    return get_model_dir(model_name) / "extractions"
+    extractions_dir = get_model_dir(model_name) / "extractions"
+    if dataset:
+        extractions_dir = extractions_dir / dataset
+    return extractions_dir
 
 
 def get_unembedding_dir(model_name: str) -> Path:
@@ -80,9 +83,15 @@ def get_unembedding_dir(model_name: str) -> Path:
     return get_model_dir(model_name) / "unembedding"
 
 
-def get_pursuit_dir(model_name: str, concept: str | None = None) -> Path:
+def get_pursuit_dir(
+    model_name: str,
+    dataset: str | None = None,
+    concept: str | None = None,
+) -> Path:
     """Get the pursuit output directory for a specific model."""
     pursuit_dir = get_model_dir(model_name) / "pursuit"
+    if dataset:
+        pursuit_dir = pursuit_dir / dataset
     if concept:
         pursuit_dir = pursuit_dir / concept
     return pursuit_dir

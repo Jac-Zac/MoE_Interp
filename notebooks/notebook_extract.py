@@ -13,7 +13,7 @@ from src.cache import (
     save_metadata,
     save_unembedding,
 )
-from src.data import load_triviaqa
+from src.data import load_dataset_prompts
 from src.environment import (
     get_data_dir,
     get_extractions_dir,
@@ -83,12 +83,13 @@ d_model = adapter.d_model
 norm_weight = model.model.norm.weight
 norm_eps = model.model.norm.variance_epsilon
 
-# %% Load TriviaQA prompts
-prompts = load_triviaqa(tokenizer, n_docs=n_docs)
-print(f"Loaded {len(prompts)} TriviaQA prompts")
+# %% Load prompts
+DATASET_NAME = "triviaqa"
+prompts = load_dataset_prompts(DATASET_NAME, tokenizer, n_docs=n_docs)
+print(f"Loaded {len(prompts)} {DATASET_NAME} prompts")
 
 # %% Setup: per-expert storage (variable length, stored on disk)
-output_dir = get_extractions_dir(MODEL_NAME)
+output_dir = get_extractions_dir(MODEL_NAME, DATASET_NAME)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # %% Capture: batched with right-padding to preserve RoPE positional encodings
