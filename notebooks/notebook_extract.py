@@ -5,7 +5,7 @@ import h5py
 import torch
 import torch.nn.functional as F
 from nnsight import LanguageModel
-from tqdm import trange
+from tqdm import tqdm
 
 from src.cache import (
     _append_to_file,
@@ -92,8 +92,10 @@ output_dir = get_extractions_dir(MODEL_NAME)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # %% Capture: batched with right-padding to preserve RoPE positional encodings
-# Sort by length so similar-length prompts land in the same batches
-sorted_prompts = sorted(prompts, key=len, reverse=True)
+# Pre-compute prompt lengths and sort so similar-length prompts land together
+# (minimises right-padding waste per batch, preserving RoPE positions).
+ds = prompts.map(lambda x: {"length": len(x["input_ids"])})  # type: ignore[index]
+ds = ds.sort("length", reverse=True)
 
 # Keep HDF5 files open for the full run (much faster than open/close per write)
 layer_files = {
@@ -103,13 +105,18 @@ layer_files = {
 # Right-pad so token positions are preserved (RoPE stays correct)
 model.tokenizer.padding_side = "right"
 
-for batch_start in trange(0, len(sorted_prompts), batch_size):
-    batch = sorted_prompts[batch_start : batch_start + batch_size]
-    prompt_lengths = [len(p) for p in batch]
-    b_size = len(batch)
+# .iter() yields dicts where batch["input_ids"] is list[list[int]] —
+# exactly the format nnsight's model.trace() expects.
+n_batches = len(ds) // batch_size
+for batch in tqdm(
+    ds.iter(batch_size=batch_size), total=n_batches, desc="Encoding batches"
+):
+    batch_tokens = batch["input_ids"]  # type: ignore[index]
+    prompt_lengths = batch["length"]  # type: ignore[index]
+    b_size = len(batch_tokens)
 
-    with torch.no_grad(), model.trace(batch) as tracer:
-        input_ids = model.inputs[1]["input_ids"].save().detach()
+    with torch.no_grad(), model.trace(batch_tokens) as tracer:
+        input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
 
         layer_datas: list = []
         for layer_idx, layer in enumerate(model.model.layers):
@@ -155,7 +162,7 @@ for batch_start in trange(0, len(sorted_prompts), batch_size):
         last_positions = batch_offsets + actual_lens_tensor - 1
         sample_indices = torch.arange(b_size)
         pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
-        second_moment_last = pre_norm_last.float().pow(2).mean(dim=-1)
+        second_moment_last = torch.atleast_1d(pre_norm_last.float().pow(2).mean(dim=-1))
 
         for layer_idx, layer_data in enumerate(layer_datas):
             active_experts = layer_data["active_experts"]
@@ -217,7 +224,7 @@ for f in layer_files.values():
 save_metadata(
     output_dir,
     model_name=MODEL_NAME,
-    n_docs=len(prompts),
+    n_docs=len(ds),
     n_layers=n_layers,
     n_experts=n_experts,
     d_model=d_model,

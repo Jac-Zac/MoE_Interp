@@ -84,7 +84,7 @@ def _build_dictionary(
 
     token_ids: set[int] = set()
     for word in CONCEPT_WORDS[concept]:
-        token_ids.update(tokenizer(word, add_special_tokens=False)["input_ids"])
+        token_ids.update(tokenizer(word, add_special_tokens=False).input_ids)
 
     sorted_token_ids = sorted(token_ids)
     if not sorted_token_ids:

@@ -74,7 +74,7 @@ def build_word_dictionary(
             continue
         seen.add(cleaned)
 
-        token_ids = tokenizer(" " + cleaned, add_special_tokens=False)["input_ids"]
+        token_ids = tokenizer(" " + cleaned, add_special_tokens=False).input_ids
         if len(token_ids) <= 1:
             continue
 
@@ -99,7 +99,7 @@ def build_word_dictionary(
     # Second pass: build rows with filtered base + promoted words
     rows = [filtered_base]
     for word in labels:
-        token_ids = tokenizer(" " + word, add_special_tokens=False)["input_ids"]
+        token_ids = tokenizer(" " + word, add_special_tokens=False).input_ids
         # NOTE: Re-normalize after averaging — averaging k unit vectors produces
         # a vector with norm < 1, which would bias SOMP against merged words.
         rows.append(F.normalize(dictionary[token_ids].mean(dim=0, keepdim=True), dim=1))

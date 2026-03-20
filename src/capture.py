@@ -5,6 +5,7 @@ from pathlib import Path
 import h5py
 import torch
 import torch.nn.functional as F
+from datasets import Dataset
 from rich.progress import (
     BarColumn,
     Progress,
@@ -25,7 +26,7 @@ from src.model_adapter import get_model_adapter
 
 def capture_expert_activations(
     model,
-    prompts: list[list[int]],
+    prompts: Dataset | list[list[int]],
     output_dir: Path,
     model_name: str | None = None,
     batch_size: int = 8,
@@ -57,8 +58,18 @@ def capture_expert_activations(
     n_experts = adapter.n_experts
     d_model = adapter.d_model
 
-    # Sort by length so similar-length prompts land in the same batches
-    sorted_prompts = sorted(prompts, key=len, reverse=True)
+    # Normalise to HF Dataset so both paths use .iter() for batched iteration.
+    # The Dataset stays memory-mapped (Arrow) — no full Python list is materialised.
+    if not isinstance(prompts, Dataset):
+        prompts = Dataset.from_dict(
+            {"input_ids": sorted(prompts, key=len, reverse=True)}
+        )
+
+    # Pre-compute prompt lengths and sort so similar-length prompts land together
+    # (minimises right-padding waste per batch, preserving RoPE positions).
+    ds = prompts.map(lambda x: {"length": len(x["input_ids"])})  # type: ignore[index]
+    ds = ds.sort("length", reverse=True)
+    n_docs = len(ds)
 
     with Progress(
         SpinnerColumn(),
@@ -67,7 +78,7 @@ def capture_expert_activations(
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TimeRemainingColumn(),
     ) as progress:
-        task = progress.add_task("Capturing prompts", total=len(prompts))
+        task = progress.add_task("Capturing prompts", total=n_docs)
 
         layer_files = {}
         if is_rank0():
@@ -79,13 +90,13 @@ def capture_expert_activations(
         # Right-pad so token positions are preserved (RoPE stays correct)
         model.tokenizer.padding_side = "right"
 
-        # NOTE: Sorted prompts favours batching of prompt of similar size together
-        for batch_start in range(0, len(sorted_prompts), batch_size):
-            batch = sorted_prompts[batch_start : batch_start + batch_size]
-            prompt_lengths = [len(p) for p in batch]
-            b_size = len(batch)
+        # .iter() yields dicts where batch["input_ids"] is list[list[int]] — exactly the format nnsight's model.trace() expects.
+        for batch in ds.iter(batch_size=batch_size):
+            batch_tokens = batch["input_ids"]  # type: ignore[index]
+            prompt_lengths = batch["length"]  # type: ignore[index]
+            b_size = len(batch_tokens)
 
-            with torch.no_grad(), model.trace(batch) as tracer:
+            with torch.no_grad(), model.trace(batch_tokens) as tracer:
                 input_ids = model.inputs[1]["input_ids"].save().detach()
                 norm_layer = model.model.norm
 
@@ -176,7 +187,7 @@ def capture_expert_activations(
                                 last_token_ids.cpu(),
                             )
 
-            progress.advance(task, len(batch))
+            progress.advance(task, b_size)
 
         model.tokenizer.padding_side = "left"
 
@@ -186,7 +197,7 @@ def capture_expert_activations(
 
     metadata = {
         "model_name": model_name,
-        "n_docs": len(prompts),
+        "n_docs": n_docs,
         "n_layers": n_layers,
         "n_experts": n_experts,
         "d_model": d_model,
@@ -194,7 +205,7 @@ def capture_expert_activations(
     if is_rank0():
         save_metadata(output_dir, **metadata)
 
-        unembedding_dir = get_unembedding_dir(model_name)
+        unembedding_dir = get_unembedding_dir(model_name)  # type: ignore[arg-type]
         dictionary = F.normalize(get_model_unembedding(model), dim=1)
         save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
         print(f"Saved unembedding to {unembedding_dir}")

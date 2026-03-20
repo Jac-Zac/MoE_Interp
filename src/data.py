@@ -1,11 +1,30 @@
 """TriviaQA data loading for Expert Pursuit.
 
-Simple loader following HeadPursuit's approach: returns tokenized prompts as list of token ID lists.
+Uses HF datasets.map() for faster tokenization instead of a Python loop.
 """
 
 from typing import Any
 
 from datasets import Dataset, load_dataset
+
+# NOTE: I could add something like this:
+# messages = [{"role": "user", "content":
+#     "Answer the following question in 1–3 words only. Do not provide any additional explanation for your answer. "
+#     "Question: " + question + " Answer:"
+# }]
+
+# TODO: Review the chat template for triviaQA
+
+
+def _normalize_token_ids(raw: Any) -> list[int]:
+    """Normalize apply_chat_template output to a flat list of ints."""
+    if hasattr(raw, "input_ids"):
+        raw = raw.input_ids
+    if isinstance(raw, list) and raw and isinstance(raw[0], list):
+        raw = raw[0]
+    if not isinstance(raw, list):
+        raw = list(raw)
+    return raw
 
 
 def load_triviaqa(
@@ -13,7 +32,7 @@ def load_triviaqa(
     n_docs: int = 5000,
     split: str = "train",
     dataset: Dataset | None = None,
-) -> list[list[int]]:
+) -> Dataset:
     """Load and tokenize TriviaQA questions with the model's chat template.
 
     Args:
@@ -23,34 +42,23 @@ def load_triviaqa(
         dataset: Pre-loaded HF Dataset to skip download.
 
     Returns:
-        List of token ID lists, each wrapped in the model's chat template.
+        HF Dataset with an ``input_ids`` column (list[int] per row).
     """
     if dataset is None:
-        dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split=split)
-
-    prompts: list[list[int]] = []
-
-    for row in dataset:
-        if len(prompts) >= n_docs:
-            break
-
-        question = dict(row).get("question", "").strip()
-        if not question:
-            continue
-
-        messages = [{"role": "user", "content": question}]
-        token_ids = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=True
+        dataset = load_dataset(
+            "mandarjoshi/trivia_qa", "rc", split=f"{split}[:{n_docs}]"
         )
 
-        if hasattr(token_ids, "input_ids"):
-            token_ids = token_ids.input_ids
-            if isinstance(token_ids[0], list):
-                token_ids = token_ids[0]
-        elif not isinstance(token_ids, list):
-            token_ids = list(token_ids)
+    dataset = dataset.filter(
+        lambda q: bool(q and q.strip()), input_columns=["question"]
+    )
 
-        if token_ids:
-            prompts.append(token_ids)
+    def _tokenize(example: dict) -> dict:
+        out = tokenizer.apply_chat_template(
+            [{"role": "user", "content": example["question"].strip()}],
+            add_generation_prompt=True,
+            tokenize=True,
+        )
+        return {"input_ids": _normalize_token_ids(out)}
 
-    return prompts
+    return dataset.map(_tokenize).select(range(min(n_docs, len(dataset))))
