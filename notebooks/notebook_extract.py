@@ -53,16 +53,22 @@ def apply_component_rmsnorm_like_hf(
 seed = 1337
 n_docs = 16
 batch_size = 1
+
+# NOTE: gpt-oss doesn't fit in a V100 but current code support pipeline parallelism by default
+# Thus the model will be shared between two gpus.
 # MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
 
 load_env()
 set_seed(seed)
 data_dir = get_data_dir()
+# The main.py CLI automatically detects distributed setup and uses tp_plan="auto"
 model = LanguageModel(
     MODEL_NAME,
     device_map="auto",
-    dtype="auto",  # automatically dispatch bfloat16 usually
+    # automatically dispatch bfloat16 usually
+    # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
+    dtype="auto",
     dispatch=True,
 )
 

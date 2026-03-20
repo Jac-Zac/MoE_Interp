@@ -19,7 +19,7 @@ from src.cache import (
     save_metadata,
     save_unembedding,
 )
-from src.environment import get_unembedding_dir
+from src.environment import get_unembedding_dir, is_rank0
 from src.model_adapter import get_model_adapter
 
 
@@ -46,7 +46,8 @@ def capture_expert_activations(
         Metadata dict with model_name, n_docs, n_layers, n_experts, d_model
     """
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if is_rank0():
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     if model_name is None:
         model_name = model.config._name_or_path
@@ -68,9 +69,12 @@ def capture_expert_activations(
     ) as progress:
         task = progress.add_task("Capturing prompts", total=len(prompts))
 
-        layer_files = {
-            i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a") for i in range(n_layers)
-        }
+        layer_files = {}
+        if is_rank0():
+            layer_files = {
+                i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
+                for i in range(n_layers)
+            }
 
         # Right-pad so token positions are preserved (RoPE stays correct)
         model.tokenizer.padding_side = "right"
@@ -164,19 +168,21 @@ def capture_expert_activations(
                         last_token_ids = input_ids[batch_indices, pos_in_batch]
 
                         # Single write per expert (was b_size writes)
-                        _append_to_file(
-                            layer_files[layer_idx],
-                            expert_id,
-                            gated_output.half(),
-                            last_token_ids,
-                        )
+                        if is_rank0():
+                            _append_to_file(
+                                layer_files[layer_idx],
+                                expert_id,
+                                gated_output.half(),
+                                last_token_ids,
+                            )
 
             progress.advance(task, len(batch))
 
         model.tokenizer.padding_side = "left"
 
-        for f in layer_files.values():
-            f.close()
+        if is_rank0():
+            for f in layer_files.values():
+                f.close()
 
     metadata = {
         "model_name": model_name,
@@ -185,12 +191,13 @@ def capture_expert_activations(
         "n_experts": n_experts,
         "d_model": d_model,
     }
-    save_metadata(output_dir, **metadata)
+    if is_rank0():
+        save_metadata(output_dir, **metadata)
 
-    unembedding_dir = get_unembedding_dir(model_name)
-    dictionary = F.normalize(get_model_unembedding(model), dim=1)
-    save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
-    print(f"Saved unembedding to {unembedding_dir}")
-    print(f"Saved activations to {output_dir}")
+        unembedding_dir = get_unembedding_dir(model_name)
+        dictionary = F.normalize(get_model_unembedding(model), dim=1)
+        save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
+        print(f"Saved unembedding to {unembedding_dir}")
+        print(f"Saved activations to {output_dir}")
 
     return metadata

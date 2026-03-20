@@ -27,6 +27,9 @@ python -m pytest
 # Run extraction (capture expert activations)
 python main.py extract --n_docs 5000
 
+# For tensor parallelism (2 GPUs), use torchrun for better GPU utilization:
+torchrun --nproc_per_node=2 python main.py extract --model "openai_gpt_oss_20b"
+
 # Run pursuit analysis (generates plots)
 python main.py pursuit --k 100
 ```
@@ -40,6 +43,14 @@ python main.py extract [--model MODEL] [--n_docs N]
 ```
 
 Saves per-layer HDF5 activations and metadata to `data/extractions/`.
+
+**Multi-GPU Support:** For better GPU utilization with 2 GPUs, use tensor parallelism:
+
+```bash
+torchrun --nproc_per_node=2 python main.py extract [--model MODEL] [--n_docs N]
+```
+
+This distributes each layer's computation across GPUs (tensor parallelism) instead of splitting layers (pipeline parallelism), resulting in more balanced GPU usage and improved throughput.
 
 ### `pursuit` - Run analysis and generate plots
 

@@ -77,13 +77,15 @@ def main():
 
     if args.command == "extract":
         from nnsight import LanguageModel
+        import torch.distributed as dist
 
-        model = LanguageModel(
-            args.model,
-            device_map="auto",
-            dtype="auto",
-            dispatch=True,
-        )
+        model_kwargs = dict(dtype="auto", dispatch=True)
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            model_kwargs["tp_plan"] = "auto"
+        else:
+            model_kwargs["device_map"] = "auto"
+
+        model = LanguageModel(args.model, **model_kwargs)
         tokenizer = model.tokenizer
 
         prompts = load_triviaqa(tokenizer, n_docs=args.n_docs)
