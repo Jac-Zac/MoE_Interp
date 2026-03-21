@@ -36,7 +36,10 @@ def main():
         model = LanguageModel(model_name, **model_kwargs)  # type: ignore[arg-type, call-arg]
 
         prompts = load_dataset_prompts(
-            args.dataset, model.tokenizer, n_docs=args.n_docs
+            args.dataset,
+            model.tokenizer,
+            n_docs=args.n_docs,
+            max_length=model.config.max_position_embeddings,
         )
         print(f"Loaded {len(prompts)} {args.dataset} prompts")
 

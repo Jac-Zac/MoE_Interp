@@ -1,5 +1,4 @@
 import argparse
-import logging
 import os
 import sys
 
@@ -9,11 +8,6 @@ from datasets import load_dataset
 from dotenv import load_dotenv
 
 from src.data import DATASET_SPECS
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
 
 DEFAULT_MODELS = [
     "allenai/OLMoE-1B-7B-0924-Instruct",
@@ -46,21 +40,21 @@ def main():
     datasets_to_download = args.dataset if args.dataset else sorted(DATASET_SPECS)
 
     for repo_id in models_to_download:
-        logger.info(f"Downloading model: {repo_id}")
+        print(f"Downloading model: {repo_id}")
         from huggingface_hub import snapshot_download
 
         snapshot_download(repo_id=repo_id, token=hf_token)
-        logger.info(f"Model '{repo_id}' ready")
+        print(f"Model '{repo_id}' ready")
 
     for name in datasets_to_download:
         spec = DATASET_SPECS[name]
-        logger.info(
+        print(
             f"Downloading dataset: {spec.hf_id} (config={spec.config}, split={spec.split})"
         )
         load_dataset(spec.hf_id, spec.config, split=spec.split, token=hf_token)
-        logger.info(f"Dataset '{name}' ready")
+        print(f"Dataset '{name}' ready")
 
-    logger.info("All downloads complete")
+    print("All downloads complete")
 
 
 if __name__ == "__main__":

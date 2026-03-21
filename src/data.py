@@ -85,6 +85,7 @@ def load_dataset_prompts(
     n_docs: int | None = None,
     split: str | None = None,
     dataset: Dataset | None = None,
+    max_length: int = 4096,
 ) -> Dataset:
     if dataset_name not in DATASET_SPECS:
         options = ", ".join(sorted(DATASET_SPECS))
@@ -122,7 +123,14 @@ def load_dataset_prompts(
                 tokenize=True,
             )
         else:
-            out = tokenizer(text, add_special_tokens=False, tokenize=True)
+            # HACK: Truncate the document if it exceeds the max_pos embedding
+            out = tokenizer(
+                text,
+                add_special_tokens=False,
+                tokenize=True,
+                truncation=True,
+                max_length=max_length,
+            )
         return {"input_ids": _normalize_token_ids(out)}
 
     return dataset.map(_tokenize)
