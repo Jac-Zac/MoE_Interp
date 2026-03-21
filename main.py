@@ -6,7 +6,6 @@ import argparse
 from src.capture import capture_expert_activations
 from src.data import DATASET_SPECS, load_dataset_prompts
 from src.environment import (
-    get_data_dir,
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
@@ -32,7 +31,10 @@ def main():
         help="Model name or path",
     )
     extract_parser.add_argument(
-        "--n_docs", type=int, default=5000, help="Number of TriviaQA documents"
+        "--n_docs",
+        type=int,
+        default=None,
+        help="Number of TriviaQA documents (default: all docs)",
     )
     extract_parser.add_argument(
         "--dataset",
@@ -103,9 +105,10 @@ def main():
 
         model_name = args.model
         model = LanguageModel(model_name, **model_kwargs)  # type: ignore[arg-type, call-arg]
-        tokenizer = model.tokenizer
 
-        prompts = load_dataset_prompts(args.dataset, tokenizer, n_docs=args.n_docs)
+        prompts = load_dataset_prompts(
+            args.dataset, model.tokenizer, n_docs=args.n_docs
+        )
         print(f"Loaded {len(prompts)} {args.dataset} prompts")
 
         output_dir = get_extractions_dir(model_name, args.dataset)
@@ -126,8 +129,6 @@ def main():
 
         from src.cache import load_metadata, load_unembedding
         from src.word_dictionary import build_word_dictionary
-
-        data_dir = get_data_dir()
 
         model_name = args.model or "allenai/OLMoE-1B-7B-0924-Instruct"
         dataset_name = args.dataset
@@ -153,7 +154,6 @@ def main():
             min_activations=args.min_activations,
             k=args.k,
             output_dir=output_dir,
-            data_dir=data_dir,
             concept=args.concept,
             word_dictionary=word_dictionary,
         )

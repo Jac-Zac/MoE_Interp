@@ -62,9 +62,7 @@ def capture_expert_activations(
     # Normalise to HF Dataset so both paths use .iter() for batched iteration.
     # The Dataset stays memory-mapped (Arrow) — no full Python list is materialised.
     if not isinstance(prompts, Dataset):
-        prompts = Dataset.from_dict(
-            {"input_ids": sorted(prompts, key=len, reverse=True)}
-        )
+        prompts = Dataset.from_dict({"input_ids": prompts})
 
     # Pre-compute prompt lengths and sort so similar-length prompts land together
     # (minimises right-padding waste per batch, preserving RoPE positions).

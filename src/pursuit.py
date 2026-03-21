@@ -111,7 +111,6 @@ def run_pursuit(
     min_activations: int = 5,
     k: int = 50,
     output_dir: Path | None = None,
-    data_dir: Path | None = None,
     concept: str | None = None,
     word_dictionary: WordDictionary | None = None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray]:
@@ -123,7 +122,6 @@ def run_pursuit(
         k: Number of top tokens to return per expert
         output_dir: If set, results.jsonl is written incrementally (flush per expert)
             so progress is never lost if the run is interrupted.
-        data_dir: Data directory containing unembedding. If None, derived from extractions_dir.
         concept: Optional concept name to restrict the unembedding dictionary.
             Must be a key in CONCEPT_WORDS (e.g. "offensive", "countries", "numbers").
 
@@ -136,9 +134,6 @@ def run_pursuit(
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-
-    if data_dir is None:
-        data_dir = extractions_dir.parent
 
     # Determine device and move dictionary to it once — avoids 1024 redundant
     # host-to-device transfers of the 393 MB unembedding matrix.
@@ -217,11 +212,7 @@ def run_pursuit(
                 )
 
                 for expert_idx, acts in expert_acts.items():
-                    acts = acts.float()
-                    if acts.var(dim=0).sum() < 1e-10:
-                        progress.advance(expert_task)
-                        continue
-                    X = acts.to(device)
+                    X = acts.float().to(device)
                     tokens, evr = projection_pursuit(
                         X,
                         dictionary,

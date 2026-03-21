@@ -9,7 +9,6 @@ from transformers import AutoTokenizer
 
 from src.cache import load_metadata, load_unembedding
 from src.environment import (
-    get_data_dir,
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
@@ -28,7 +27,6 @@ load_env()
 set_seed(seed)
 
 # %% Setup
-data_dir = get_data_dir()
 DATASET_NAME = "triviaqa"
 extractions_dir = get_extractions_dir(MODEL_NAME, DATASET_NAME)
 output_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME)
@@ -76,7 +74,6 @@ else:
         min_activations=min_activations,
         k=50,
         output_dir=pursuit_dir,
-        data_dir=data_dir,
         concept=CONCEPT,
         word_dictionary=word_dictionary,
     )

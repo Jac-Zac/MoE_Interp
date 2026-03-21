@@ -28,17 +28,14 @@ def plot_scatter_grid(
     """
     n_layers, n_experts = values.shape
 
-    layers: list[int] = []
-    experts: list[int] = []
-    flat_values: list[float] = []
-    hovers: list[str] = []
-
-    for lyr in range(n_layers):
-        for exp in range(n_experts):
-            layers.append(lyr)
-            experts.append(exp)
-            flat_values.append(values[lyr, exp])
-            hovers.append(f"L{lyr} E{exp}<br>{color_label}: {values[lyr, exp]:.4f}")
+    layers_grid, experts_grid = np.meshgrid(np.arange(n_layers), np.arange(n_experts))
+    layers = layers_grid.ravel().tolist()
+    experts = experts_grid.ravel().tolist()
+    flat_values = values.T.ravel().tolist()
+    hovers = [
+        f"L{l} E{e}<br>{color_label}: {v:.4f}"
+        for l, e, v in zip(layers, experts, flat_values)
+    ]
 
     fig = go.Figure()
     fig.add_trace(

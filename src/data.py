@@ -82,7 +82,7 @@ def _extract_text(example: dict[str, Any], spec: DatasetSpec) -> str:
 def load_dataset_prompts(
     dataset_name: str,
     tokenizer: Any,
-    n_docs: int = 5000,
+    n_docs: int | None = None,
     split: str | None = None,
     dataset: Dataset | None = None,
 ) -> Dataset:
@@ -105,7 +105,9 @@ def load_dataset_prompts(
     if filter_fn is not None:
         dataset = dataset.filter(lambda ex: filter_fn({"text": ex["_text"]}))
 
-    dataset = dataset.select(range(min(n_docs, len(dataset))))
+    dataset = dataset.select(
+        range(min(n_docs, len(dataset))) if n_docs is not None else range(len(dataset))
+    )
 
     template = spec.prompt_template
 
