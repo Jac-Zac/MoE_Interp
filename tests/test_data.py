@@ -22,7 +22,7 @@ class _DummyTokenizer:
         )
         return [101, 102, 103]
 
-    def __call__(self, text, add_special_tokens=False, tokenize=False):
+    def __call__(self, text, add_special_tokens=False, tokenize=False, **kwargs):
         self.text_calls.append(
             {
                 "text": text,

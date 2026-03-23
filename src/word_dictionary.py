@@ -14,6 +14,7 @@ class WordDictionary:
     embeddings: torch.Tensor
     labels: list[str]
     base_vocab_size: int
+    kept_token_ids: list[int] | None = None
 
 
 def load_common_words(top_k: int = 10000, source: str = "default") -> list[str]:
@@ -83,18 +84,24 @@ def build_word_dictionary(
 
     # Filter: remove subtokens that are also standalone promoted words
     promoted_words = set(labels)
-    tokens_to_remove: set[int] = set()
-    for tid in subtoken_ids:
-        decoded = tokenizer.decode([tid]).strip()
-        if decoded not in promoted_words:
-            tokens_to_remove.add(tid)
+    subtoken_list = list(subtoken_ids)
+    all_decoded = tokenizer.batch_decode([[tid] for tid in subtoken_list])
+    tokens_to_remove = {
+        tid
+        for tid, dec in zip(subtoken_list, all_decoded)
+        if dec.strip() not in promoted_words
+    }
 
     # Build filtered base dictionary (remove sub-tokens)
     base_vocab_size = dictionary.shape[0]
-    keep_mask = torch.tensor(
-        [i not in tokens_to_remove for i in range(base_vocab_size)], dtype=torch.bool
-    )
+    all_token_ids = list(range(base_vocab_size))
+    keep_mask = torch.ones(base_vocab_size, dtype=torch.bool)
+    if tokens_to_remove:
+        keep_mask[list(tokens_to_remove)] = False
     filtered_base = dictionary[keep_mask]
+    kept_token_ids = [
+        tid for tid, keep in zip(all_token_ids, keep_mask.tolist()) if keep
+    ]
 
     # Second pass: build rows with filtered base + promoted words
     rows = [filtered_base]
@@ -116,7 +123,8 @@ def build_word_dictionary(
     )
 
     return WordDictionary(
-        embeddings=torch.cat(rows, dim=0) if len(labels) > 0 else filtered_base,
+        embeddings=torch.cat(rows, dim=0),
         labels=labels,
         base_vocab_size=filtered_base.shape[0],
+        kept_token_ids=kept_token_ids,
     )

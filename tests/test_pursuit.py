@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 from src.pursuit import projection_pursuit
 from src.sparse_decomposition import somp
+from src.word_dictionary import WordDictionary
 
 
 class _DummyTokenizer:
@@ -126,3 +127,52 @@ def test_somp_residual_shrinks():
     # chosen atoms must be unique
     chosen = result["chosen"].tolist()
     assert len(chosen) == len(set(chosen)), "SOMP selected duplicate atoms"
+
+
+def test_projection_pursuit_decodes_kept_token_ids():
+    """Verify that kept_token_ids are used correctly for decoding base dictionary tokens."""
+    # Create a dictionary where row index != token ID (simulates filtering)
+    # Row 0 -> token ID 5, Row 1 -> token ID 10, Row 2 -> token ID 15
+    X = torch.eye(2)
+    dictionary = torch.tensor(
+        [
+            [1.0, 0.0],  # row 0 (token ID 5)
+            [0.0, 1.0],  # row 1 (token ID 10)
+            [0.5, 0.5],  # row 2 (token ID 15) - word atom
+        ]
+    )
+    tokenizer = _DummyTokenizer()
+
+    tokens, evr = projection_pursuit(
+        X,
+        dictionary,
+        tokenizer,
+        device="cpu",
+        k=2,
+        token_ids=[5, 10, 15],
+        labels=["word_atom"],
+        base_vocab_size=3,
+    )
+
+    # Should decode using kept_token_ids, not row indices
+    assert "tok_5" in tokens
+    assert "tok_10" in tokens
+    assert len(evr) == 2
+
+
+def test_word_dictionary_kept_token_ids():
+    """Verify WordDictionary stores and provides kept_token_ids."""
+    # base_vocab_size=3 (filtered rows), 2 word atoms appended
+    embeddings = torch.randn(5, 4)
+    labels = ["word1", "word2"]
+    kept_token_ids = [0, 2, 4]  # 3 kept base token IDs
+
+    wd = WordDictionary(
+        embeddings=embeddings,
+        labels=labels,
+        base_vocab_size=3,
+        kept_token_ids=kept_token_ids,
+    )
+
+    assert wd.kept_token_ids == kept_token_ids
+    assert len(wd.kept_token_ids) == wd.base_vocab_size

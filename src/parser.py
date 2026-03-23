@@ -60,13 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Minimum activations to analyze expert",
     )
-    pursuit_parser.add_argument(
+    concept_group = pursuit_parser.add_mutually_exclusive_group()
+    concept_group.add_argument(
         "--concept",
         type=str,
         default=None,
         help="Optional concept restriction: offensive, countries, numbers",
     )
-    pursuit_parser.add_argument(
+    concept_group.add_argument(
         "--word_top_k",
         type=int,
         default=None,

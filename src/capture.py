@@ -99,6 +99,16 @@ def capture_expert_activations(
                 input_ids = model.inputs[1]["input_ids"].save().detach()
                 norm_layer = model.model.norm
 
+                max_len = input_ids.shape[1]
+
+                # NOTE: Here we take the last token but averaging over content
+                # tokens can also be performed instead
+
+                # Pre-compute last-token positions for all batches (vectorized)
+                batch_offsets = torch.arange(b_size) * max_len
+                actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
+                last_positions = batch_offsets + actual_lens_tensor - 1
+
                 for layer_idx, layer in enumerate(model.model.layers):
                     _, weights, indices = adapter.get_router_output(layer)
                     top_k_weights = weights.save().detach()
@@ -132,16 +142,6 @@ def capture_expert_activations(
                         "top_k_pos": top_k_pos_list,
                         "weights": top_k_weights,
                     }
-
-                    max_len = input_ids.shape[1]
-
-                    # NOTE: Here we take the last token but averaging over content
-                    # tokens can also be performed instead
-
-                    # Pre-compute last-token positions for all batches (vectorized)
-                    batch_offsets = torch.arange(b_size) * max_len
-                    actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
-                    last_positions = batch_offsets + actual_lens_tensor - 1
 
                     for i, expert_id in enumerate(active_experts.tolist()):
                         token_idx = layer_data["token_indices"][i]

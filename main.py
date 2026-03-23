@@ -54,9 +54,6 @@ def main():
         )
 
     elif args.command == "pursuit":
-        if args.concept and args.word_top_k:
-            parser.error("--concept and --word_top_k are mutually exclusive")
-
         from transformers import AutoTokenizer
 
         from src.cache import load_metadata, load_unembedding

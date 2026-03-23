@@ -113,6 +113,7 @@ def run_pursuit(
     output_dir: Path | None = None,
     concept: str | None = None,
     word_dictionary: WordDictionary | None = None,
+    tokenizer=None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray]:
     """Run projection pursuit on all experts.
 
@@ -128,8 +129,6 @@ def run_pursuit(
     Returns:
         Tuple of (results list, evr_matrix, count_matrix)
     """
-    from transformers import AutoTokenizer
-
     extractions_dir = Path(extractions_dir)
     if output_dir is not None:
         output_dir = Path(output_dir)
@@ -152,7 +151,10 @@ def run_pursuit(
             "Please re-extract with a newer version that saves model_name."
         )
 
-    tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
+    if tokenizer is None:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
     if word_dictionary is None:
         dictionary = (
             load_unembedding(
@@ -177,7 +179,7 @@ def run_pursuit(
             raise ValueError(
                 "word_dictionary labels must match appended embedding rows"
             )
-        token_ids = None
+        token_ids = word_dictionary.kept_token_ids
 
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]

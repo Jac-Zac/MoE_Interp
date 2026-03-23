@@ -62,6 +62,7 @@ def pca(X, k, compute_evr: bool = True, *args, **kwargs):
     # explained_variance = S**2 / (X.size(0) - 1)  # Variance explained by each singular value
     # explained_variance_ratio = explained_variance[:k] / explained_variance.sum()
 
+    evr = l2 = cosine = None
     if compute_evr:
         std_orig = torch.std(X, dim=0) ** 2
 
