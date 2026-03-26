@@ -84,7 +84,14 @@ def _build_dictionary(
 
     token_ids: set[int] = set()
     for word in CONCEPT_WORDS[concept]:
-        token_ids.update(tokenizer(word, add_special_tokens=False).input_ids)
+        ids = tokenizer(word, add_special_tokens=False).input_ids
+        # HACK: Only keep single-token words. Multi-token words produce sub-word
+        # fragments (e.g. "violence" -> ["viol", "ence"]) that dominate the results
+        # with meaningless BPE pieces. A proper fix would average multi-token word
+        # embeddings into word atoms (see word_dictionary.py), but this gives clean
+        # interpretable results for now.
+        if len(ids) == 1:
+            token_ids.add(ids[0])
 
     sorted_token_ids = sorted(token_ids)
     if not sorted_token_ids:
