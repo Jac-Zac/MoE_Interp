@@ -5,7 +5,6 @@ import torch.nn.functional as F
 
 from src.pursuit import projection_pursuit
 from src.sparse_decomposition import somp
-from src.word_dictionary import WordDictionary
 
 
 class _DummyTokenizer:
@@ -160,19 +159,21 @@ def test_projection_pursuit_decodes_kept_token_ids():
     assert len(evr) == 2
 
 
-def test_word_dictionary_kept_token_ids():
-    """Verify WordDictionary stores and provides kept_token_ids."""
-    # base_vocab_size=3 (filtered rows), 2 word atoms appended
-    embeddings = torch.randn(5, 4)
-    labels = ["word1", "word2"]
-    kept_token_ids = [0, 2, 4]  # 3 kept base token IDs
+def test_projection_pursuit_decodes_concept_labels():
+    """When token_ids is None and labels are set, decode via labels."""
+    X = torch.eye(3)
+    dictionary = torch.eye(3)
+    tokenizer = _DummyTokenizer()
 
-    wd = WordDictionary(
-        embeddings=embeddings,
-        labels=labels,
-        base_vocab_size=3,
-        kept_token_ids=kept_token_ids,
+    tokens, evr = projection_pursuit(
+        X,
+        dictionary,
+        tokenizer,
+        device="cpu",
+        k=2,
+        token_ids=None,
+        labels=["violence", "hate", "crime"],
     )
 
-    assert wd.kept_token_ids == kept_token_ids
-    assert len(wd.kept_token_ids) == wd.base_vocab_size
+    assert tokens == ["violence", "hate"]
+    assert len(evr) == 2

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from rich.progress import (
     BarColumn,
     Progress,
@@ -57,6 +58,11 @@ def projection_pursuit(
 
     tokens = []
     for idx in result["chosen"].tolist():
+        # HACK: Concept mode sets token_ids=None and labels contains concept words.
+        # In dataset mode, base_vocab_size is set and word atoms come after base vocab.
+        if labels is not None and token_ids is None and base_vocab_size is None:
+            tokens.append(labels[idx])
+            continue
         if (
             labels is not None
             and base_vocab_size is not None
@@ -68,36 +74,6 @@ def projection_pursuit(
         tokens.append(tokenizer.decode([token_id]).strip())
     evr_values = result["evr"].tolist()
     return tokens, evr_values
-
-
-def _build_dictionary(
-    dictionary: torch.Tensor,
-    tokenizer,
-    concept: str | None,
-) -> tuple[torch.Tensor, list[int] | None]:
-    if concept is None:
-        return dictionary, None
-
-    if concept not in CONCEPT_WORDS:
-        options = ", ".join(sorted(CONCEPT_WORDS))
-        raise ValueError(f"Unknown concept '{concept}'. Available concepts: {options}")
-
-    token_ids: set[int] = set()
-    for word in CONCEPT_WORDS[concept]:
-        ids = tokenizer(word, add_special_tokens=False).input_ids
-        # HACK: Only keep single-token words. Multi-token words produce sub-word
-        # fragments (e.g. "violence" -> ["viol", "ence"]) that dominate the results
-        # with meaningless BPE pieces. A proper fix would average multi-token word
-        # embeddings into word atoms (see word_dictionary.py), but this gives clean
-        # interpretable results for now.
-        if len(ids) == 1:
-            token_ids.add(ids[0])
-
-    sorted_token_ids = sorted(token_ids)
-    if not sorted_token_ids:
-        raise ValueError(f"Concept '{concept}' produced no token ids")
-
-    return dictionary[sorted_token_ids], sorted_token_ids
 
 
 def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray, np.ndarray | None]:
@@ -170,12 +146,44 @@ def run_pursuit(
             .float()
             .to(device)
         )
-        # When a concept is given, restrict the dictionary to tokens for that concept's
-        # word list and keep sorted_token_ids for remapping SOMP row indices back to
-        # full-vocabulary ids at decode time (mirrors HeadPursuit's tokens_data[token]).
-        dictionary, token_ids = _build_dictionary(dictionary, tokenizer, concept)
+        token_ids = None
         labels = None
         base_vocab_size = None
+        if concept is not None:
+            if concept not in CONCEPT_WORDS:
+                options = ", ".join(sorted(CONCEPT_WORDS))
+                raise ValueError(
+                    f"Unknown concept '{concept}'. Available concepts: {options}"
+                )
+            # HACK: Manually build concept dictionary — include both single-token
+            # words (using their unembedding row) and multi-token words (averaged).
+            # Multi-token words are averaged and L2-normalized to prevent bias.
+            concept_words = CONCEPT_WORDS[concept]
+            single_labels = []
+            multi_labels = []
+            multi_token_ids = []
+            for w in concept_words:
+                tokens = tokenizer(w, add_special_tokens=False).input_ids
+                if len(tokens) == 1:
+                    single_labels.append((w, tokens[0]))
+                else:
+                    multi_labels.append(w)
+                    multi_token_ids.append(tokens)
+            single_atoms = dictionary[[tid for _, tid in single_labels]].float()
+            multi_atoms = torch.stack(
+                [
+                    F.normalize(dictionary[tids].mean(dim=0), dim=0)
+                    for tids in multi_token_ids
+                ]
+            ).float()
+            dictionary = torch.cat([single_atoms, multi_atoms], dim=0).to(device)
+            labels = [w for w, _ in single_labels] + multi_labels
+            n = len(labels)
+            base_vocab_size = None
+            token_ids = None
+            print(
+                f"Concept '{concept}': {n} atoms ({len(multi_labels)} multi-token averaged)"
+            )
     else:
         dictionary = word_dictionary.embeddings.float().to(device)
         labels = word_dictionary.labels
