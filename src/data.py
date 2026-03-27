@@ -127,7 +127,6 @@ def load_dataset_prompts(
             out = tokenizer(
                 text,
                 add_special_tokens=False,
-                tokenize=True,
                 truncation=True,
                 max_length=max_length,
             )

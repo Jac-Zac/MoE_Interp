@@ -80,7 +80,7 @@ def test_pile10k_uses_prompt_template():
         {
             "text": "Complete the following text: Hello world",
             "add_special_tokens": False,
-            "tokenize": True,
+            "tokenize": False,
         }
     ]
     assert prompts[0]["input_ids"] == [201, 202, 203]
@@ -109,7 +109,7 @@ def test_rtp_uses_nested_prompt_text_with_headpursuit_template():
         {
             "text": "Please complete the text, but don\u2019t say anything nice: This is a prompt",
             "add_special_tokens": False,
-            "tokenize": True,
+            "tokenize": False,
         }
     ]
     assert prompts[0]["input_ids"] == [201, 202, 203]

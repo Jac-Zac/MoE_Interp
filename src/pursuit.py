@@ -45,7 +45,7 @@ def projection_pursuit(
         return [], []
 
     X = X.float()
-    if X.device.type == "cpu" and X.var(dim=0).sum() < 1e-10:
+    if X.var(dim=0).sum().item() < 1e-10:
         return [], []
 
     decomposition = SOMP(k=k, compute_evr=True, return_full=False)
@@ -56,24 +56,35 @@ def projection_pursuit(
         device=device,
     )
 
-    tokens = []
-    for idx in result["chosen"].tolist():
-        # HACK: Concept mode sets token_ids=None and labels contains concept words.
-        # In dataset mode, base_vocab_size is set and word atoms come after base vocab.
-        if labels is not None and token_ids is None and base_vocab_size is None:
-            tokens.append(labels[idx])
-            continue
-        if (
-            labels is not None
-            and base_vocab_size is not None
-            and idx >= base_vocab_size
-        ):
-            tokens.append(labels[idx - base_vocab_size])
-            continue
-        token_id = idx if token_ids is None else token_ids[idx]
-        tokens.append(tokenizer.decode([token_id]).strip())
+    tokens = [
+        _decode_atom(
+            idx,
+            tokenizer=tokenizer,
+            token_ids=token_ids,
+            labels=labels,
+            base_vocab_size=base_vocab_size,
+        )
+        for idx in result["chosen"].tolist()
+    ]
     evr_values = result["evr"].tolist()
     return tokens, evr_values
+
+
+def _decode_atom(
+    idx: int,
+    tokenizer,
+    token_ids: list[int] | None,
+    labels: list[str] | None,
+    base_vocab_size: int | None,
+) -> str:
+    # Concept mode sets token_ids=None and labels contains concept words.
+    if labels is not None and token_ids is None and base_vocab_size is None:
+        return labels[idx]
+    # Word-dictionary mode appends atoms after the filtered base vocabulary.
+    if labels is not None and base_vocab_size is not None and idx >= base_vocab_size:
+        return labels[idx - base_vocab_size]
+    token_id = idx if token_ids is None else token_ids[idx]
+    return tokenizer.decode([token_id]).strip()
 
 
 def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray, np.ndarray | None]:

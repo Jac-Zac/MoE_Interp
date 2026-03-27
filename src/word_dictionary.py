@@ -85,11 +85,9 @@ def build_word_dictionary(
     # Filter: remove subtokens that are also standalone promoted words
     promoted_words = set(labels)
     subtoken_list = list(subtoken_ids)
-    all_decoded = tokenizer.batch_decode([[tid] for tid in subtoken_list])
+    all_decoded = [tokenizer.decode([tid]).strip() for tid in subtoken_list]
     tokens_to_remove = {
-        tid
-        for tid, dec in zip(subtoken_list, all_decoded)
-        if dec.strip() not in promoted_words
+        tid for tid, dec in zip(subtoken_list, all_decoded) if dec not in promoted_words
     }
 
     # Build filtered base dictionary (remove sub-tokens)

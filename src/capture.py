@@ -87,112 +87,116 @@ def capture_expert_activations(
             }
 
         # Right-pad so token positions are preserved (RoPE stays correct)
+        original_padding_side = model.tokenizer.padding_side
         model.tokenizer.padding_side = "right"
+        try:
+            # .iter() yields dicts where batch["input_ids"] is list[list[int]] — exactly the format nnsight's model.trace() expects.
+            for batch in ds.iter(batch_size=batch_size):
+                batch_tokens = batch["input_ids"]  # type: ignore[index]
+                prompt_lengths = batch["length"]  # type: ignore[index]
+                b_size = len(batch_tokens)
 
-        # .iter() yields dicts where batch["input_ids"] is list[list[int]] — exactly the format nnsight's model.trace() expects.
-        for batch in ds.iter(batch_size=batch_size):
-            batch_tokens = batch["input_ids"]  # type: ignore[index]
-            prompt_lengths = batch["length"]  # type: ignore[index]
-            b_size = len(batch_tokens)
+                with torch.no_grad(), model.trace(batch_tokens) as tracer:
+                    input_ids = model.inputs[1]["input_ids"].save().detach()
+                    norm_layer = model.model.norm
 
-            with torch.no_grad(), model.trace(batch_tokens) as tracer:
-                input_ids = model.inputs[1]["input_ids"].save().detach()
-                norm_layer = model.model.norm
+                    max_len = input_ids.shape[1]
 
-                max_len = input_ids.shape[1]
+                    # NOTE: Here we take the last token but averaging over content
+                    # tokens can also be performed instead
 
-                # NOTE: Here we take the last token but averaging over content
-                # tokens can also be performed instead
+                    # Pre-compute last-token positions for all batches (vectorized)
+                    batch_offsets = torch.arange(b_size) * max_len
+                    actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
+                    last_positions = batch_offsets + actual_lens_tensor - 1
 
-                # Pre-compute last-token positions for all batches (vectorized)
-                batch_offsets = torch.arange(b_size) * max_len
-                actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
-                last_positions = batch_offsets + actual_lens_tensor - 1
+                    for layer_idx, layer in enumerate(model.model.layers):
+                        _, weights, indices = adapter.get_router_output(layer)
+                        top_k_weights = weights.save().detach()
 
-                for layer_idx, layer in enumerate(model.model.layers):
-                    _, weights, indices = adapter.get_router_output(layer)
-                    top_k_weights = weights.save().detach()
+                        token_indices_list: list = []
+                        down_projs_list: list = []
+                        top_k_pos_list: list = []
 
-                    token_indices_list: list = []
-                    down_projs_list: list = []
-                    top_k_pos_list: list = []
+                        expert_hit = adapter.get_expert_hit(layer)
+                        active_experts = (
+                            expert_hit[expert_hit != adapter.n_experts]
+                            .squeeze(-1)
+                            .save()
+                            .detach()
+                        )
+                        num_iters = active_experts.numel()
 
-                    expert_hit = adapter.get_expert_hit(layer)
-                    active_experts = (
-                        expert_hit[expert_hit != adapter.n_experts]
-                        .squeeze(-1)
-                        .save()
-                        .detach()
-                    )
-                    num_iters = active_experts.numel()
-
-                    with tracer.iter[:num_iters]:
-                        top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
-                        down_proj = adapter.get_expert_output(layer)
-
-                        # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
-                        token_indices_list.append(token_idx.save().detach())
-                        down_projs_list.append(norm_layer(down_proj).save().detach())
-                        top_k_pos_list.append(top_k_pos.save().detach())
-
-                    layer_data = {
-                        "active_experts": active_experts,
-                        "token_indices": token_indices_list,
-                        "down_projs": down_projs_list,
-                        "top_k_pos": top_k_pos_list,
-                        "weights": top_k_weights,
-                    }
-
-                    for i, expert_id in enumerate(active_experts.tolist()):
-                        token_idx = layer_data["token_indices"][i]
-                        down_proj = layer_data["down_projs"][i]
-                        top_k_pos = layer_data["top_k_pos"][i]
-
-                        target_device = down_proj.device
-                        lp = last_positions.to(target_device)
-                        ids = input_ids.to(target_device)
-                        tw = top_k_weights.to(target_device)
-                        token_idx = token_idx.to(target_device)
-                        top_k_pos = top_k_pos.to(target_device)
-
-                        # Vectorized: single mask instead of inner loop over batch
-                        is_last = torch.isin(token_idx, lp)
-                        if not is_last.any():
-                            continue
-
-                        # Extract all last-token data at once
-                        last_down_proj = down_proj[is_last]
-                        last_top_k_pos = top_k_pos[is_last]
-                        last_token_idx_flat = token_idx[is_last]
-
-                        # Compute gate weights and weighted output
-                        gate_weights = tw[last_token_idx_flat, last_top_k_pos]
-                        gated_output = gate_weights.unsqueeze(-1) * last_down_proj
-
-                        if gated_output.shape[0] == 0:
-                            continue
-
-                        # Map flat indices back to get token IDs
-                        batch_indices = last_token_idx_flat // max_len
-                        pos_in_batch = last_token_idx_flat % max_len
-                        last_token_ids = ids[batch_indices, pos_in_batch]
-
-                        # Single write per expert (was b_size writes)
-                        if is_rank0():
-                            _append_to_file(
-                                layer_files[layer_idx],
-                                expert_id,
-                                gated_output.half().cpu(),
-                                last_token_ids.cpu(),
+                        with tracer.iter[:num_iters]:
+                            top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(
+                                layer
                             )
+                            down_proj = adapter.get_expert_output(layer)
 
-            progress.advance(task, b_size)
+                            # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
+                            token_indices_list.append(token_idx.save().detach())
+                            down_projs_list.append(
+                                norm_layer(down_proj).save().detach()
+                            )
+                            top_k_pos_list.append(top_k_pos.save().detach())
 
-        model.tokenizer.padding_side = "left"
+                        layer_data = {
+                            "active_experts": active_experts,
+                            "token_indices": token_indices_list,
+                            "down_projs": down_projs_list,
+                            "top_k_pos": top_k_pos_list,
+                            "weights": top_k_weights,
+                        }
 
-        if is_rank0():
-            for f in layer_files.values():
-                f.close()
+                        for i, expert_id in enumerate(active_experts.tolist()):
+                            token_idx = layer_data["token_indices"][i]
+                            down_proj = layer_data["down_projs"][i]
+                            top_k_pos = layer_data["top_k_pos"][i]
+
+                            target_device = down_proj.device
+                            lp = last_positions.to(target_device)
+                            ids = input_ids.to(target_device)
+                            tw = top_k_weights.to(target_device)
+                            token_idx = token_idx.to(target_device)
+                            top_k_pos = top_k_pos.to(target_device)
+
+                            # Vectorized: single mask instead of inner loop over batch
+                            is_last = torch.isin(token_idx, lp)
+                            if not is_last.any():
+                                continue
+
+                            # Extract all last-token data at once
+                            last_down_proj = down_proj[is_last]
+                            last_top_k_pos = top_k_pos[is_last]
+                            last_token_idx_flat = token_idx[is_last]
+
+                            # Compute gate weights and weighted output
+                            gate_weights = tw[last_token_idx_flat, last_top_k_pos]
+                            gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+
+                            if gated_output.shape[0] == 0:
+                                continue
+
+                            # Map flat indices back to get token IDs
+                            batch_indices = last_token_idx_flat // max_len
+                            pos_in_batch = last_token_idx_flat % max_len
+                            last_token_ids = ids[batch_indices, pos_in_batch]
+
+                            # Single write per expert (was b_size writes)
+                            if is_rank0():
+                                _append_to_file(
+                                    layer_files[layer_idx],
+                                    expert_id,
+                                    gated_output.half().cpu(),
+                                    last_token_ids.cpu(),
+                                )
+
+                progress.advance(task, b_size)
+        finally:
+            model.tokenizer.padding_side = original_padding_side
+            if is_rank0():
+                for f in layer_files.values():
+                    f.close()
 
     metadata = {
         "model_name": model_name,
