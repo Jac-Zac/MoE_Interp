@@ -128,7 +128,7 @@ for batch in tqdm(
                 }
             )
 
-        pre_norm_hidden = model.model.norm.input[0].save().detach()
+        pre_norm_hidden = model.model.norm.input.save().detach()
         max_len = input_ids.shape[1]
 
         # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
@@ -143,10 +143,11 @@ for batch in tqdm(
 
         for layer_idx, layer_data in enumerate(layer_datas):
             active_experts = layer_data["active_experts"]
-            for i, expert_id in enumerate(active_experts.tolist()):
+            for i in range(len(layer_data["token_indices"])):
                 token_idx = layer_data["token_indices"][i]
                 down_proj = layer_data["down_projs"][i]
                 top_k_pos = layer_data["top_k_pos"][i]
+                expert_id = active_experts[i].item()
 
                 target_device = down_proj.device
                 lp = last_positions.to(target_device)

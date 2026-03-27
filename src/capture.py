@@ -116,9 +116,6 @@ def capture_expert_activations(
 
                 with torch.no_grad(), model.trace(batch_tokens) as tracer:
                     input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
-                    norm_weight = model.model.norm.weight
-                    norm_eps = model.model.norm.variance_epsilon
-
                     max_len = input_ids.shape[1]
 
                     # NOTE: Here we take the last token but averaging over content
@@ -130,7 +127,8 @@ def capture_expert_activations(
                     last_positions = batch_offsets + actual_lens_tensor - 1
                     sample_indices = torch.arange(b_size)
 
-                    layer_datas: list = []
+                    # Pass 1: collect per-layer expert data
+                    all_layer_data: list = []
                     for layer_idx, layer in enumerate(model.model.layers):
                         _, weights, indices = adapter.get_router_output(layer)
                         top_k_weights = weights.save().detach()
@@ -158,7 +156,7 @@ def capture_expert_activations(
                             down_projs_list.append(down_proj.save().detach())
                             top_k_pos_list.append(top_k_pos.save().detach())
 
-                        layer_datas.append(
+                        all_layer_data.append(
                             {
                                 "active_experts": active_experts,
                                 "token_indices": token_indices_list,
@@ -170,7 +168,7 @@ def capture_expert_activations(
 
                     # Access the final norm input only after all layer nodes have been
                     # materialized; nnsight traces are order-sensitive.
-                    pre_norm_hidden = model.model.norm.input[0].save().detach()
+                    pre_norm_hidden = model.model.norm.input.save().detach()
                     pre_norm_last = pre_norm_hidden[
                         sample_indices, actual_lens_tensor - 1
                     ]
@@ -178,12 +176,14 @@ def capture_expert_activations(
                         pre_norm_last.float().pow(2).mean(dim=-1)
                     )
 
-                    for layer_idx, layer_data in enumerate(layer_datas):
+                    # Pass 2: apply normalisation and write per expert
+                    for layer_idx, layer_data in enumerate(all_layer_data):
                         active_experts = layer_data["active_experts"]
-                        for i, expert_id in enumerate(active_experts.tolist()):
+                        for i in range(len(layer_data["token_indices"])):
                             token_idx = layer_data["token_indices"][i]
                             down_proj = layer_data["down_projs"][i]
                             top_k_pos = layer_data["top_k_pos"][i]
+                            expert_id = active_experts[i].item()
 
                             target_device = down_proj.device
                             lp = last_positions.to(target_device)
@@ -207,21 +207,22 @@ def capture_expert_activations(
                             # Compute gate weights and weighted output
                             gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                             gated_output = gate_weights.unsqueeze(-1) * last_down_proj
-                            batch_indices = (last_token_idx_flat // max_len).long()
-                            gated_output = apply_component_rmsnorm(
-                                hidden_states=gated_output,
-                                second_moment=sm_last[batch_indices],
-                                weight=norm_weight.to(target_device),
-                                eps=norm_eps,
-                            )
 
                             if gated_output.shape[0] == 0:
                                 continue
 
-                            # Map flat indices back to get token IDs
+                            # Map flat indices back to get batch positions and token IDs
                             batch_indices = last_token_idx_flat // max_len
                             pos_in_batch = last_token_idx_flat % max_len
                             last_token_ids = ids[batch_indices, pos_in_batch]
+
+                            # Apply component RMSNorm using residual stream stats
+                            gated_output = apply_component_rmsnorm(
+                                hidden_states=gated_output,
+                                second_moment=sm_last[batch_indices],
+                                weight=model.model.norm.weight.to(target_device),
+                                eps=model.model.norm.variance_epsilon,
+                            )
 
                             # Single write per expert (was batch_size writes)
                             if is_rank0():
