@@ -108,15 +108,14 @@ def capture_expert_activations(
         original_padding_side = model.tokenizer.padding_side
         model.tokenizer.padding_side = "right"
         try:
-            # .iter() yields dicts where batch["input_ids"] is list[list[int]] — exactly the format nnsight's model.trace() expects.
+            # .iter() yields dicts where batch["input_ids"] is list[list[int]] —
             for batch in ds.iter(batch_size=batch_size):
                 batch_tokens = batch["input_ids"]  # type: ignore[index]
                 prompt_lengths = batch["length"]  # type: ignore[index]
                 b_size = len(batch_tokens)
 
                 with torch.no_grad(), model.trace(batch_tokens) as tracer:
-                    input_ids = model.inputs[1]["input_ids"].save().detach()
-                    pre_norm_hidden = model.model.norm.input[0].save().detach()
+                    input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
                     norm_weight = model.model.norm.weight
                     norm_eps = model.model.norm.variance_epsilon
 
@@ -130,13 +129,8 @@ def capture_expert_activations(
                     actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
                     last_positions = batch_offsets + actual_lens_tensor - 1
                     sample_indices = torch.arange(b_size)
-                    pre_norm_last = pre_norm_hidden[
-                        sample_indices, actual_lens_tensor - 1
-                    ]
-                    second_moment_last = torch.atleast_1d(
-                        pre_norm_last.float().pow(2).mean(dim=-1)
-                    )
 
+                    layer_datas: list = []
                     for layer_idx, layer in enumerate(model.model.layers):
                         _, weights, indices = adapter.get_router_output(layer)
                         top_k_weights = weights.save().detach()
@@ -164,14 +158,28 @@ def capture_expert_activations(
                             down_projs_list.append(down_proj.save().detach())
                             top_k_pos_list.append(top_k_pos.save().detach())
 
-                        layer_data = {
-                            "active_experts": active_experts,
-                            "token_indices": token_indices_list,
-                            "down_projs": down_projs_list,
-                            "top_k_pos": top_k_pos_list,
-                            "weights": top_k_weights,
-                        }
+                        layer_datas.append(
+                            {
+                                "active_experts": active_experts,
+                                "token_indices": token_indices_list,
+                                "down_projs": down_projs_list,
+                                "top_k_pos": top_k_pos_list,
+                                "weights": top_k_weights,
+                            }
+                        )
 
+                    # Access the final norm input only after all layer nodes have been
+                    # materialized; nnsight traces are order-sensitive.
+                    pre_norm_hidden = model.model.norm.input[0].save().detach()
+                    pre_norm_last = pre_norm_hidden[
+                        sample_indices, actual_lens_tensor - 1
+                    ]
+                    second_moment_last = torch.atleast_1d(
+                        pre_norm_last.float().pow(2).mean(dim=-1)
+                    )
+
+                    for layer_idx, layer_data in enumerate(layer_datas):
+                        active_experts = layer_data["active_experts"]
                         for i, expert_id in enumerate(active_experts.tolist()):
                             token_idx = layer_data["token_indices"][i]
                             down_proj = layer_data["down_projs"][i]
@@ -180,12 +188,14 @@ def capture_expert_activations(
                             target_device = down_proj.device
                             lp = last_positions.to(target_device)
                             ids = input_ids.to(target_device)
-                            tw = top_k_weights.to(target_device)
+                            tw = layer_data["weights"].to(target_device)
+                            sm_last = second_moment_last.to(target_device)
                             token_idx = token_idx.to(target_device)
                             top_k_pos = top_k_pos.to(target_device)
 
-                            # Vectorized: single mask instead of inner loop over batch
+                            # Vectorized: single mask
                             is_last = torch.isin(token_idx, lp)
+
                             if not is_last.any():
                                 continue
 
@@ -200,9 +210,7 @@ def capture_expert_activations(
                             batch_indices = (last_token_idx_flat // max_len).long()
                             gated_output = apply_component_rmsnorm(
                                 hidden_states=gated_output,
-                                second_moment=second_moment_last.to(target_device)[
-                                    batch_indices
-                                ],
+                                second_moment=sm_last[batch_indices],
                                 weight=norm_weight.to(target_device),
                                 eps=norm_eps,
                             )
@@ -215,7 +223,7 @@ def capture_expert_activations(
                             pos_in_batch = last_token_idx_flat % max_len
                             last_token_ids = ids[batch_indices, pos_in_batch]
 
-                            # Single write per expert (was b_size writes)
+                            # Single write per expert (was batch_size writes)
                             if is_rank0():
                                 _append_to_file(
                                     layer_files[layer_idx],

@@ -8,29 +8,41 @@ Target model: `allenai/OLMoE-1B-7B-0924-Instruct` (16 layers, 64 experts/layer, 
 > [!WARNING]
 > Work in progress and experimental
 
+## Docs
+
+See [docs/README.md](docs/README.md) for the docs index.
+
 ## Quickstart
 
-```bash
-# Setup: copy and edit .env
-cp .env.example .env
-# Edit .env with your HF_TOKEN and cache directories
+### Install
 
-# Load environment (run once per shell session)
+```bash
+# Create and edit environment config
+cp .env.example .env
+
+# Load env vars and activate the project env
 source scripts/setup_env.sh
 
+# Install deps
+uv sync
+```
+
+### Run
+
+```bash
 # Download model and datasets
 python scripts/download.py --all
 
 # Run tests
 python -m pytest
 
-# Run extraction (capture expert activations)
+# Capture expert activations
 python main.py extract --n_docs 5000
 
-# For tensor parallelism (2 GPUs), use torchrun for better GPU utilization:
+# Multi-GPU capture
 torchrun --nproc_per_node=2 main.py extract --model "openai/gpt-oss-20b" --n_docs=10000
 
-# Run pursuit analysis (generates plots)
+# Run pursuit analysis
 python main.py pursuit --k 100
 ```
 
@@ -42,12 +54,12 @@ python main.py pursuit --k 100
 python main.py extract [--model MODEL] [--n_docs N]
 ```
 
-Saves per-layer HDF5 activations and metadata to `data/extractions/`.
+Saves per-layer HDF5 activations and metadata to `data/<model>/extractions/<dataset>/`.
 
 **Multi-GPU Support:** For better GPU utilization with 2 GPUs, use tensor parallelism:
 
 ```bash
-torchrun --nproc_per_node=2 python main.py extract [--model MODEL] [--n_docs N]
+torchrun --nproc_per_node=2 main.py extract [--model MODEL] [--n_docs N]
 ```
 
 This distributes each layer's computation across GPUs (tensor parallelism) instead of splitting layers (pipeline parallelism), resulting in more balanced GPU usage and improved throughput.
@@ -60,7 +72,7 @@ This distributes each layer's computation across GPUs (tensor parallelism) inste
 python main.py pursuit [--k N] [--min_activations N] [--concept {offensive,countries,numbers}]
 ```
 
-Outputs to `data/pursuit/` (or `data/pursuit/<concept>/` when `--concept` is set):
+Outputs to `data/<model>/pursuit/<dataset>/` (or `.../<concept>/` when `--concept` is set):
 
 - `results.jsonl` — per-expert top-k tokens with EVR scores
 - `evr_heatmap.html` — EVR heatmap across all layers and experts
@@ -98,12 +110,6 @@ Outputs to `data/pursuit/` (or `data/pursuit/<concept>/` when `--concept` is set
 2. **CONTENT-TOKEN AVERAGING** (not yet implemented): Average over question tokens.
    Semantic: "Which experts are consistently used for this question type?"
    MoE consideration: each token routes to only top-k experts (k=8).
-
-## Marimo Explorer
-
-```bash
-uv run marimo run notebooks/notebook_pursuit_marimo.py
-```
 
 ## Links
 

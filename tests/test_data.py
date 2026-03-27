@@ -11,13 +11,18 @@ class _DummyTokenizer:
         self.text_calls = []
 
     def apply_chat_template(
-        self, messages, add_generation_prompt=False, tokenize=False
+        self,
+        messages,
+        add_generation_prompt=False,
+        tokenize=False,
+        **kwargs,
     ):
         self.chat_calls.append(
             {
                 "messages": messages,
                 "add_generation_prompt": add_generation_prompt,
                 "tokenize": tokenize,
+                **kwargs,
             }
         )
         return [101, 102, 103]
@@ -42,6 +47,7 @@ def test_triviaqa_uses_chat_template_with_headpursuit_prompt():
         tokenizer,
         n_docs=1,
         dataset=dataset,
+        max_length=128,
     )
 
     assert tokenizer.chat_calls == [
@@ -58,6 +64,8 @@ def test_triviaqa_uses_chat_template_with_headpursuit_prompt():
             ],
             "add_generation_prompt": True,
             "tokenize": True,
+            "truncation": True,
+            "max_length": 128,
         }
     ]
     assert tokenizer.text_calls == []

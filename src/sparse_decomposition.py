@@ -329,7 +329,9 @@ def somp(
 
         # PERF: Reuse the on-device prefix instead of recreating an index tensor.
         current_atoms = torch.index_select(dictionary, 0, chosen[: i + 1])
-        lstsq_weights = torch.linalg.lstsq(current_atoms.T, X.T).solution
+        lstsq_weights = torch.linalg.lstsq(
+            current_atoms.T.double(), X.T.double()
+        ).solution.to(dtype=X.dtype)
         recon = (current_atoms.T @ lstsq_weights).T
 
         residual = X - recon

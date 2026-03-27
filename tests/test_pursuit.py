@@ -177,3 +177,78 @@ def test_projection_pursuit_decodes_concept_labels():
 
     assert tokens == ["violence", "hate"]
     assert len(evr) == 2
+
+
+def test_run_pursuit_handles_concepts_with_only_single_token_words(
+    monkeypatch, tmp_path
+):
+    from src import pursuit
+
+    class _DummyTokenizerForConcepts:
+        def __call__(self, text, add_special_tokens=False):
+            token_map = {"one": [0], "two": [1]}
+            return type("Out", (), {"input_ids": token_map[text]})()
+
+        def decode(self, token_ids):
+            return f"tok_{token_ids[0]}"
+
+    extractions_dir = tmp_path / "extractions"
+    extractions_dir.mkdir()
+    (extractions_dir / "metadata.json").write_text("{}")
+
+    monkeypatch.setattr(pursuit, "CONCEPT_WORDS", {"tiny": ["one", "two"]})
+    monkeypatch.setattr(
+        pursuit,
+        "load_metadata",
+        lambda path: {"model_name": "dummy", "n_layers": 1, "n_experts": 1},
+    )
+    monkeypatch.setattr(pursuit, "load_unembedding", lambda path: torch.eye(4))
+    monkeypatch.setattr(pursuit, "get_unembedding_dir", lambda model_name: tmp_path)
+    monkeypatch.setattr(pursuit, "get_device", lambda: "cpu")
+    monkeypatch.setattr(pursuit, "load_layer_h5", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        "transformers.AutoTokenizer.from_pretrained",
+        lambda model_name: _DummyTokenizerForConcepts(),
+    )
+
+    results, evr_matrix, count_matrix = pursuit.run_pursuit(
+        extractions_dir=extractions_dir,
+        concept="tiny",
+        output_dir=tmp_path / "out",
+    )
+
+    assert results == []
+    assert evr_matrix.shape == (1, 1)
+    assert count_matrix.shape == (1, 1)
+
+
+def test_somp_uses_double_precision_for_lstsq(monkeypatch):
+    from src import sparse_decomposition as sd
+
+    captured: dict[str, torch.dtype] = {}
+    real_lstsq = torch.linalg.lstsq
+
+    def fake_lstsq(a, b):
+        captured["a"] = a.dtype
+        captured["b"] = b.dtype
+        return real_lstsq(a, b)
+
+    monkeypatch.setattr(torch.linalg, "lstsq", fake_lstsq)
+
+    torch.manual_seed(0)
+    X = torch.randn(8, 4)
+    dictionary = F.normalize(torch.randn(6, 4), dim=1)
+
+    sd.somp(
+        X=X,
+        orig_X=X,
+        pc=None,
+        dictionary=dictionary,
+        descriptors=list(range(6)),
+        k=2,
+        device="cpu",
+        compute_evr=True,
+    )
+
+    assert captured["a"] == torch.float64
+    assert captured["b"] == torch.float64

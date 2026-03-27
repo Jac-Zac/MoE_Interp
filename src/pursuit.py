@@ -181,12 +181,19 @@ def run_pursuit(
                     multi_labels.append(w)
                     multi_token_ids.append(tokens)
             single_atoms = dictionary[[tid for _, tid in single_labels]].float()
-            multi_atoms = torch.stack(
-                [
-                    F.normalize(dictionary[tids].mean(dim=0), dim=0)
-                    for tids in multi_token_ids
-                ]
-            ).float()
+            if multi_token_ids:
+                multi_atoms = torch.stack(
+                    [
+                        F.normalize(dictionary[tids].mean(dim=0), dim=0)
+                        for tids in multi_token_ids
+                    ]
+                ).float()
+            else:
+                multi_atoms = torch.empty(
+                    (0, dictionary.shape[1]),
+                    device=dictionary.device,
+                    dtype=dictionary.dtype,
+                )
             dictionary = torch.cat([single_atoms, multi_atoms], dim=0).to(device)
             labels = [w for w, _ in single_labels] + multi_labels
             n = len(labels)

@@ -121,6 +121,8 @@ def load_dataset_prompts(
                 [{"role": "user", "content": text}],
                 add_generation_prompt=True,
                 tokenize=True,
+                truncation=True,
+                max_length=max_length,
             )
         else:
             # HACK: Truncate the document if it exceeds the max_pos embedding
