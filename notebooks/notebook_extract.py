@@ -13,6 +13,7 @@ from src.cache import (
     save_metadata,
     save_unembedding,
 )
+from src.capture import apply_component_rmsnorm
 from src.data import load_dataset_prompts
 from src.environment import (
     get_data_dir,
@@ -22,31 +23,6 @@ from src.environment import (
     set_seed,
 )
 from src.model_adapter import get_model_adapter
-
-
-def apply_component_rmsnorm_like_hf(
-    hidden_states: torch.Tensor,
-    second_moment: torch.Tensor,
-    weight: torch.Tensor,
-    eps: float,
-) -> torch.Tensor:
-    """Apply RMSNorm to a component using residual-stream second moments.
-
-    Math: component contribution at output is
-    weight * (component / sqrt(E[residual^2] + eps)).
-
-    Approximation: RMSNorm(sum_i c_i) ≠ sum_i c_i / sqrt(E[(sum_j c_j)^2]).
-    We assume the denominator from the full residual stream applies linearly to
-    each expert's gated contribution. This ignores cross-terms E[c_i · c_j] in
-    the variance, which is reasonable when each expert adds a small delta to the
-    residual (top-8 of 64). The alternative — recomputing variance per-component
-    — isn't possible since we only capture isolated expert outputs, not the full
-    residual at each intermediate point.
-    """
-    input_dtype = hidden_states.dtype
-    hidden_states = hidden_states.to(torch.float32)
-    hidden_states = hidden_states * torch.rsqrt(second_moment.unsqueeze(-1) + eps)
-    return weight * hidden_states.to(input_dtype)
 
 
 # %% Configuration
@@ -193,7 +169,7 @@ for batch in tqdm(
                 gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                 gated_output = gate_weights.unsqueeze(-1) * last_down_proj
                 batch_indices = (last_token_idx_flat // max_len).long()
-                gated_output = apply_component_rmsnorm_like_hf(
+                gated_output = apply_component_rmsnorm(
                     hidden_states=gated_output,
                     second_moment=sm_last[batch_indices],
                     weight=norm_weight.to(target_device),

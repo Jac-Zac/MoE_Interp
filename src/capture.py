@@ -24,6 +24,24 @@ from src.environment import get_unembedding_dir, is_rank0
 from src.model_adapter import get_model_adapter
 
 
+def apply_component_rmsnorm(
+    hidden_states: torch.Tensor,
+    second_moment: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+) -> torch.Tensor:
+    """Approximate component RMSNorm using the residual stream second moment.
+
+    This keeps the expert output on the same scale as the final model norm while
+    avoiding recomputing the full residual-stream normalization.
+    """
+    input_dtype = hidden_states.dtype
+    # NOTE: Keep float32 here for stability (HF issue #33133).
+    hidden_states = hidden_states.to(torch.float32)
+    hidden_states = hidden_states * torch.rsqrt(second_moment.unsqueeze(-1) + eps)
+    return weight * hidden_states.to(input_dtype)
+
+
 def capture_expert_activations(
     model,
     prompts: Dataset | list[list[int]],
@@ -98,7 +116,9 @@ def capture_expert_activations(
 
                 with torch.no_grad(), model.trace(batch_tokens) as tracer:
                     input_ids = model.inputs[1]["input_ids"].save().detach()
-                    norm_layer = model.model.norm
+                    pre_norm_hidden = model.model.norm.input[0].save().detach()
+                    norm_weight = model.model.norm.weight
+                    norm_eps = model.model.norm.variance_epsilon
 
                     max_len = input_ids.shape[1]
 
@@ -109,6 +129,13 @@ def capture_expert_activations(
                     batch_offsets = torch.arange(b_size) * max_len
                     actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
                     last_positions = batch_offsets + actual_lens_tensor - 1
+                    sample_indices = torch.arange(b_size)
+                    pre_norm_last = pre_norm_hidden[
+                        sample_indices, actual_lens_tensor - 1
+                    ]
+                    second_moment_last = torch.atleast_1d(
+                        pre_norm_last.float().pow(2).mean(dim=-1)
+                    )
 
                     for layer_idx, layer in enumerate(model.model.layers):
                         _, weights, indices = adapter.get_router_output(layer)
@@ -133,11 +160,8 @@ def capture_expert_activations(
                             )
                             down_proj = adapter.get_expert_output(layer)
 
-                            # NOTE: Similarly to logit lens we apply the last normalization to the expert activations here
                             token_indices_list.append(token_idx.save().detach())
-                            down_projs_list.append(
-                                norm_layer(down_proj).save().detach()
-                            )
+                            down_projs_list.append(down_proj.save().detach())
                             top_k_pos_list.append(top_k_pos.save().detach())
 
                         layer_data = {
@@ -173,6 +197,15 @@ def capture_expert_activations(
                             # Compute gate weights and weighted output
                             gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                             gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+                            batch_indices = (last_token_idx_flat // max_len).long()
+                            gated_output = apply_component_rmsnorm(
+                                hidden_states=gated_output,
+                                second_moment=second_moment_last.to(target_device)[
+                                    batch_indices
+                                ],
+                                weight=norm_weight.to(target_device),
+                                eps=norm_eps,
+                            )
 
                             if gated_output.shape[0] == 0:
                                 continue
