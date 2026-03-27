@@ -10,7 +10,6 @@
   company-logo: [],
   mentors: (
     "Prof. Alberto Cazzaniga",
-    "Prof. Fabio Anselmi",
   ),
   footer-text: "DSAI",
   branch: "NLP & Advanced Deep Learning",

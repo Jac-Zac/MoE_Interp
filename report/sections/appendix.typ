@@ -2,9 +2,9 @@
 
 == OLMoE Architecture
 
-OLMoE-1B-7B-Instruct @muennighoff2024olmoe is a sparse MoE language model with 1B
-active parameters out of 7B total. Its architecture has the following key properties
-relevant to Expert Pursuit:
+OLMoE-1B-7B-Instruct @muennighoff2024olmoe is a sparse MoE language model with 1B active
+parameters out of 7B total. Its architecture has the following key properties relevant to
+Expert Pursuit:
 
 #figure(
   table(
@@ -16,12 +16,12 @@ relevant to Expert Pursuit:
       [*Property*], [*Value*],
       table.hline(stroke: 0.5pt),
     ),
-    [Layers ($L$)],         [16],
-    [Experts per layer],    [64],
+    [Layers ($L$)],             [16],
+    [Experts per layer],        [64],
     [Active experts (top-$k$)], [8],
-    [Model dimension ($d$)],[2048],
-    [Vocabulary size ($v$)],[~50,000],
-    [Expert FFN hidden dim],[1024],
+    [Model dimension ($d$)],    [2048],
+    [Vocabulary size ($v$)],    [~50,000],
+    [Expert FFN hidden dim],    [1024],
     table.hline(stroke: 0.8pt),
   ),
   caption: [OLMoE-1B-7B-Instruct architecture summary.],
@@ -33,8 +33,15 @@ token. The gated output of expert $e$ for token $bold(x)$ is:
 
 $ bold(c)_e (bold(x)) = g_e (bold(x)) dot f_e (bold(x)) $
 
-where $g_e$ is the scalar gating weight and $f_e (bold(x)) in RR^d$ is the expert FFN
-output. Expert Pursuit operates on $bold(c)_e$ averaged over documents.
+where $g_e$ is the scalar gating weight and $f_e (bold(x)) in RR^d$ is the expert FFN output.
+Expert Pursuit operates on $bold(c)_e$ averaged over documents.
+
+== GPT-OSS Notes
+
+`openai/gpt-oss-20b` is also supported by the extraction and pursuit code. It is a 24-layer
+MoE model with 32 local experts per layer, 4 experts routed per token, and hidden size 2880
+@openai2025gptoss. We keep the main report centered on OLMoE because that is the model for
+which the current results were generated.
 
 == Concept Word Lists <app:concepts>
 

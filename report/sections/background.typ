@@ -7,6 +7,10 @@ A transformer builds a $d$-dimensional residual stream across $L$ layers
 unembedding matrix $bold(D) in RR^(v times d)$ to produce logits over the vocabulary.
 Each row of $bold(D)$ is a direction associated with a specific token.
 
+In Expert Pursuit, we row-normalize this dictionary before sparse coding so token matching
+is driven by direction rather than vector magnitude. This is especially important because
+the pursuit procedure is scale-sensitive.
+
 == Mixture-of-Experts
 
 In MoE models @shazeer2017outrageously @fedus2022switch, each FFN layer is replaced by
@@ -18,6 +22,17 @@ $ "MoE"(bold(x)) = sum_(e in cal(T)_k (bold(x))) g_e (bold(x)) dot f_e (bold(x))
 where $g_e$ is the gating weight and $f_e$ is the expert FFN output. The gated output
 $g_e (bold(x)) dot f_e (bold(x))$ is the actual vector that expert $e$ adds to the
 residual stream.
+
+== Related MoE Interpretability Work
+
+Recent work suggests several complementary views of MoE specialization. The domain/driver
+expert framework @wang2025whatgets separates experts that specialize in semantic domains
+from experts that exert strong causal influence on predictions. Semantic routing studies
+@jin2025probing test whether input meaning influences routing patterns, while MoE editing
+methods @moeedit2025 ask how to change expert behavior without perturbing routing. Newer
+interpretability analyses such as MoE Lens @chaudhari2026moelens emphasize that a small set
+of experts can dominate decoding behavior. These results motivate treating expert activations
+as structured, interpretable objects rather than only efficiency mechanisms.
 
 == SOMP
 
@@ -34,6 +49,9 @@ all samples, adds it to the support set $SS^(t+1)$, and refits coefficients via
 least-squares. After $T$ steps, we obtain a sparse set of vocabulary tokens that
 characterize the expert's behavior. The explained variance ratio (EVR) at each step
 measures how much signal the selected atoms capture.
+
+In word-dictionary mode, multi-token words are appended as averaged atoms on top of the base
+vocabulary and then re-normalized, so merged words remain comparable to single-token atoms.
 
 This is a multi-sample generalization of the Logit Lens @nostalgebraist2020logitlens:
 projecting a single activation onto $bold(D)$ is equivalent to one step of Matching

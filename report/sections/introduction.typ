@@ -2,18 +2,24 @@
 
 Mixture-of-Experts (MoE) language models route each token to a small subset of experts,
 enabling large capacity with sparse computation @shazeer2017outrageously @fedus2022switch.
-While routing statistics reveal which experts are used, they do not explain what each
-expert writes into the residual stream.
+Routing statistics show which experts are used, but not what each expert writes into the
+residual stream.
 
 We adapt Head Pursuit @basile2025headpursuit to MoE experts. For each expert and layer, we
 analyze its gated output --- the expert FFN output scaled by the router weight --- and
 decompose it into a sparse set of vocabulary directions using the model's unembedding
-matrix as a dictionary. The resulting atoms are human-readable tokens that summarize
-expert behavior.
+matrix as a dictionary. The resulting atoms are human-readable tokens that summarize expert
+behavior.
 
-Following Head Pursuit, we use TriviaQA @joshi2017triviaqa questions as documents and
-average expert gated outputs over routed question-content tokens, excluding chat template
-markers. This mirrors the aggregation strategy used for attention heads.
+Unlike the original Head Pursuit aggregation over question-content tokens, the current
+implementation traces the last real token of each prompt and uses right-padding so token
+positions remain aligned during batched tracing. This preserves the original motivation while
+matching the implemented capture code.
+
+We use TriviaQA @joshi2017triviaqa questions as documents and analyze one prompt-level
+activation summary per document. The captured expert outputs are gated and normalized before
+pursuit, and the unembedding dictionary is L2-normalized row-wise so SOMP operates on token
+directions rather than raw embedding scale.
 
 Our contributions:
 - A residual-stream decomposition for MoE experts based on gated outputs.

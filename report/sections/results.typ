@@ -1,16 +1,17 @@
 = Results
 
 We ran Expert Pursuit on 50,000 TriviaQA questions using OLMoE-1B-7B-Instruct, capturing
-last-token gated outputs for all 16 layers $times$ 64 experts. Of the 1,024 experts, 393
-had sufficient activations (at least 5 routed documents) to analyze.
+last-token gated outputs for all 16 layers $times$ 64 experts. Of the 1,024 experts, 393 had
+sufficient activations (at least 5 routed documents) to analyze. These results are a snapshot
+of the current last-token pipeline.
 
 == Expert Specialization
 
-Final EVR values (after $T = 25$ SOMP iterations) range from 0.021 to 0.248, with a
-median of 0.038. The low median reflects that most experts are polysemantic --- no small
-set of vocabulary directions captures most of their variance. Nevertheless, a substantial
-minority of experts exhibit clear semantic specialization. @tab:experts shows representative
-examples across several categories identified by full-dictionary pursuit.
+Final EVR values (after $T = 25$ SOMP iterations) range from 0.021 to 0.248, with a median
+of 0.038. The low median reflects that most experts are polysemantic --- no small set of
+vocabulary directions captures most of their variance. Nevertheless, a substantial minority of
+experts exhibit clear semantic specialization. @tab:experts shows representative examples
+across several categories identified by full-dictionary pursuit.
 
 #figure(
   table(
@@ -37,21 +38,21 @@ examples across several categories identified by full-dictionary pursuit.
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-    Selected experts identified by full-dictionary pursuit on 50,000 TriviaQA documents.
-    EVR is the cumulative explained variance ratio after 25 SOMP iterations.
+Selected experts identified by full-dictionary pursuit on 50,000 TriviaQA documents. EVR is
+the cumulative explained variance ratio after 25 SOMP iterations.
   ],
 ) <tab:experts>
 
 Specialists tend to cluster in the later layers (L12--L15), consistent with the view that
-deeper layers encode more abstract semantic content. Early layers (L00--L04) exhibit lower
-EVR values and less coherent token lists, suggesting they operate on lower-level
-distributional features.
+deeper layers encode more abstract semantic content. Early layers (L00--L04) exhibit lower EVR
+values and less coherent token lists, suggesting they operate on lower-level distributional
+features.
 
 == Concept-Restricted Pursuit: Numbers
 
-To validate the concept-restricted mode, we ran Expert Pursuit with the dictionary
-restricted to the `numbers` word list (digit tokens plus English number words; see
-`src/concepts.py`). @tab:numbers shows the top-ranked experts under this query.
+To validate the concept-restricted mode, we ran Expert Pursuit with the dictionary restricted
+to the `numbers` word list (digit tokens plus English number words; see `src/concepts.py`).
+@tab:numbers shows the top-ranked experts under this query.
 
 #figure(
   table(
@@ -71,13 +72,19 @@ restricted to the `numbers` word list (digit tokens plus English number words; s
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-    Top 5 experts ranked by EVR under concept-restricted pursuit with the `numbers`
-    dictionary (run on a smaller local sample of 144 documents).
+Top 5 experts ranked by EVR under concept-restricted pursuit with the `numbers` dictionary
+(run on a smaller local sample of 144 documents).
   ],
 ) <tab:numbers>
 
 The ranking agrees with the full-dictionary results: L15 E03 and L14 E37 rank first and
-second in both modes, and their unrestricted token lists consist almost entirely of
-numerals and year tokens (@tab:experts). Concept-restricted pursuit thus serves as a
-focused probe that confirms and quantifies specialization identified by the full-dictionary
-run.
+second in both modes, and their unrestricted token lists consist almost entirely of numerals
+and year tokens (@tab:experts). Concept-restricted pursuit thus serves as a focused probe that
+confirms and quantifies specialization identified by the full-dictionary run.
+
+== GPT-OSS Support
+
+The codebase also supports `openai/gpt-oss-20b` as a second target model. GPT-OSS is a
+24-layer sparse MoE model with 32 local experts per layer, 4 experts routed per token, and
+hidden size 2880 @openai2025gptoss. We do not report GPT-OSS results here, but the same
+extraction and pursuit pipeline can be applied to it for future comparison.

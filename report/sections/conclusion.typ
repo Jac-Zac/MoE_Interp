@@ -1,18 +1,18 @@
 = Conclusion and Future Work
 
 We presented Expert Pursuit, an adaptation of Head Pursuit to MoE expert FFNs. By running
-SOMP on aggregated gated outputs against the unembedding dictionary, we obtain
-human-readable token summaries for each expert. Applied to OLMoE-1B-7B-Instruct on 50,000
-TriviaQA questions, the method recovers interpretable specialists in numbers, geography,
-names, biology, religion, and entertainment, concentrated in the later layers.
-The concept-restricted mode enables targeted queries that confirm and quantify
-specialization along specific semantic axes.
+SOMP on aggregated gated outputs against the unembedding dictionary, we obtain human-readable
+token summaries for each expert. Applied to OLMoE-1B-7B-Instruct on 50,000 TriviaQA
+questions, the method recovers interpretable specialists in numbers, geography, names,
+biology, religion, and entertainment, concentrated in the later layers. The concept-
+restricted mode enables targeted queries that confirm and quantify specialization along
+specific semantic axes.
 
 == Future Work
 
 - *Content-token averaging.* The current pipeline aggregates over the last token only.
-  Averaging over question-content tokens (as in the original Head Pursuit) would use more
-  signal per document and may sharpen expert summaries for short questions.
+  Averaging over question-content tokens (as in the original Head Pursuit) remains a possible
+  extension if we want a closer apples-to-apples comparison with the original framework.
 
 - *Activation steering.* The ranked expert list produced by concept-restricted pursuit
   directly identifies which experts to suppress or amplify to steer model behavior toward
@@ -24,5 +24,5 @@ specialization along specific semantic axes.
   would improve coverage.
 
 - *Cross-model comparison.* Applying the same pipeline to other MoE models (Mixtral,
-  DeepSeek-MoE) would test whether the observed specialization patterns are
+  DeepSeek-MoE, gpt-oss) would test whether the observed specialization patterns are
   model-specific or a general property of MoE routing.
