@@ -26,6 +26,8 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         hf_id="mandarjoshi/trivia_qa",
         config="rc",
         text_field="question",
+        # TriviaQA uses the model's chat template because OLMoE-Instruct expects
+        # conversational prompts rather than raw completion text.
         chat_style=True,
         split="train",
         prompt_template=(

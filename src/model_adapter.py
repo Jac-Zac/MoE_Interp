@@ -152,14 +152,35 @@ class GPTOSSAdapter(MoEAdapter):
         return layer.mlp.experts.source.self__apply_gate_0.output
 
 
+class MixtralAdapter(MoEAdapter):
+    """Adapter for Mixtral-style MoE blocks."""
+
+    def _get_n_experts(self, cfg: Any) -> int:
+        return cfg.num_local_experts
+
+    def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
+        return layer.mlp.gate.output
+
+    def get_expert_hit(self, layer: Any) -> Any:
+        return layer.mlp.experts.source.nonzero_0.output
+
+    def get_top_k_pos_token_idx(self, layer: Any) -> tuple[Any, Any]:
+        return layer.mlp.experts.source.torch_where_0.output
+
+    def get_expert_output(self, layer: Any) -> Any:
+        return layer.mlp.experts.source.nn_functional_linear_1.output
+
+
 MODEL_TYPE_TO_ADAPTER: dict[str, type[MoEAdapter]] = {
     "gpt_oss": GPTOSSAdapter,
+    "mixtral": MixtralAdapter,
     "olmoe": OLMoEAdapter,
 }
 
 KNOWN_MODEL_NAME_TO_TYPE: dict[str, str] = {
     "openai/gpt-oss-20b": "gpt_oss",
     "allenai/OLMoE-1B-7B-0924-Instruct": "olmoe",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1": "mixtral",
 }
 
 
