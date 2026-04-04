@@ -4,6 +4,7 @@
 from src.capture import capture_expert_activations
 from src.data import load_dataset_prompts
 from src.environment import (
+    get_default_model,
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
@@ -59,7 +60,7 @@ def main():
         from src.cache import load_metadata, load_unembedding
         from src.word_dictionary import build_word_dictionary
 
-        model_name = args.model or "allenai/OLMoE-1B-7B-0924-Instruct"
+        model_name = args.model or get_default_model()
         dataset_name = args.dataset
 
         extractions_dir = get_extractions_dir(model_name, dataset_name)

@@ -197,8 +197,6 @@ def run_pursuit(
             dictionary = torch.cat([single_atoms, multi_atoms], dim=0).to(device)
             labels = [w for w, _ in single_labels] + multi_labels
             n = len(labels)
-            base_vocab_size = None
-            token_ids = None
             print(
                 f"Concept '{concept}': {n} atoms ({len(multi_labels)} multi-token averaged)"
             )

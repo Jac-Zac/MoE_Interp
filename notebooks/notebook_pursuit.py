@@ -116,7 +116,7 @@ plot_evr_heatmap(evr_matrix).show()
 if count_matrix is not None:
     plot_count_heatmap(count_matrix).show()
 
-# %% Label grid — requires results_labeled.json (run label_experts.py first)
+# %% Label grid — requires results_labeled.json (run scripts/label.py first)
 # TODO: Deal with this and perhaps have this in a separate file
 # if labeled_path.exists():
 #     labeled_results = json.loads(labeled_path.read_text())

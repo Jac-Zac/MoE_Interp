@@ -82,7 +82,7 @@ def build_word_dictionary(
         subtoken_ids.update(token_ids)
         labels.append(cleaned)
 
-    # Filter: remove subtokens that are also standalone promoted words
+    # Filter: keep sub-tokens that are themselves promoted words; remove the rest from the base vocab.
     promoted_words = set(labels)
     subtoken_list = list(subtoken_ids)
     all_decoded = [tokenizer.decode([tid]).strip() for tid in subtoken_list]

@@ -108,9 +108,7 @@ def load_dataset_prompts(
     if filter_fn is not None:
         dataset = dataset.filter(lambda ex: filter_fn({"text": ex["_text"]}))
 
-    dataset = dataset.select(
-        range(min(n_docs, len(dataset))) if n_docs is not None else range(len(dataset))
-    )
+    dataset = dataset.select(range(min(n_docs or len(dataset), len(dataset))))
 
     template = spec.prompt_template
 

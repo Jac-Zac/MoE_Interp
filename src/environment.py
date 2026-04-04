@@ -60,6 +60,11 @@ def get_device() -> torch.device:
         return torch.device("cpu")
 
 
+def get_default_model() -> str:
+    """Return the default model name from the environment, with a built-in fallback."""
+    return os.environ.get("DEFAULT_MODEL", "allenai/OLMoE-1B-7B-0924-Instruct")
+
+
 def get_model_dir(model_name: str) -> Path:
     """Convert model name to safe directory name.
 

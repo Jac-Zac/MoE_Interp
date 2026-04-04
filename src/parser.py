@@ -3,6 +3,7 @@
 import argparse
 
 from src.data import DATASET_SPECS
+from src.environment import get_default_model
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -13,7 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument(
         "--model",
         type=str,
-        default="allenai/OLMoE-1B-7B-0924-Instruct",
+        default=get_default_model(),
         help="Model name or path",
     )
     extract_parser.add_argument(

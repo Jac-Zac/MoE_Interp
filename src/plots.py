@@ -9,6 +9,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
+def _save_fig(fig: go.Figure, output_path: Path | None) -> None:
+    """Save a Plotly figure as an HTML file, creating parent directories as needed."""
+    if output_path:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.write_html(str(output_path))
+
+
 def plot_scatter_grid(
     values: np.ndarray,
     title: str,
@@ -78,10 +86,7 @@ def plot_scatter_grid(
         plot_bgcolor="white",
     )
 
-    if output_path:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(str(output_path))
+    _save_fig(fig, output_path)
     return fig
 
 
@@ -214,8 +219,5 @@ def plot_label_grid(
         plot_bgcolor="white",
     )
 
-    if output_path:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(str(output_path))
+    _save_fig(fig, output_path)
     return fig

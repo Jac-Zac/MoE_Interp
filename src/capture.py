@@ -208,9 +208,6 @@ def capture_expert_activations(
                             gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                             gated_output = gate_weights.unsqueeze(-1) * last_down_proj
 
-                            if gated_output.shape[0] == 0:
-                                continue
-
                             # Map flat indices back to get batch positions and token IDs
                             batch_indices = last_token_idx_flat // max_len
                             pos_in_batch = last_token_idx_flat % max_len
