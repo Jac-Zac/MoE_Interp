@@ -7,17 +7,17 @@ from rich import print
 from rich.table import Table
 from transformers import AutoTokenizer
 
-from src.cache import load_metadata, load_unembedding
-from src.environment import (
+from moe_interp.capture.cache import load_metadata, load_unembedding
+from moe_interp.config import (
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
     load_env,
     set_seed,
 )
-from src.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
-from src.pursuit import load_pursuit, run_pursuit
-from src.word_dictionary import build_word_dictionary
+from moe_interp.io.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
+from moe_interp.pursuit import load_pursuit, run_pursuit
+from moe_interp.pursuit.dictionary import build_word_dictionary
 
 # %% Configuration
 seed = 1337

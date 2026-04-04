@@ -14,11 +14,11 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.cache import load_layer_h5, load_metadata, load_unembedding
-from src.concepts import CONCEPT_WORDS
-from src.environment import get_device, get_unembedding_dir
-from src.sparse_decomposition import SOMP
-from src.word_dictionary import WordDictionary
+from moe_interp.capture.cache import load_layer_h5, load_metadata, load_unembedding
+from moe_interp.config import get_device, get_unembedding_dir
+from moe_interp.pursuit.concepts import CONCEPT_WORDS
+from moe_interp.pursuit.decomposition import SOMP
+from moe_interp.pursuit.dictionary import WordDictionary
 
 
 def projection_pursuit(

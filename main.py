@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 """CLI for Expert Pursuit extraction and pursuit."""
 
-from src.capture import capture_expert_activations
-from src.data import load_dataset_prompts
-from src.environment import (
+from moe_interp.capture import capture_expert_activations
+from moe_interp.config import (
     get_default_model,
     get_extractions_dir,
     get_pursuit_dir,
@@ -11,9 +10,10 @@ from src.environment import (
     load_env,
     set_seed,
 )
-from src.parser import build_parser
-from src.plots import plot_count_heatmap, plot_evr_heatmap
-from src.pursuit import run_pursuit
+from moe_interp.io.data import load_dataset_prompts
+from moe_interp.io.plots import plot_count_heatmap, plot_evr_heatmap
+from moe_interp.parser import build_parser
+from moe_interp.pursuit import run_pursuit
 
 
 def main():
@@ -57,8 +57,8 @@ def main():
     elif args.command == "pursuit":
         from transformers import AutoTokenizer
 
-        from src.cache import load_metadata, load_unembedding
-        from src.word_dictionary import build_word_dictionary
+        from moe_interp.capture.cache import load_metadata, load_unembedding
+        from moe_interp.pursuit.dictionary import build_word_dictionary
 
         model_name = args.model or get_default_model()
         dataset_name = args.dataset

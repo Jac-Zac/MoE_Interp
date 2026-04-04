@@ -2,7 +2,7 @@
 
 from datasets import Dataset
 
-from src.data import load_dataset_prompts
+from moe_interp.io.data import load_dataset_prompts
 
 
 class _DummyTokenizer:

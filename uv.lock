@@ -13,6 +13,7 @@ resolution-markers = [
 ]
 required-markers = [
     "platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 
 [[package]]
@@ -1257,17 +1258,13 @@ wheels = [
 [[package]]
 name = "moe-interp"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "datasets" },
     { name = "h5py" },
     { name = "huggingface-hub" },
-    { name = "ipykernel" },
-    { name = "ipywidgets" },
-    { name = "jupyter" },
     { name = "nnsight" },
     { name = "plotly" },
-    { name = "pytest" },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "sys_platform == 'linux'" },
@@ -1276,23 +1273,37 @@ dependencies = [
     { name = "transformers" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+notebooks = [
+    { name = "ipykernel" },
+    { name = "ipywidgets" },
+    { name = "jupyter" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "datasets", specifier = ">=3.0.0" },
     { name = "h5py", specifier = ">=3.10.0" },
     { name = "huggingface-hub", specifier = ">=0.20.0" },
-    { name = "ipykernel", specifier = ">=7.1.0" },
-    { name = "ipywidgets", specifier = ">=8.1.8" },
-    { name = "jupyter", specifier = ">=1.1.1" },
     { name = "nnsight", specifier = ">=0.5.15" },
     { name = "plotly", specifier = ">=5.0.0" },
-    { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.5.0,<2.10" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.5.0,<2.10", index = "https://download.pytorch.org/whl/cu124" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "transformers", specifier = ">=4.46.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.2" }]
+notebooks = [
+    { name = "ipykernel", specifier = ">=7.1.0" },
+    { name = "ipywidgets", specifier = ">=8.1.8" },
+    { name = "jupyter", specifier = ">=1.1.1" },
 ]
 
 [[package]]

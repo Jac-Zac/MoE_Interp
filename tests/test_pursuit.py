@@ -3,8 +3,8 @@
 import torch
 import torch.nn.functional as F
 
-from src.pursuit import projection_pursuit
-from src.sparse_decomposition import somp
+from moe_interp.pursuit.decomposition import somp
+from moe_interp.pursuit.pursuit import projection_pursuit
 
 
 class _DummyTokenizer:
@@ -182,7 +182,7 @@ def test_projection_pursuit_decodes_concept_labels():
 def test_run_pursuit_handles_concepts_with_only_single_token_words(
     monkeypatch, tmp_path
 ):
-    from src import pursuit
+    from moe_interp.pursuit import pursuit
 
     class _DummyTokenizerForConcepts:
         def __call__(self, text, add_special_tokens=False):
@@ -223,7 +223,7 @@ def test_run_pursuit_handles_concepts_with_only_single_token_words(
 
 
 def test_somp_uses_double_precision_for_lstsq(monkeypatch):
-    from src import sparse_decomposition as sd
+    from moe_interp.pursuit import decomposition as sd
 
     captured: dict[str, torch.dtype] = {}
     real_lstsq = torch.linalg.lstsq

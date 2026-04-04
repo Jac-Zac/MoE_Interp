@@ -11,8 +11,8 @@ from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
-from src.cache import load_layer_h5, load_metadata
-from src.environment import get_data_dir, load_env, set_seed
+from moe_interp.capture.cache import load_layer_h5, load_metadata
+from moe_interp.config import get_data_dir, load_env, set_seed
 
 # %% Configuration
 seed = 1337

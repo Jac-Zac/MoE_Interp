@@ -14,14 +14,14 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.cache import (
+from moe_interp.capture.cache import (
     _append_to_file,
     get_model_unembedding,
     save_metadata,
     save_unembedding,
 )
-from src.environment import get_unembedding_dir, is_rank0
-from src.model_adapter import get_model_adapter
+from moe_interp.capture.model_adapter import get_model_adapter
+from moe_interp.config import get_unembedding_dir, is_rank0
 
 
 def apply_component_rmsnorm(

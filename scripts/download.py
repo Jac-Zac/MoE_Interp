@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from datasets import load_dataset
 from dotenv import load_dotenv
 
-from src.data import DATASET_SPECS
+from moe_interp.io.data import DATASET_SPECS
 
 DEFAULT_MODELS = [
     "allenai/OLMoE-1B-7B-0924-Instruct",

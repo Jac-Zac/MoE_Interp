@@ -7,23 +7,22 @@ import torch.nn.functional as F
 from nnsight import LanguageModel
 from tqdm import tqdm
 
-from src.cache import (
+from moe_interp.capture.cache import (
     _append_to_file,
     get_model_unembedding,
     save_metadata,
     save_unembedding,
 )
-from src.capture import apply_component_rmsnorm
-from src.data import load_dataset_prompts
-from src.environment import (
+from moe_interp.capture.capture import apply_component_rmsnorm
+from moe_interp.capture.model_adapter import get_model_adapter
+from moe_interp.config import (
     get_data_dir,
     get_extractions_dir,
     get_unembedding_dir,
     load_env,
     set_seed,
 )
-from src.model_adapter import get_model_adapter
-
+from moe_interp.io.data import load_dataset_prompts
 
 # %% Configuration
 seed = 1337

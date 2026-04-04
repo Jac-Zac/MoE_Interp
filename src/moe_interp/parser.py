@@ -2,8 +2,8 @@
 
 import argparse
 
-from src.data import DATASET_SPECS
-from src.environment import get_default_model
+from moe_interp.config import get_default_model
+from moe_interp.io.data import DATASET_SPECS
 
 
 def build_parser() -> argparse.ArgumentParser:
