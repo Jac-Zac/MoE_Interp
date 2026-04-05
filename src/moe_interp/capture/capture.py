@@ -113,6 +113,9 @@ def capture_expert_activations(
                 batch_tokens = batch["input_ids"]  # type: ignore[index]
                 prompt_lengths = batch["length"]  # type: ignore[index]
                 b_size = len(batch_tokens)
+                pending_writes: dict[
+                    tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]
+                ] = {}
 
                 with torch.no_grad(), model.trace(batch_tokens) as tracer:
                     input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
@@ -223,12 +226,23 @@ def capture_expert_activations(
 
                             # Single write per expert (was batch_size writes)
                             if is_rank0():
-                                _append_to_file(
-                                    layer_files[layer_idx],
-                                    expert_id,
-                                    gated_output.half().cpu(),
-                                    last_token_ids.cpu(),
+                                key = (layer_idx, expert_id)
+                                pending_writes.setdefault(key, []).append(
+                                    (gated_output.half().cpu(), last_token_ids.cpu())
                                 )
+
+                if is_rank0():
+                    for (layer_idx, expert_id), writes in pending_writes.items():
+                        activations = torch.cat(
+                            [activations for activations, _ in writes], dim=0
+                        )
+                        tokens = torch.cat([tokens for _, tokens in writes], dim=0)
+                        _append_to_file(
+                            layer_files[layer_idx],
+                            expert_id,
+                            activations,
+                            tokens,
+                        )
 
                 progress.advance(task, b_size)
         finally:

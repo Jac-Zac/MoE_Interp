@@ -33,6 +33,7 @@ batch_size = 1
 # Thus the model will be shared between two gpus.
 # MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
+REMOTE = False
 
 load_env()
 set_seed(seed)
@@ -40,11 +41,12 @@ data_dir = get_data_dir()
 # The main.py CLI automatically detects distributed setup and uses tp_plan="auto"
 model = LanguageModel(
     MODEL_NAME,
-    device_map="auto",
-    # automatically dispatch bfloat16 usually
-    # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
-    dtype="auto",
-    dispatch=True,
+    # NOTE: Support different things
+    # device_map="auto",
+    # # automatically dispatch bfloat16 usually
+    # # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
+    # dtype="auto",
+    # dispatch=True,
 )
 
 print(model.dtype)  # Show dtype
@@ -90,8 +92,9 @@ for batch in tqdm(
     batch_tokens = batch["input_ids"]  # type: ignore[index]
     prompt_lengths = batch["length"]  # type: ignore[index]
     b_size = len(batch_tokens)
+    pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]] = {}
 
-    with torch.no_grad(), model.trace(batch_tokens) as tracer:
+    with torch.no_grad(), model.trace(batch_tokens, remote=REMOTE) as tracer:
         input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
 
         layer_datas: list = []
@@ -185,12 +188,15 @@ for batch in tqdm(
                 last_token_ids = ids[batch_indices, pos_in_batch]
 
                 # Single write per expert (was batch_size writes)
-                _append_to_file(
-                    layer_files[layer_idx],
-                    expert_id,
-                    gated_output.half().cpu(),
-                    last_token_ids.cpu(),
+                key = (layer_idx, expert_id)
+                pending_writes.setdefault(key, []).append(
+                    (gated_output.half().cpu(), last_token_ids.cpu())
                 )
+
+    for (layer_idx, expert_id), writes in pending_writes.items():
+        activations = torch.cat([activations for activations, _ in writes], dim=0)
+        tokens = torch.cat([tokens for _, tokens in writes], dim=0)
+        _append_to_file(layer_files[layer_idx], expert_id, activations, tokens)
 
 # Set back tokenizer to padd to the left
 model.tokenizer.padding_side = "left"
