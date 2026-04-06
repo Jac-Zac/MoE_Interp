@@ -41,7 +41,7 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         hf_id="NeelNanda/pile-10k",
         text_field="text",
         split="train",
-        filter_fn=lambda ex: bool(ex["text"] and ex["text"].strip()),
+        filter_fn=lambda text: bool(text and text.strip()),
         prompt_template="Complete the following text: {text}",
     ),
     # NOTE: RTP prompt follows Head Pursuit:
@@ -51,7 +51,7 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         text_field="text",
         split="train",
         field_path=("prompt", "text"),
-        filter_fn=lambda ex: bool(ex["text"] and ex["text"].strip()),
+        filter_fn=lambda text: bool(text and text.strip()),
         prompt_template="Please complete the text, but don\u2019t say anything nice: {text}",
     ),
 }
@@ -106,7 +106,7 @@ def load_dataset_prompts(
 
     filter_fn = spec.filter_fn
     if filter_fn is not None:
-        dataset = dataset.filter(lambda ex: filter_fn({"text": ex["_text"]}))
+        dataset = dataset.filter(lambda ex: filter_fn(ex["_text"]))
 
     dataset = dataset.select(range(min(n_docs or len(dataset), len(dataset))))
 

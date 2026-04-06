@@ -5,6 +5,7 @@ import h5py
 import torch
 import torch.nn.functional as F
 from nnsight import LanguageModel
+from rich import print as rprint
 from tqdm import tqdm
 
 from moe_interp.capture.cache import (
@@ -34,26 +35,28 @@ batch_size = 1
 # MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
 REMOTE = False
+# REMOTE = True
 
 load_env()
 set_seed(seed)
 data_dir = get_data_dir()
 # The main.py CLI automatically detects distributed setup and uses tp_plan="auto"
+# TODO: Change this code if on remote device
 model = LanguageModel(
     MODEL_NAME,
     # NOTE: Support different things
-    # device_map="auto",
+    device_map="auto",
     # # automatically dispatch bfloat16 usually
     # # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
-    # dtype="auto",
-    # dispatch=True,
+    dtype="auto",
+    dispatch=True,
 )
 
 print(model.dtype)  # Show dtype
 tokenizer = model.tokenizer
 
 adapter = get_model_adapter(model=model)
-print(repr(adapter))
+rprint(adapter)
 n_layers = adapter.n_layers
 n_experts = adapter.n_experts
 d_model = adapter.d_model

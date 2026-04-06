@@ -66,6 +66,7 @@ def build_word_dictionary(
 
     # First pass: identify multi-token words and track their sub-tokens
     labels: list[str] = []
+    label_token_ids: list[list[int]] = []
     seen: set[str] = set()
     subtoken_ids: set[int] = set()
 
@@ -81,6 +82,7 @@ def build_word_dictionary(
 
         subtoken_ids.update(token_ids)
         labels.append(cleaned)
+        label_token_ids.append(token_ids)
 
     # Filter: keep sub-tokens that are themselves promoted words; remove the rest from the base vocab.
     promoted_words = set(labels)
@@ -101,10 +103,9 @@ def build_word_dictionary(
         tid for tid, keep in zip(all_token_ids, keep_mask.tolist()) if keep
     ]
 
-    # Second pass: build rows with filtered base + promoted words
+    # Second pass: build rows with filtered base + promoted words (reuse cached token ids)
     rows = [filtered_base]
-    for word in labels:
-        token_ids = tokenizer(" " + word, add_special_tokens=False).input_ids
+    for token_ids in label_token_ids:
         # NOTE: Re-normalize after averaging — averaging k unit vectors produces
         # a vector with norm < 1, which would bias SOMP against merged words.
         rows.append(F.normalize(dictionary[token_ids].mean(dim=0, keepdim=True), dim=1))

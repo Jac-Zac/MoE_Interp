@@ -27,7 +27,7 @@ class MoEAdapter(ABC):
     """Abstract adapter for model-specific MoE trace access.
 
     Subclass properties expose model config (n_layers, n_experts, d_model, etc.)
-    and __repr__ prints a rich config table.
+    and rich renders a config table.
     """
 
     def __init__(self, model: Any | None = None) -> None:
@@ -73,11 +73,9 @@ class MoEAdapter(ABC):
     def experts_per_tok(self) -> int:
         return self._config.experts_per_tok
 
-    def __repr__(self) -> str:
-        from rich.console import Console
+    def _rich_table(self):
         from rich.table import Table
 
-        console = Console()
         t = Table(title=f"Model Config [{self.__class__.__name__}]")
         t.add_column("Property", style="cyan")
         t.add_column("Value", style="magenta")
@@ -87,8 +85,21 @@ class MoEAdapter(ABC):
         t.add_row("Hidden Size", str(self.d_model))
         t.add_row("Experts", str(self.n_experts))
         t.add_row("Experts per Token", str(self.experts_per_tok))
-        console.print(t)
-        return ""
+        return t
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"model_name={self.model_name!r}, "
+            f"model_type={self.model_type!r}, "
+            f"n_layers={self.n_layers}, "
+            f"n_experts={self.n_experts}, "
+            f"d_model={self.d_model}, "
+            f"experts_per_tok={self.experts_per_tok})"
+        )
+
+    def __rich_console__(self, console: Any, options: Any):
+        yield self._rich_table()
 
     @abstractmethod
     def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:

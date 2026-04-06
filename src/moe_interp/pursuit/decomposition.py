@@ -4,7 +4,6 @@ https://github.com/Flegyas/ResiDual/blob/004b0aac16a74e73a5ac29a47b76c9f5b39531f
 """
 
 from abc import abstractmethod
-from typing import Optional
 
 import numpy as np
 import torch
@@ -199,7 +198,7 @@ class SOMP(Projection):
         self,
         k: int,
         criterion="l1",
-        pc: Optional[int] = None,
+        pc: int | None = None,
         compute_evr: bool = False,
         return_full: bool = True,
     ):
