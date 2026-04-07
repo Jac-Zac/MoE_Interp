@@ -81,24 +81,31 @@ Outputs to `data/<model>/pursuit/<dataset>/` (or `.../<concept>/` when `--concep
 
 ```
 .
-├── main.py                        # CLI entry point
+├── main.py                            # CLI entry point
 ├── notebooks/
-│   ├── notebook_extract.py         # Standalone extraction walkthrough
-│   ├── notebook_pursuit.py        # Pursuit demo
-│   └── notebook_pursuit_marimo.py # Interactive Marimo explorer
-├── src/
-│   ├── capture.py                 # Expert activation extraction (nnsight)
-│   ├── cache.py                   # HDF5 storage utilities
-│   ├── concepts.py                # Word lists (offensive, countries, numbers)
-│   ├── data.py                    # TriviaQA loading + chat-template formatting
-│   ├── environment.py             # Env loading, device selection, seeds
-│   ├── plots.py                   # Plotly EVR heatmap
-│   ├── pursuit.py                 # Projection pursuit (SOMP over unembedding dict)
-│   └── sparse_decomposition.py   # PCA, OMP, SOMP implementations
+│   ├── notebook_extract.py            # Standalone extraction walkthrough
+│   ├── notebook_pursuit.py            # Pursuit demo
+│   └── notebook_clustering.py         # Experimental K-means clustering analysis
+├── src/moe_interp/
+│   ├── capture/
+│   │   ├── capture.py                 # Expert activation extraction (nnsight)
+│   │   ├── cache.py                   # HDF5 storage utilities
+│   │   └── model_adapter.py           # Model-specific MoE trace adapters
+│   ├── pursuit/
+│   │   ├── pursuit.py                 # Projection pursuit orchestration
+│   │   ├── decomposition.py           # PCA, OMP, SOMP implementations
+│   │   ├── concepts.py                # Word lists (offensive, countries, numbers)
+│   │   └── dictionary.py              # Dictionary augmentation utilities
+│   ├── io/
+│   │   ├── data.py                    # Dataset loading + chat-template formatting
+│   │   └── plots.py                   # Plotly EVR/count heatmaps
+│   ├── config.py                      # Env loading, device selection, seeds
+│   └── parser.py                      # CLI argument parser
 ├── tests/
-│   ├── test_core.py               # HDF5 round-trip tests
-│   └── test_pursuit.py            # Projection pursuit + SOMP unit tests
-├── scripts/                       # SLURM scripts (Cineca, Orfeo)
+│   ├── test_data.py                   # Dataset prompt loading tests
+│   ├── test_model_adapter.py          # Model adapter tests
+│   └── test_pursuit.py                # Projection pursuit + SOMP unit tests
+├── scripts/                           # Setup and cluster scripts
 └── pyproject.toml
 ```
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# WARNING: This code is for know completly experimental and AI generated
+# WARNING: This code is now completely experimental and AI generated
 
 # %% Imports
 import numpy as np

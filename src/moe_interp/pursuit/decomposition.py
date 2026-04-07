@@ -328,9 +328,16 @@ def somp(
 
         # PERF: Reuse the on-device prefix instead of recreating an index tensor.
         current_atoms = torch.index_select(dictionary, 0, chosen[: i + 1])
-        lstsq_weights = torch.linalg.lstsq(
-            current_atoms.T.double(), X.T.double()
-        ).solution.to(dtype=X.dtype)
+
+        if torch.device(device).type == "mps":
+            lstsq_weights = torch.linalg.lstsq(
+                current_atoms.T.float(), X.T.float()
+            ).solution.to(dtype=X.dtype)
+        else:
+            lstsq_weights = torch.linalg.lstsq(
+                current_atoms.T.double(), X.T.double()
+            ).solution.to(dtype=X.dtype)
+
         recon = (current_atoms.T @ lstsq_weights).T
 
         residual = X - recon
@@ -369,8 +376,18 @@ def somp(
     # PERF: Convert selected indices once after the loop to avoid per-step syncs.
     results = np.asarray([descriptors[idx] for idx in chosen.tolist()], dtype=object)
 
-    recon = X_mean + recon
+    # NOTE: Order matters here. At this point `recon` is the least-squares reconstruction
+    # expressed in the *centered* space (i.e. it approximates X - X_mean, not the original X).
+    # We compute the residual first while both tensors are still in the same centered space,
+    # then add X_mean back to recover the uncentered reconstruction.
+    #
+    # The ResiDual reference code (sparse_decomposition.py) has this reversed:
+    #   recon = X_mean + recon   # recon is now uncentered
+    #   residual = X - recon     # X is still centered → subtracts an uncentered value
+    #                            # from a centered one, so residual is off by X_mean
+    # That bug only surfaces when return_full=True (the residual is included in the output).
     residual = X - recon
+    recon = X_mean + recon
     assert l2 is not None and cosine is not None
 
     return dict(

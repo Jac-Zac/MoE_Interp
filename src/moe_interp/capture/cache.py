@@ -20,7 +20,7 @@ def _expert_group_name(expert_id: int) -> str:
 def save_metadata(path: Path, **kwargs) -> None:
     path = _metadata_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(kwargs))
+    path.write_text(json.dumps(kwargs, indent=2))
 
 
 def load_metadata(path: Path) -> dict:

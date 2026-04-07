@@ -34,8 +34,8 @@ batch_size = 1
 # Thus the model will be shared between two gpus.
 # MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
-# REMOTE = False
-REMOTE = True
+REMOTE = False
+# REMOTE = True
 
 load_dotenv()
 set_seed(seed)
@@ -45,11 +45,11 @@ data_dir = get_data_dir()
 model = LanguageModel(
     MODEL_NAME,
     # NOTE: Support different things
-    # device_map="auto",
+    device_map="auto",
     # # automatically dispatch bfloat16 usually
     # # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
-    # dtype="auto",
-    # dispatch=True,
+    dtype="auto",
+    dispatch=True,
 )
 
 print(model.dtype)  # Show dtype
@@ -174,7 +174,8 @@ for batch in tqdm(
                 # Compute gate weights and weighted output
                 gate_weights = tw[last_token_idx_flat, last_top_k_pos]
                 gated_output = gate_weights.unsqueeze(-1) * last_down_proj
-                batch_indices = (last_token_idx_flat // max_len).long()
+                batch_indices = last_token_idx_flat // max_len
+                pos_in_batch = last_token_idx_flat % max_len
                 gated_output = apply_component_rmsnorm(
                     hidden_states=gated_output,
                     second_moment=sm_last[batch_indices],
@@ -186,8 +187,6 @@ for batch in tqdm(
                     continue
 
                 # Map flat indices back to get token IDs
-                batch_indices = last_token_idx_flat // max_len
-                pos_in_batch = last_token_idx_flat % max_len
                 last_token_ids = ids[batch_indices, pos_in_batch]
 
                 # Single write per expert (was batch_size writes)
@@ -201,7 +200,7 @@ for batch in tqdm(
         tokens = torch.cat([tokens for _, tokens in writes], dim=0)
         _append_to_file(layer_files[layer_idx], expert_id, activations, tokens)
 
-# Set back tokenizer to padd to the left
+# Set back tokenizer to pad to the left
 model.tokenizer.padding_side = "left"
 
 for f in layer_files.values():

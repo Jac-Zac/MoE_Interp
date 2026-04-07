@@ -1,6 +1,7 @@
 """Projection pursuit for Expert Pursuit."""
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -119,6 +120,8 @@ def run_pursuit(
             so progress is never lost if the run is interrupted.
         concept: Optional concept name to restrict the unembedding dictionary.
             Must be a key in CONCEPT_WORDS (e.g. "offensive", "countries", "numbers").
+        tokenizer: Tokenizer for decoding chosen atom indices. If None, loaded from
+            AutoTokenizer using the model name stored in extractions_dir/metadata.json.
 
     Returns:
         Tuple of (results list, evr_matrix, count_matrix)
@@ -215,18 +218,13 @@ def run_pursuit(
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]
 
-    # Open the JSONL log file once if output_dir is set. Each expert result is
-    # flushed immediately so progress is never lost if the run is interrupted.
-    jsonl_file = None
-    if output_dir is not None:
-        jsonl_file = open(output_dir / "results.jsonl", "w")
-
     results = []
     evr_matrix = np.zeros((n_layers, n_experts))
     count_matrix = np.zeros((n_layers, n_experts))
     k = min(k, dictionary.shape[0])
 
-    try:
+    jsonl_path = output_dir / "results.jsonl" if output_dir is not None else None
+    with open(jsonl_path, "w") if jsonl_path else nullcontext() as jsonl_file:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -280,9 +278,6 @@ def run_pursuit(
 
                 progress.remove_task(expert_task)
                 progress.advance(layer_task)
-    finally:
-        if jsonl_file is not None:
-            jsonl_file.close()
 
     print(f"Analyzed {len(results)} experts")
 

@@ -182,17 +182,21 @@ def capture_expert_activations(
                     # Pass 2: apply normalisation and write per expert
                     for layer_idx, layer_data in enumerate(all_layer_data):
                         active_experts = layer_data["active_experts"]
+                        if not layer_data["down_projs"]:
+                            continue
+                        # All experts in the same layer share a device (pipeline/tensor parallel).
+                        target_device = layer_data["down_projs"][0].device
+                        lp = last_positions.to(target_device)
+                        ids = input_ids.to(target_device)
+                        tw = layer_data["weights"].to(target_device)
+                        sm_last = second_moment_last.to(target_device)
+
                         for i in range(len(layer_data["token_indices"])):
                             token_idx = layer_data["token_indices"][i]
                             down_proj = layer_data["down_projs"][i]
                             top_k_pos = layer_data["top_k_pos"][i]
                             expert_id = active_experts[i].item()
 
-                            target_device = down_proj.device
-                            lp = last_positions.to(target_device)
-                            ids = input_ids.to(target_device)
-                            tw = layer_data["weights"].to(target_device)
-                            sm_last = second_moment_last.to(target_device)
                             token_idx = token_idx.to(target_device)
                             top_k_pos = top_k_pos.to(target_device)
 
