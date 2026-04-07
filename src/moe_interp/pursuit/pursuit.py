@@ -85,7 +85,7 @@ def _decode_atom(
     if labels is not None and base_vocab_size is not None and idx >= base_vocab_size:
         return labels[idx - base_vocab_size]
     token_id = idx if token_ids is None else token_ids[idx]
-    return tokenizer.decode([token_id]).strip()
+    return tokenizer.decode([token_id])
 
 
 def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray, np.ndarray | None]:

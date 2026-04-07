@@ -237,15 +237,13 @@ def capture_expert_activations(
 
                 if is_rank0():
                     for (layer_idx, expert_id), writes in pending_writes.items():
-                        activations = torch.cat(
-                            [activations for activations, _ in writes], dim=0
-                        )
-                        tokens = torch.cat([tokens for _, tokens in writes], dim=0)
+                        all_activations = torch.cat([act for act, _ in writes], dim=0)
+                        all_tokens = torch.cat([tok for _, tok in writes], dim=0)
                         _append_to_file(
                             layer_files[layer_idx],
                             expert_id,
-                            activations,
-                            tokens,
+                            all_activations,
+                            all_tokens,
                         )
 
                 progress.advance(task, b_size)
