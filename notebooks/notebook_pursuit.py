@@ -3,6 +3,7 @@
 # %% Imports
 import json
 
+from dotenv import load_dotenv
 from rich import print
 from rich.table import Table
 from transformers import AutoTokenizer
@@ -12,7 +13,6 @@ from moe_interp.config import (
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
-    load_env,
     set_seed,
 )
 from moe_interp.io.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
@@ -23,7 +23,7 @@ from moe_interp.pursuit.dictionary import build_word_dictionary
 seed = 1337
 # MODEL_NAME = "openai/gpt-oss-20b"
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"
-load_env()
+load_dotenv()
 set_seed(seed)
 
 # %% Setup

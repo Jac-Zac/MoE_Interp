@@ -259,7 +259,7 @@ def capture_expert_activations(
         "n_experts": n_experts,
         "d_model": d_model,
     }
-    if is_rank0() and model_name is not None:
+    if is_rank0():
         save_metadata(output_dir, **metadata)
 
         unembedding_dir = get_unembedding_dir(model_name)

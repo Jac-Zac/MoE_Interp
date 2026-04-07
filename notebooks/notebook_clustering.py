@@ -4,6 +4,7 @@
 
 # %% Imports
 import numpy as np
+from dotenv import load_dotenv
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -12,11 +13,11 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 from moe_interp.capture.cache import load_layer_h5, load_metadata
-from moe_interp.config import get_data_dir, load_env, set_seed
+from moe_interp.config import get_data_dir, set_seed
 
 # %% Configuration
 seed = 1337
-load_env()
+load_dotenv()
 set_seed(seed)
 
 # %% Setup

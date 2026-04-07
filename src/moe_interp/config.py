@@ -5,25 +5,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.distributed as dist
-from dotenv import load_dotenv
 
 
 def is_rank0() -> bool:
     """Return True if we are on rank 0 or not in a distributed setup."""
     return not dist.is_initialized() or dist.get_rank() == 0
-
-
-def load_env(override: bool = False) -> None:
-    """Load environment variables from .env file.
-
-    Args:
-        override: If True, .env values overwrite variables already set in the environment
-                  (e.g. from a SLURM job script). Defaults to False so shell-exported
-                  variables always take priority.
-    """
-    env_path = Path(__file__).parent.parent / ".env"
-    if env_path.exists():
-        load_dotenv(env_path, override=override)
 
 
 def get_data_dir() -> Path:

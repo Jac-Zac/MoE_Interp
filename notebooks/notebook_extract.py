@@ -4,6 +4,7 @@
 import h5py
 import torch
 import torch.nn.functional as F
+from dotenv import load_dotenv
 from nnsight import LanguageModel
 from rich import print as rprint
 from tqdm import tqdm
@@ -20,7 +21,6 @@ from moe_interp.config import (
     get_data_dir,
     get_extractions_dir,
     get_unembedding_dir,
-    load_env,
     set_seed,
 )
 from moe_interp.io.data import load_dataset_prompts
@@ -34,10 +34,10 @@ batch_size = 1
 # Thus the model will be shared between two gpus.
 # MODEL_NAME = "openai/gpt-oss-20b"  # Change this to run different models
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"  # Change this to run different models
-REMOTE = False
-# REMOTE = True
+# REMOTE = False
+REMOTE = True
 
-load_env()
+load_dotenv()
 set_seed(seed)
 data_dir = get_data_dir()
 # The main.py CLI automatically detects distributed setup and uses tp_plan="auto"
@@ -45,11 +45,11 @@ data_dir = get_data_dir()
 model = LanguageModel(
     MODEL_NAME,
     # NOTE: Support different things
-    device_map="auto",
+    # device_map="auto",
     # # automatically dispatch bfloat16 usually
     # # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
-    dtype="auto",
-    dispatch=True,
+    # dtype="auto",
+    # dispatch=True,
 )
 
 print(model.dtype)  # Show dtype

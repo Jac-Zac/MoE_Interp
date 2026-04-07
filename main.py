@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """CLI for Expert Pursuit extraction and pursuit."""
 
+from dotenv import load_dotenv
+
 from moe_interp.capture import capture_expert_activations
 from moe_interp.config import (
     get_default_model,
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
-    load_env,
     set_seed,
 )
 from moe_interp.io.data import load_dataset_prompts
@@ -17,7 +18,7 @@ from moe_interp.pursuit import run_pursuit
 
 
 def main():
-    load_env()
+    load_dotenv()
     set_seed(1337)
 
     parser = build_parser()
