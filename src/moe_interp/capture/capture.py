@@ -15,7 +15,7 @@ from rich.progress import (
 )
 
 from moe_interp.capture.cache import (
-    _append_to_file,
+    append_to_file,
     get_model_unembedding,
     save_metadata,
     save_unembedding,
@@ -40,6 +40,105 @@ def apply_component_rmsnorm(
     hidden_states = hidden_states.to(torch.float32)
     hidden_states = hidden_states * torch.rsqrt(second_moment.unsqueeze(-1) + eps)
     return weight * hidden_states.to(input_dtype)
+
+
+def build_pending_writes(
+    layer_data_list: list,
+    input_ids: torch.Tensor,
+    last_positions: torch.Tensor,
+    second_moment_last: torch.Tensor,
+    max_len: int,
+    norm_weight: torch.Tensor,
+    norm_eps: float,
+) -> dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]]:
+    """Pass 2: filter to last-token positions, gate, normalise, stage writes.
+
+    Takes the per-layer traced data collected during Pass 1 and produces a dict
+    keyed by ``(layer_idx, expert_id)`` containing ``(gated_output, last_token_ids)``
+    tensor pairs on CPU (float16 activations). Pure tensor math — no nnsight
+    dependency — so the notebook can share this with `capture_expert_activations`.
+    """
+    pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]] = {}
+
+    for layer_idx, layer_data in enumerate(layer_data_list):
+        active_experts = layer_data["active_experts"]
+        if not layer_data["down_projs"]:
+            continue
+
+        # All experts in the same layer share a device (pipeline/tensor parallel).
+        target_device = layer_data["down_projs"][0].device
+        lp = last_positions.to(target_device)
+        ids = input_ids.to(target_device)
+        tw = layer_data["weights"].to(target_device)
+        sm_last = second_moment_last.to(target_device)
+        nw = norm_weight.to(target_device)
+
+        n_iters = len(layer_data["token_indices"])
+        if not (
+            active_experts.numel()
+            == n_iters
+            == len(layer_data["down_projs"])
+            == len(layer_data["top_k_pos"])
+        ):
+            raise RuntimeError(
+                "Mismatched traced event counts in capture Pass 2: "
+                f"active_experts={active_experts.numel()}, "
+                f"token_indices={n_iters}, "
+                f"down_projs={len(layer_data['down_projs'])}, "
+                f"top_k_pos={len(layer_data['top_k_pos'])}"
+            )
+
+        for i in range(n_iters):
+            token_idx = layer_data["token_indices"][i].to(target_device).flatten()
+            down_proj = layer_data["down_projs"][i].to(target_device)
+            if down_proj.ndim == 1:
+                down_proj = down_proj.unsqueeze(0)
+            pos = layer_data["top_k_pos"][i].to(target_device).flatten()
+            expert_id = int(active_experts[i].item())
+
+            # Filter to last-token positions only
+            is_last = torch.isin(token_idx, lp)
+            if not is_last.any():
+                continue
+
+            last_down_proj = down_proj[is_last]
+            last_top_k_pos = pos[is_last]
+            last_token_idx_flat = token_idx[is_last]
+
+            # Compute gated output
+            gate_weights = tw[last_token_idx_flat, last_top_k_pos]
+            gated_output = gate_weights.unsqueeze(-1) * last_down_proj
+
+            # Map flat indices back to batch positions and token IDs
+            batch_indices = last_token_idx_flat // max_len
+            pos_in_batch = last_token_idx_flat % max_len
+            last_token_ids = ids[batch_indices, pos_in_batch]
+
+            # Apply component RMSNorm using residual stream stats
+            gated_output = apply_component_rmsnorm(
+                hidden_states=gated_output,
+                second_moment=sm_last[batch_indices],
+                weight=nw,
+                eps=norm_eps,
+            )
+
+            key = (layer_idx, expert_id)
+            pending_writes.setdefault(key, []).append(
+                (gated_output.half().cpu(), last_token_ids.cpu())
+            )
+
+    return pending_writes
+
+
+def flush_pending_writes(
+    pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]],
+    layer_files: dict[int, h5py.File],
+) -> None:
+    """Concatenate staged per-expert tensors and append them to the HDF5 files."""
+    for (layer_idx, expert_id), writes in pending_writes.items():
+        all_activations = torch.cat([act for act, _ in writes], dim=0)
+        all_tokens = torch.cat([tok for _, tok in writes], dim=0)
+        append_to_file(layer_files[layer_idx], expert_id, all_activations, all_tokens)
 
 
 def capture_expert_activations(
@@ -113,9 +212,6 @@ def capture_expert_activations(
                 batch_tokens = batch["input_ids"]  # type: ignore[index]
                 prompt_lengths = batch["length"]  # type: ignore[index]
                 b_size = len(batch_tokens)
-                pending_writes: dict[
-                    tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]
-                ] = {}
 
                 with torch.no_grad(), model.trace(batch_tokens) as tracer:
                     input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
@@ -131,23 +227,23 @@ def capture_expert_activations(
                     sample_indices = torch.arange(b_size)
 
                     # Pass 1: collect per-layer expert data
-                    all_layer_data: list = []
+                    layer_data_list: list = []
                     for layer_idx, layer in enumerate(model.model.layers):
-                        _, weights, indices = adapter.get_router_output(layer)
+                        _, weights, _ = adapter.get_router_output(layer)
                         top_k_weights = weights.save().detach()
-
-                        token_indices_list: list = []
-                        down_projs_list: list = []
-                        top_k_pos_list: list = []
 
                         expert_hit = adapter.get_expert_hit(layer)
                         active_experts = (
                             expert_hit[expert_hit != adapter.n_experts]
-                            .squeeze(-1)
+                            .reshape(-1)
                             .save()
                             .detach()
                         )
                         num_iters = active_experts.numel()
+
+                        token_indices_list: list = []
+                        down_projs_list: list = []
+                        top_k_pos_list: list = []
 
                         with tracer.iter[:num_iters]:
                             top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(
@@ -159,7 +255,7 @@ def capture_expert_activations(
                             down_projs_list.append(down_proj.save().detach())
                             top_k_pos_list.append(top_k_pos.save().detach())
 
-                        all_layer_data.append(
+                        layer_data_list.append(
                             {
                                 "active_experts": active_experts,
                                 "token_indices": token_indices_list,
@@ -179,72 +275,22 @@ def capture_expert_activations(
                         pre_norm_last.float().pow(2).mean(dim=-1)
                     )
 
-                    # Pass 2: apply normalisation and write per expert
-                    for layer_idx, layer_data in enumerate(all_layer_data):
-                        active_experts = layer_data["active_experts"]
-                        if not layer_data["down_projs"]:
-                            continue
-                        # All experts in the same layer share a device (pipeline/tensor parallel).
-                        target_device = layer_data["down_projs"][0].device
-                        lp = last_positions.to(target_device)
-                        ids = input_ids.to(target_device)
-                        tw = layer_data["weights"].to(target_device)
-                        sm_last = second_moment_last.to(target_device)
-
-                        for i in range(len(layer_data["token_indices"])):
-                            token_idx = layer_data["token_indices"][i]
-                            down_proj = layer_data["down_projs"][i]
-                            top_k_pos = layer_data["top_k_pos"][i]
-                            expert_id = active_experts[i].item()
-
-                            token_idx = token_idx.to(target_device)
-                            top_k_pos = top_k_pos.to(target_device)
-
-                            # Vectorized: single mask
-                            is_last = torch.isin(token_idx, lp)
-
-                            if not is_last.any():
-                                continue
-
-                            # Extract all last-token data at once
-                            last_down_proj = down_proj[is_last]
-                            last_top_k_pos = top_k_pos[is_last]
-                            last_token_idx_flat = token_idx[is_last]
-
-                            # Compute gate weights and weighted output
-                            gate_weights = tw[last_token_idx_flat, last_top_k_pos]
-                            gated_output = gate_weights.unsqueeze(-1) * last_down_proj
-
-                            # Map flat indices back to get batch positions and token IDs
-                            batch_indices = last_token_idx_flat // max_len
-                            pos_in_batch = last_token_idx_flat % max_len
-                            last_token_ids = ids[batch_indices, pos_in_batch]
-
-                            # Apply component RMSNorm using residual stream stats
-                            gated_output = apply_component_rmsnorm(
-                                hidden_states=gated_output,
-                                second_moment=sm_last[batch_indices],
-                                weight=model.model.norm.weight.to(target_device),
-                                eps=model.model.norm.variance_epsilon,
-                            )
-
-                            # Single write per expert (was batch_size writes)
-                            if is_rank0():
-                                key = (layer_idx, expert_id)
-                                pending_writes.setdefault(key, []).append(
-                                    (gated_output.half().cpu(), last_token_ids.cpu())
-                                )
+                    # Pass 2: apply normalisation and stage per-expert writes.
+                    # Kept inside the trace context to match the previously
+                    # working semantics with nnsight saved-tensor materialisation.
+                    if is_rank0():
+                        pending_writes = build_pending_writes(
+                            layer_data_list=layer_data_list,
+                            input_ids=input_ids,
+                            last_positions=last_positions,
+                            second_moment_last=second_moment_last,
+                            max_len=max_len,
+                            norm_weight=model.model.norm.weight,
+                            norm_eps=model.model.norm.variance_epsilon,
+                        )
 
                 if is_rank0():
-                    for (layer_idx, expert_id), writes in pending_writes.items():
-                        all_activations = torch.cat([act for act, _ in writes], dim=0)
-                        all_tokens = torch.cat([tok for _, tok in writes], dim=0)
-                        _append_to_file(
-                            layer_files[layer_idx],
-                            expert_id,
-                            all_activations,
-                            all_tokens,
-                        )
+                    flush_pending_writes(pending_writes, layer_files)
 
                 progress.advance(task, b_size)
         finally:

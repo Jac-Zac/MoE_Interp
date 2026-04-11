@@ -27,7 +27,7 @@ def load_metadata(path: Path) -> dict:
     return json.loads(_metadata_path(path).read_text())
 
 
-def _append_to_file(
+def append_to_file(
     f: h5py.File,
     expert_id: int,
     activations: torch.Tensor,

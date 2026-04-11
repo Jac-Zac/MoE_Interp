@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 # %% Imports
+import math
+
 import h5py
 import torch
 import torch.nn.functional as F
@@ -10,7 +12,7 @@ from rich import print as rprint
 from tqdm import tqdm
 
 from moe_interp.capture.cache import (
-    _append_to_file,
+    append_to_file,
     get_model_unembedding,
     save_metadata,
     save_unembedding,
@@ -28,7 +30,7 @@ from moe_interp.io.data import load_dataset_prompts
 # %% Configuration
 seed = 1337
 n_docs = 16
-batch_size = 1
+batch_size = 2
 
 # NOTE: gpt-oss doesn't fit in a V100 but current code support pipeline parallelism by default
 # Thus the model will be shared between two gpus.
@@ -88,14 +90,14 @@ model.tokenizer.padding_side = "right"
 
 # .iter() yields dicts where batch["input_ids"] is list[list[int]] —
 # exactly the format nnsight's model.trace() expects.
-n_batches = len(ds) // batch_size
+n_batches = math.ceil(len(ds) / batch_size)
 for batch in tqdm(
     ds.iter(batch_size=batch_size), total=n_batches, desc="Encoding batches"
 ):
     batch_tokens = batch["input_ids"]  # type: ignore[index]
     prompt_lengths = batch["length"]  # type: ignore[index]
     b_size = len(batch_tokens)
-    pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]] = {}
+    pending_writes = {}
 
     with torch.no_grad(), model.trace(batch_tokens, remote=REMOTE) as tracer:
         input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
@@ -148,12 +150,29 @@ for batch in tqdm(
 
         for layer_idx, layer_data in enumerate(layer_datas):
             active_experts = layer_data["active_experts"]
-            for i in range(len(layer_data["token_indices"])):
-                token_idx = layer_data["token_indices"][i]
-                down_proj = layer_data["down_projs"][i]
-                top_k_pos = layer_data["top_k_pos"][i]
-                expert_id = active_experts[i].item()
+            token_indices_list = layer_data["token_indices"]
+            down_projs_list = layer_data["down_projs"]
+            top_k_pos_list = layer_data["top_k_pos"]
+            if not (
+                len(active_experts)
+                == len(token_indices_list)
+                == len(down_projs_list)
+                == len(top_k_pos_list)
+            ):
+                raise RuntimeError(
+                    "Mismatched traced event counts in notebook capture loop: "
+                    f"active_experts={len(active_experts)}, "
+                    f"token_indices={len(token_indices_list)}, "
+                    f"down_projs={len(down_projs_list)}, "
+                    f"top_k_pos={len(top_k_pos_list)}"
+                )
 
+            for expert_id, token_idx, down_proj, top_k_pos in zip(
+                active_experts.tolist(),
+                token_indices_list,
+                down_projs_list,
+                top_k_pos_list,
+            ):
                 target_device = down_proj.device
                 lp = last_positions.to(target_device)
                 ids = input_ids.to(target_device)
@@ -183,9 +202,6 @@ for batch in tqdm(
                     eps=norm_eps,
                 )
 
-                if gated_output.shape[0] == 0:
-                    continue
-
                 # Map flat indices back to get token IDs
                 last_token_ids = ids[batch_indices, pos_in_batch]
 
@@ -198,7 +214,7 @@ for batch in tqdm(
     for (layer_idx, expert_id), writes in pending_writes.items():
         activations = torch.cat([activations for activations, _ in writes], dim=0)
         tokens = torch.cat([tokens for _, tokens in writes], dim=0)
-        _append_to_file(layer_files[layer_idx], expert_id, activations, tokens)
+        append_to_file(layer_files[layer_idx], expert_id, activations, tokens)
 
 # Set back tokenizer to pad to the left
 model.tokenizer.padding_side = "left"
