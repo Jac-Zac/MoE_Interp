@@ -139,7 +139,11 @@ class OLMoEAdapter(MoEAdapter):
         return layer.mlp.experts.source.torch_where_0.output
 
     def get_expert_output(self, layer: Any) -> Any:
-        return layer.mlp.experts.source.nn_functional_linear_1.output
+        # Captures the expert contribution right before index_add_ into
+        # final_hidden_states:
+        #   (act_fn(gate) * up) @ down_proj * routing_weight
+        # Shape: [active_tokens, d_model]. Routing weight is already included.
+        return layer.mlp.experts.source.current_hidden_states_to_0.output
 
 
 class GPTOSSAdapter(MoEAdapter):
@@ -158,9 +162,13 @@ class GPTOSSAdapter(MoEAdapter):
         return layer.mlp.experts.source.torch_where_0.output
 
     def get_expert_output(self, layer: Any) -> Any:
-        # For GPT-oss, this is the gated expert output before
-        # `@ down_proj + down_proj_bias`.
-        return layer.mlp.experts.source.self__apply_gate_0.output
+        # Captures the expert contribution right before index_add_ into
+        # next_states:
+        #   (gated_output @ down_proj + down_proj_bias) * routing_weight
+        # Shape: [active_tokens, d_model]. Routing weight is already included.
+        # NOTE: For this model intermediate_size == d_model == 2880, so the shape matches
+        # self__apply_gate_0(pre - down_proj) but weighted_output_to_0 is the expert outptut
+        return layer.mlp.experts.source.weighted_output_to_0.output
 
 
 class MixtralAdapter(MoEAdapter):

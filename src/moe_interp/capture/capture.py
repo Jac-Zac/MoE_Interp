@@ -51,12 +51,17 @@ def build_pending_writes(
     norm_weight: torch.Tensor,
     norm_eps: float,
 ) -> dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]]:
-    """Pass 2: filter to last-token positions, gate, normalise, stage writes.
+    """Pass 2: filter to last-token positions, normalise, stage writes.
 
     Takes the per-layer traced data collected during Pass 1 and produces a dict
-    keyed by ``(layer_idx, expert_id)`` containing ``(gated_output, last_token_ids)``
+    keyed by ``(layer_idx, expert_id)`` containing ``(expert_output, last_token_ids)``
     tensor pairs on CPU (float16 activations). Pure tensor math — no nnsight
     dependency — so the notebook can share this with `capture_expert_activations`.
+
+    The ``down_projs`` tensors are already routing-weight-scaled contributions to
+    the residual stream, captured right before each expert's ``index_add_`` call:
+      OLMoE:   (act_fn(gate) * up) @ down_proj * routing_weight
+      GPT-oss: (gated_output @ down_proj + down_proj_bias) * routing_weight
     """
     pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]] = {}
 
@@ -69,7 +74,6 @@ def build_pending_writes(
         target_device = layer_data["down_projs"][0].device
         lp = last_positions.to(target_device)
         ids = input_ids.to(target_device)
-        tw = layer_data["weights"].to(target_device)
         sm_last = second_moment_last.to(target_device)
         nw = norm_weight.to(target_device)
 
@@ -90,10 +94,9 @@ def build_pending_writes(
 
         for i in range(n_iters):
             token_idx = layer_data["token_indices"][i].to(target_device).flatten()
-            down_proj = layer_data["down_projs"][i].to(target_device)
-            if down_proj.ndim == 1:
-                down_proj = down_proj.unsqueeze(0)
-            pos = layer_data["top_k_pos"][i].to(target_device).flatten()
+            expert_output = layer_data["down_projs"][i].to(target_device)
+            if expert_output.ndim == 1:
+                expert_output = expert_output.unsqueeze(0)
             expert_id = int(active_experts[i].item())
 
             # Filter to last-token positions only
@@ -101,13 +104,8 @@ def build_pending_writes(
             if not is_last.any():
                 continue
 
-            last_down_proj = down_proj[is_last]
-            last_top_k_pos = pos[is_last]
+            expert_output = expert_output[is_last]
             last_token_idx_flat = token_idx[is_last]
-
-            # Compute gated output
-            gate_weights = tw[last_token_idx_flat, last_top_k_pos]
-            gated_output = gate_weights.unsqueeze(-1) * last_down_proj
 
             # Map flat indices back to batch positions and token IDs
             batch_indices = last_token_idx_flat // max_len
@@ -115,8 +113,8 @@ def build_pending_writes(
             last_token_ids = ids[batch_indices, pos_in_batch]
 
             # Apply component RMSNorm using residual stream stats
-            gated_output = apply_component_rmsnorm(
-                hidden_states=gated_output,
+            expert_output = apply_component_rmsnorm(
+                hidden_states=expert_output,
                 second_moment=sm_last[batch_indices],
                 weight=nw,
                 eps=norm_eps,
@@ -124,7 +122,7 @@ def build_pending_writes(
 
             key = (layer_idx, expert_id)
             pending_writes.setdefault(key, []).append(
-                (gated_output.half().cpu(), last_token_ids.cpu())
+                (expert_output.half().cpu(), last_token_ids.cpu())
             )
 
     return pending_writes
@@ -245,7 +243,7 @@ def capture_expert_activations(
                         down_projs_list: list = []
                         top_k_pos_list: list = []
 
-                        with tracer.iter[:num_iters]:
+                        for _step in tracer.iter[:num_iters]:
                             top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(
                                 layer
                             )

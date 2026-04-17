@@ -52,6 +52,11 @@ model = LanguageModel(
     # # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
     dtype="auto",
     dispatch=True,
+    # "eager" keeps the original Python loop over experts so nnsight can
+    # intercept per-expert nodes (torch_where_0, nn_functional_linear_1, etc.).
+    # The default "grouped_mm" fuses all experts into a single kernel with no
+    # per-expert trace points, which breaks activation capture entirely.
+    # experts_implementation="eager",
 )
 
 print(model.dtype)  # Show dtype
@@ -117,7 +122,10 @@ for batch in tqdm(
             )
             num_iters = active_experts.numel()
 
-            with tracer.iter[:num_iters]:
+            # NOTE: Maybe this could work too but it is a bit less robust I think
+            # for _step in tracer.all()
+
+            for _step in tracer.iter[:num_iters]:
                 top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
                 down_proj = adapter.get_expert_output(layer)
 
@@ -176,7 +184,6 @@ for batch in tqdm(
                 target_device = down_proj.device
                 lp = last_positions.to(target_device)
                 ids = input_ids.to(target_device)
-                tw = layer_data["weights"].to(target_device)
                 sm_last = second_moment_last.to(target_device)
 
                 # Vectorized: single mask
@@ -185,18 +192,16 @@ for batch in tqdm(
                 if not is_last.any():
                     continue
 
-                # Extract all last-token data at once
-                last_down_proj = down_proj[is_last]
-                last_top_k_pos = top_k_pos[is_last]
+                # down_proj already holds the routing-weight-scaled contribution:
+                #   OLMoE:   (act_fn(gate) * up) @ down_proj * routing_weight
+                #   GPT-oss: (gated_output @ down_proj + bias) * routing_weight
+                expert_output = down_proj[is_last]
                 last_token_idx_flat = token_idx[is_last]
 
-                # Compute gate weights and weighted output
-                gate_weights = tw[last_token_idx_flat, last_top_k_pos]
-                gated_output = gate_weights.unsqueeze(-1) * last_down_proj
                 batch_indices = last_token_idx_flat // max_len
                 pos_in_batch = last_token_idx_flat % max_len
-                gated_output = apply_component_rmsnorm(
-                    hidden_states=gated_output,
+                expert_output = apply_component_rmsnorm(
+                    hidden_states=expert_output,
                     second_moment=sm_last[batch_indices],
                     weight=norm_weight.to(target_device),
                     eps=norm_eps,
@@ -205,10 +210,9 @@ for batch in tqdm(
                 # Map flat indices back to get token IDs
                 last_token_ids = ids[batch_indices, pos_in_batch]
 
-                # Single write per expert (was batch_size writes)
                 key = (layer_idx, expert_id)
                 pending_writes.setdefault(key, []).append(
-                    (gated_output.half().cpu(), last_token_ids.cpu())
+                    (expert_output.half().cpu(), last_token_ids.cpu())
                 )
 
     for (layer_idx, expert_id), writes in pending_writes.items():
