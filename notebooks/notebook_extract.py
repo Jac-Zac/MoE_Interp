@@ -5,26 +5,16 @@ import math
 
 import h5py
 import torch
-import torch.nn.functional as F
 from dotenv import load_dotenv
 from nnsight import LanguageModel
 from rich import print as rprint
 from tqdm import tqdm
 
-from moe_interp.capture.cache import (
-    append_to_file,
-    get_model_unembedding,
-    save_metadata,
-    save_unembedding,
-)
+from moe_interp.capture import prepare_prompts_dataset, save_capture_artifacts
+from moe_interp.capture.cache import append_to_file
 from moe_interp.capture.capture import apply_component_rmsnorm
 from moe_interp.capture.model_adapter import get_model_adapter
-from moe_interp.config import (
-    get_data_dir,
-    get_extractions_dir,
-    get_unembedding_dir,
-    set_seed,
-)
+from moe_interp.config import get_data_dir, get_extractions_dir, set_seed
 from moe_interp.io.data import load_dataset_prompts
 
 # %% Configuration
@@ -80,10 +70,7 @@ output_dir = get_extractions_dir(MODEL_NAME, DATASET_NAME)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # %% Capture: batched with right-padding to preserve RoPE positional encodings
-# Pre-compute prompt lengths and sort so similar-length prompts land together
-# (minimises right-padding waste per batch, preserving RoPE positions).
-ds = prompts.map(lambda x: {"length": len(x["input_ids"])})  # type: ignore[index]
-ds = ds.sort("length", reverse=True)
+ds = prepare_prompts_dataset(prompts)
 
 # Keep HDF5 files open for the full run (much faster than open/close per write)
 layer_files = {
@@ -226,18 +213,16 @@ model.tokenizer.padding_side = "left"
 for f in layer_files.values():
     f.close()
 
-save_metadata(
+save_capture_artifacts(
+    model,
+    MODEL_NAME,
     output_dir,
-    model_name=MODEL_NAME,
-    n_docs=len(ds),
-    n_layers=n_layers,
-    n_experts=n_experts,
-    d_model=d_model,
+    {
+        "model_name": MODEL_NAME,
+        "dataset_name": DATASET_NAME,
+        "n_docs": len(ds),
+        "n_layers": n_layers,
+        "n_experts": n_experts,
+        "d_model": d_model,
+    },
 )
-print(f"Saved activations to {output_dir}")
-
-# %% Save unembedding dictionary
-unembedding_dir = get_unembedding_dir(MODEL_NAME)
-dictionary = F.normalize(get_model_unembedding(model), dim=1)
-save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
-print(f"Saved unembedding to {unembedding_dir}")

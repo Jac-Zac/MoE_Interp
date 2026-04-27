@@ -143,14 +143,7 @@ def test_projection_pursuit_decodes_kept_token_ids():
     tokenizer = _DummyTokenizer()
 
     tokens, evr = projection_pursuit(
-        X,
-        dictionary,
-        tokenizer,
-        device="cpu",
-        k=2,
-        token_ids=[5, 10, 15],
-        labels=["word_atom"],
-        base_vocab_size=3,
+        X, dictionary, tokenizer, device="cpu", k=2, token_ids=[5, 10, 15]
     )
 
     # Should decode using kept_token_ids, not row indices
@@ -160,7 +153,7 @@ def test_projection_pursuit_decodes_kept_token_ids():
 
 
 def test_projection_pursuit_decodes_concept_labels():
-    """When token_ids is None and labels are set, decode via labels."""
+    """Concept-mode WordDictionary (base_vocab_size=0) decodes purely via labels."""
     X = torch.eye(3)
     dictionary = torch.eye(3)
     tokenizer = _DummyTokenizer()
@@ -171,8 +164,8 @@ def test_projection_pursuit_decodes_concept_labels():
         tokenizer,
         device="cpu",
         k=2,
-        token_ids=None,
         labels=["violence", "hate", "crime"],
+        base_vocab_size=0,
     )
 
     assert tokens == ["violence", "hate"]

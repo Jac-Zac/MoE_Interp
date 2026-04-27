@@ -37,8 +37,6 @@ def load_common_words(top_k: int = 10000, source: str = "default") -> list[str]:
         return [w.strip().lower() for w in ds["Word"][:top_k] if w.strip()]
     else:
         raise ValueError(f"Unknown source: {source}. Use 'default' or 'full'")
-
-
 def build_word_dictionary(
     tokenizer,
     dictionary: torch.Tensor,

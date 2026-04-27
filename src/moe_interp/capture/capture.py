@@ -1,6 +1,7 @@
 """Expert activation capture for Expert Pursuit."""
 
 from pathlib import Path
+from typing import Any
 
 import h5py
 import torch
@@ -20,7 +21,7 @@ from moe_interp.capture.cache import (
     save_metadata,
     save_unembedding,
 )
-from moe_interp.capture.model_adapter import get_model_adapter
+from moe_interp.capture.model_adapter import MoEAdapter, get_model_adapter
 from moe_interp.config import get_unembedding_dir, is_rank0
 
 
@@ -139,6 +140,113 @@ def flush_pending_writes(
         append_to_file(layer_files[layer_idx], expert_id, all_activations, all_tokens)
 
 
+def prepare_prompts_dataset(prompts: Dataset | list[list[int]]) -> Dataset:
+    """Normalise to a HF Dataset, add a ``length`` column, sort descending."""
+    if not isinstance(prompts, Dataset):
+        prompts = Dataset.from_dict({"input_ids": prompts})
+    ds = prompts.map(lambda x: {"length": len(x["input_ids"])})  # type: ignore[index]
+    return ds.sort("length", reverse=True)
+
+
+def save_capture_artifacts(
+    model: Any,
+    model_name: str,
+    output_dir: Path,
+    metadata: dict,
+) -> None:
+    """Save metadata and the normalized unembedding dictionary."""
+    if not is_rank0():
+        return
+    save_metadata(output_dir, **metadata)
+    unembedding_dir = get_unembedding_dir(model_name)
+    dictionary = F.normalize(get_model_unembedding(model), dim=1)
+    save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
+    print(f"Saved unembedding to {unembedding_dir}")
+    print(f"Saved activations to {output_dir}")
+
+
+def _capture_batch(
+    model: Any,
+    adapter: MoEAdapter,
+    batch: dict,
+    layer_files: dict[int, h5py.File],
+    norm_weight: torch.Tensor,
+    norm_eps: float,
+) -> int:
+    """Trace one batch, normalise Pass-2 outputs, flush to HDF5. Returns batch size."""
+    batch_tokens = batch["input_ids"]
+    prompt_lengths = batch["length"]
+    b_size = len(batch_tokens)
+
+    with torch.no_grad(), model.trace(batch_tokens) as tracer:
+        input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
+        max_len = input_ids.shape[1]
+
+        # NOTE: Here we take the last token but averaging over content
+        # tokens can also be performed instead
+
+        # Pre-compute last-token positions for all batches (vectorized)
+        batch_offsets = torch.arange(b_size) * max_len
+        actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
+        last_positions = batch_offsets + actual_lens_tensor - 1
+        sample_indices = torch.arange(b_size)
+
+        # Pass 1: collect per-layer expert data
+        layer_data_list: list = []
+        for layer in model.model.layers:
+            _, weights, _ = adapter.get_router_output(layer)
+            top_k_weights = weights.save().detach()
+
+            expert_hit = adapter.get_expert_hit(layer)
+            active_experts = (
+                expert_hit[expert_hit != adapter.n_experts].reshape(-1).save().detach()
+            )
+
+            token_indices_list: list = []
+            down_projs_list: list = []
+            top_k_pos_list: list = []
+            for _step in tracer.iter[: active_experts.numel()]:
+                top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
+                down_proj = adapter.get_expert_output(layer)
+                token_indices_list.append(token_idx.save().detach())
+                down_projs_list.append(down_proj.save().detach())
+                top_k_pos_list.append(top_k_pos.save().detach())
+
+            layer_data_list.append(
+                {
+                    "active_experts": active_experts,
+                    "token_indices": token_indices_list,
+                    "down_projs": down_projs_list,
+                    "top_k_pos": top_k_pos_list,
+                    "weights": top_k_weights,
+                }
+            )
+
+        # Access the final norm input only after all layer nodes have been
+        # materialized; nnsight traces are order-sensitive.
+        pre_norm_hidden = model.model.norm.input.save().detach()
+        pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
+        second_moment_last = torch.atleast_1d(pre_norm_last.float().pow(2).mean(dim=-1))
+
+        # Pass 2: apply normalisation and stage per-expert writes. Kept inside
+        # the trace context to match the working semantics with nnsight
+        # saved-tensor materialisation.
+        if is_rank0():
+            pending_writes = build_pending_writes(
+                layer_data_list=layer_data_list,
+                input_ids=input_ids,
+                last_positions=last_positions,
+                second_moment_last=second_moment_last,
+                max_len=max_len,
+                norm_weight=norm_weight,
+                norm_eps=norm_eps,
+            )
+
+    if is_rank0():
+        flush_pending_writes(pending_writes, layer_files)
+    return b_size
+
+
 def capture_expert_activations(
     model,
     prompts: Dataset | list[list[int]],
@@ -151,16 +259,6 @@ def capture_expert_activations(
 
     Processes prompts in batches with right-padding so each prompt's tokens
     stay at their true positions, preserving RoPE positional encodings.
-
-    Args:
-        model: NNsight LanguageModel
-        prompts: List of tokenized prompts (list of token IDs)
-        output_dir: Directory to save extractions
-        model_name: Model name to store in metadata. If None, extracted from model.config._name_or_path.
-        batch_size: Number of prompts per batch.
-
-    Returns:
-        Metadata dict with model_name, n_docs, n_layers, n_experts, d_model
     """
     output_dir = Path(output_dir)
     if is_rank0():
@@ -170,20 +268,7 @@ def capture_expert_activations(
         model_name = model.config._name_or_path
 
     adapter = get_model_adapter(model=model)
-    n_layers = adapter.n_layers
-    n_experts = adapter.n_experts
-    d_model = adapter.d_model
-
-    # Normalise to HF Dataset so both paths use .iter() for batched iteration.
-    # The Dataset stays memory-mapped (Arrow) — no full Python list is materialised.
-    if not isinstance(prompts, Dataset):
-        prompts = Dataset.from_dict({"input_ids": prompts})
-
-    # Pre-compute prompt lengths and sort so similar-length prompts land together
-    # (minimises right-padding waste per batch, preserving RoPE positions).
-    ds = prompts.map(lambda x: {"length": len(x["input_ids"])})  # type: ignore[index]
-    ds = ds.sort("length", reverse=True)
-    n_docs = len(ds)
+    ds = prepare_prompts_dataset(prompts)
 
     with Progress(
         SpinnerColumn(),
@@ -192,126 +277,41 @@ def capture_expert_activations(
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TimeRemainingColumn(),
     ) as progress:
-        task = progress.add_task("Capturing prompts", total=n_docs)
+        task = progress.add_task("Capturing prompts", total=len(ds))
 
-        layer_files = {}
+        layer_files: dict[int, h5py.File] = {}
         if is_rank0():
             layer_files = {
                 i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
-                for i in range(n_layers)
+                for i in range(adapter.n_layers)
             }
 
         # Right-pad so token positions are preserved (RoPE stays correct)
         original_padding_side = model.tokenizer.padding_side
         model.tokenizer.padding_side = "right"
         try:
-            # .iter() yields dicts where batch["input_ids"] is list[list[int]] —
             for batch in ds.iter(batch_size=batch_size):
-                batch_tokens = batch["input_ids"]  # type: ignore[index]
-                prompt_lengths = batch["length"]  # type: ignore[index]
-                b_size = len(batch_tokens)
-
-                with torch.no_grad(), model.trace(batch_tokens) as tracer:
-                    input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
-                    max_len = input_ids.shape[1]
-
-                    # NOTE: Here we take the last token but averaging over content
-                    # tokens can also be performed instead
-
-                    # Pre-compute last-token positions for all batches (vectorized)
-                    batch_offsets = torch.arange(b_size) * max_len
-                    actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
-                    last_positions = batch_offsets + actual_lens_tensor - 1
-                    sample_indices = torch.arange(b_size)
-
-                    # Pass 1: collect per-layer expert data
-                    layer_data_list: list = []
-                    for layer_idx, layer in enumerate(model.model.layers):
-                        _, weights, _ = adapter.get_router_output(layer)
-                        top_k_weights = weights.save().detach()
-
-                        expert_hit = adapter.get_expert_hit(layer)
-                        active_experts = (
-                            expert_hit[expert_hit != adapter.n_experts]
-                            .reshape(-1)
-                            .save()
-                            .detach()
-                        )
-                        num_iters = active_experts.numel()
-
-                        token_indices_list: list = []
-                        down_projs_list: list = []
-                        top_k_pos_list: list = []
-
-                        for _step in tracer.iter[:num_iters]:
-                            top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(
-                                layer
-                            )
-                            down_proj = adapter.get_expert_output(layer)
-
-                            token_indices_list.append(token_idx.save().detach())
-                            down_projs_list.append(down_proj.save().detach())
-                            top_k_pos_list.append(top_k_pos.save().detach())
-
-                        layer_data_list.append(
-                            {
-                                "active_experts": active_experts,
-                                "token_indices": token_indices_list,
-                                "down_projs": down_projs_list,
-                                "top_k_pos": top_k_pos_list,
-                                "weights": top_k_weights,
-                            }
-                        )
-
-                    # Access the final norm input only after all layer nodes have been
-                    # materialized; nnsight traces are order-sensitive.
-                    pre_norm_hidden = model.model.norm.input.save().detach()
-                    pre_norm_last = pre_norm_hidden[
-                        sample_indices, actual_lens_tensor - 1
-                    ]
-                    second_moment_last = torch.atleast_1d(
-                        pre_norm_last.float().pow(2).mean(dim=-1)
-                    )
-
-                    # Pass 2: apply normalisation and stage per-expert writes.
-                    # Kept inside the trace context to match the previously
-                    # working semantics with nnsight saved-tensor materialisation.
-                    if is_rank0():
-                        pending_writes = build_pending_writes(
-                            layer_data_list=layer_data_list,
-                            input_ids=input_ids,
-                            last_positions=last_positions,
-                            second_moment_last=second_moment_last,
-                            max_len=max_len,
-                            norm_weight=model.model.norm.weight,
-                            norm_eps=model.model.norm.variance_epsilon,
-                        )
-
-                if is_rank0():
-                    flush_pending_writes(pending_writes, layer_files)
-
+                b_size = _capture_batch(
+                    model=model,
+                    adapter=adapter,
+                    batch=batch,
+                    layer_files=layer_files,
+                    norm_weight=model.model.norm.weight,
+                    norm_eps=model.model.norm.variance_epsilon,
+                )
                 progress.advance(task, b_size)
         finally:
             model.tokenizer.padding_side = original_padding_side
-            if is_rank0():
-                for f in layer_files.values():
-                    f.close()
+            for f in layer_files.values():
+                f.close()
 
     metadata = {
         "model_name": model_name,
         "dataset_name": dataset_name,
-        "n_docs": n_docs,
-        "n_layers": n_layers,
-        "n_experts": n_experts,
-        "d_model": d_model,
+        "n_docs": len(ds),
+        "n_layers": adapter.n_layers,
+        "n_experts": adapter.n_experts,
+        "d_model": adapter.d_model,
     }
-    if is_rank0():
-        save_metadata(output_dir, **metadata)
-
-        unembedding_dir = get_unembedding_dir(model_name)
-        dictionary = F.normalize(get_model_unembedding(model), dim=1)
-        save_unembedding(unembedding_dir / "dictionary.h5", dictionary)
-        print(f"Saved unembedding to {unembedding_dir}")
-        print(f"Saved activations to {output_dir}")
-
+    save_capture_artifacts(model, model_name, output_dir, metadata)
     return metadata
