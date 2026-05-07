@@ -45,7 +45,7 @@ def apply_component_rmsnorm(
 
 def build_pending_writes(
     layer_data_list: list,
-    input_ids: torch.Tensor,
+    last_token_ids: torch.Tensor,
     last_positions: torch.Tensor,
     second_moment_last: torch.Tensor,
     max_len: int,
@@ -74,7 +74,6 @@ def build_pending_writes(
         # All experts in the same layer share a device (pipeline/tensor parallel).
         target_device = layer_data["down_projs"][0].device
         lp = last_positions.to(target_device)
-        ids = input_ids.to(target_device)
         sm_last = second_moment_last.to(target_device)
         nw = norm_weight.to(target_device)
 
@@ -110,8 +109,7 @@ def build_pending_writes(
 
             # Map flat indices back to batch positions and token IDs
             batch_indices = last_token_idx_flat // max_len
-            pos_in_batch = last_token_idx_flat % max_len
-            last_token_ids = ids[batch_indices, pos_in_batch]
+            batch_last_token_ids = last_token_ids[batch_indices]
 
             # Apply component RMSNorm using residual stream stats
             expert_output = apply_component_rmsnorm(
@@ -123,7 +121,7 @@ def build_pending_writes(
 
             key = (layer_idx, expert_id)
             pending_writes.setdefault(key, []).append(
-                (expert_output.half().cpu(), last_token_ids.cpu())
+                (expert_output.half().cpu(), batch_last_token_ids.cpu())
             )
 
     return pending_writes
@@ -177,11 +175,10 @@ def _capture_batch(
     batch_tokens = batch["input_ids"]
     prompt_lengths = batch["length"]
     b_size = len(batch_tokens)
+    max_len = max(len(tokens) for tokens in batch_tokens)
+    last_token_ids = torch.tensor([int(tokens[-1]) for tokens in batch_tokens], dtype=torch.long)
 
     with torch.no_grad(), model.trace(batch_tokens) as tracer:
-        input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
-        max_len = input_ids.shape[1]
-
         # NOTE: Here we take the last token but averaging over content
         # tokens can also be performed instead
 
@@ -224,8 +221,7 @@ def _capture_batch(
 
         # Access the final norm input only after all layer nodes have been
         # materialized; nnsight traces are order-sensitive.
-        pre_norm_hidden = model.model.norm.input.save().detach()
-        pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
+        pre_norm_last = model.model.norm.input[sample_indices, actual_lens_tensor - 1].save().detach()
         second_moment_last = torch.atleast_1d(pre_norm_last.float().pow(2).mean(dim=-1))
 
         # Pass 2: apply normalisation and stage per-expert writes. Kept inside
@@ -234,7 +230,7 @@ def _capture_batch(
         if is_rank0():
             pending_writes = build_pending_writes(
                 layer_data_list=layer_data_list,
-                input_ids=input_ids,
+                last_token_ids=last_token_ids,
                 last_positions=last_positions,
                 second_moment_last=second_moment_last,
                 max_len=max_len,
