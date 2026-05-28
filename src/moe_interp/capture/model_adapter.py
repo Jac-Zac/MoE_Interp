@@ -30,10 +30,8 @@ class MoEAdapter(ABC):
     and rich renders a config table.
     """
 
-    def __init__(self, model: Any | None = None) -> None:
-        self._config: MoEConfig | None = None
-        if model is not None:
-            self._config = self._extract_config(model)
+    def __init__(self, model: Any) -> None:
+        self._config = self._extract_config(model)
 
     def _extract_config(self, model: Any) -> MoEConfig:
         cfg = model.config

@@ -84,6 +84,55 @@ def _decode_atom(
     return tokenizer.decode([token_id])
 
 
+def _build_concept_dictionary(
+    concept: str,
+    dictionary: torch.Tensor,
+    tokenizer,
+    device: torch.device | str,
+) -> tuple[torch.Tensor, list[str]]:
+    """Restrict the unembedding dictionary to a concept's word atoms.
+
+    Single-token words map directly to their unembedding row; multi-token words
+    are averaged across their token rows and renormalized. Returns the
+    device-placed atom matrix and the matching labels.
+    """
+    if concept not in CONCEPT_WORDS:
+        options = ", ".join(sorted(CONCEPT_WORDS))
+        raise ValueError(f"Unknown concept '{concept}'. Available concepts: {options}")
+
+    single_labels: list[tuple[str, int]] = []
+    multi_labels: list[str] = []
+    multi_token_ids: list[list[int]] = []
+    for w in CONCEPT_WORDS[concept]:
+        tokens = tokenizer(w, add_special_tokens=False).input_ids
+        if len(tokens) == 1:
+            single_labels.append((w, tokens[0]))
+        else:
+            multi_labels.append(w)
+            multi_token_ids.append(tokens)
+
+    single_atoms = dictionary[[tid for _, tid in single_labels]].float()
+    if multi_token_ids:
+        multi_atoms = torch.stack(
+            [dictionary[tids].mean(dim=0) for tids in multi_token_ids],
+        ).float()
+        multi_atoms = torch.nn.functional.normalize(multi_atoms, dim=1)
+    else:
+        multi_atoms = torch.empty(
+            (0, dictionary.shape[1]),
+            dtype=dictionary.dtype,
+            device=dictionary.device,
+        )
+
+    dictionary = torch.cat([single_atoms, multi_atoms], dim=0).to(device)
+    labels = [w for w, _ in single_labels] + multi_labels
+    print(
+        f"Concept '{concept}': {len(labels)} atoms "
+        f"({len(multi_labels)} multi-token averaged)"
+    )
+    return dictionary, labels
+
+
 def load_pursuit(pursuit_dir: Path) -> tuple[list[dict], np.ndarray, np.ndarray | None]:
     """Load previously computed pursuit results from disk."""
     pursuit_dir = Path(pursuit_dir)
@@ -152,47 +201,15 @@ def run_pursuit(
         dictionary = load_unembedding(
             get_unembedding_dir(metadata["model_name"]) / "dictionary.h5",
         ).float()
+        token_ids = None
         if concept is not None:
-            if concept not in CONCEPT_WORDS:
-                options = ", ".join(sorted(CONCEPT_WORDS))
-                raise ValueError(
-                    f"Unknown concept '{concept}'. Available concepts: {options}"
-                )
-            concept_words = CONCEPT_WORDS[concept]
-            single_labels: list[tuple[str, int]] = []
-            multi_labels: list[str] = []
-            multi_token_ids: list[list[int]] = []
-            for w in concept_words:
-                tokens = tokenizer(w, add_special_tokens=False).input_ids
-                if len(tokens) == 1:
-                    single_labels.append((w, tokens[0]))
-                else:
-                    multi_labels.append(w)
-                    multi_token_ids.append(tokens)
-            single_atoms = dictionary[[tid for _, tid in single_labels]].float()
-            if multi_token_ids:
-                multi_atoms = torch.stack(
-                    [dictionary[tids].mean(dim=0) for tids in multi_token_ids],
-                ).float()
-                multi_atoms = torch.nn.functional.normalize(multi_atoms, dim=1)
-            else:
-                multi_atoms = torch.empty(
-                    (0, dictionary.shape[1]),
-                    dtype=dictionary.dtype,
-                    device=dictionary.device,
-                )
-            dictionary = torch.cat([single_atoms, multi_atoms], dim=0).to(device)
-            labels = [w for w, _ in single_labels] + multi_labels
-            base_vocab_size = 0
-            print(
-                f"Concept '{concept}': {len(labels)} atoms "
-                f"({len(multi_labels)} multi-token averaged)"
+            dictionary, labels = _build_concept_dictionary(
+                concept, dictionary, tokenizer, device
             )
-            token_ids = None
+            base_vocab_size = 0
         else:
             labels = None
             base_vocab_size = None
-            token_ids = None
     else:
         dictionary = word_dictionary.embeddings.float().to(device)
         labels = word_dictionary.labels
