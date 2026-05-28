@@ -32,10 +32,14 @@ def append_to_file(
     expert_id: int,
     activations: torch.Tensor,
     tokens: torch.Tensor,
+    routing_weights: torch.Tensor | None = None,
+    positions: torch.Tensor | None = None,
 ) -> None:
     group_name = _expert_group_name(expert_id)
     acts = activations.detach().cpu()
     toks = tokens.detach().cpu()
+    weights = routing_weights.detach().cpu() if routing_weights is not None else None
+    pos = positions.detach().cpu() if positions is not None else None
     if acts.numel() == 0:
         return
     group = f.require_group(group_name)
@@ -54,14 +58,54 @@ def append_to_file(
             chunks=(max(toks.shape[0], 1),),
             dtype=toks.numpy().dtype,
         )
+        if weights is not None:
+            group.create_dataset(
+                "routing_weights",
+                data=weights,
+                maxshape=(None,),
+                chunks=(max(weights.shape[0], 1),),
+                dtype=weights.numpy().dtype,
+            )
+        if pos is not None:
+            group.create_dataset(
+                "positions",
+                data=pos,
+                maxshape=(None,),
+                chunks=(max(pos.shape[0], 1),),
+                dtype=pos.numpy().dtype,
+            )
         return
     act_ds = cast(h5py.Dataset, group["activations"])
     tok_ds = cast(h5py.Dataset, group["tokens"])
+    old_size = act_ds.shape[0]
     new_size = act_ds.shape[0] + acts.shape[0]
     act_ds.resize((new_size, act_ds.shape[1]))
     act_ds[-acts.shape[0] :] = acts
     tok_ds.resize((new_size,))
     tok_ds[-toks.shape[0] :] = toks
+    if weights is not None:
+        if "routing_weights" not in group:
+            group.create_dataset(
+                "routing_weights",
+                data=torch.full((old_size,), float("nan")).numpy(),
+                maxshape=(None,),
+                chunks=(max(old_size, 1),),
+            )
+        weight_ds = cast(h5py.Dataset, group["routing_weights"])
+        weight_ds.resize((new_size,))
+        weight_ds[-weights.shape[0] :] = weights
+    if pos is not None:
+        if "positions" not in group:
+            group.create_dataset(
+                "positions",
+                data=torch.full((old_size,), -1, dtype=pos.dtype).numpy(),
+                maxshape=(None,),
+                chunks=(max(old_size, 1),),
+                dtype=pos.numpy().dtype,
+            )
+        pos_ds = cast(h5py.Dataset, group["positions"])
+        pos_ds.resize((new_size,))
+        pos_ds[-pos.shape[0] :] = pos
 
 
 def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
@@ -71,12 +115,21 @@ def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
         if group_name not in f:
             return {"activations": torch.empty(0), "tokens": torch.empty(0)}
         group = cast(h5py.Group, f[group_name])
-        return {
+        result = {
             "activations": torch.from_numpy(
                 cast(h5py.Dataset, group["activations"])[:]
             ),
             "tokens": torch.from_numpy(cast(h5py.Dataset, group["tokens"])[:]),
         }
+        if "routing_weights" in group:
+            result["routing_weights"] = torch.from_numpy(
+                cast(h5py.Dataset, group["routing_weights"])[:]
+            )
+        if "positions" in group:
+            result["positions"] = torch.from_numpy(
+                cast(h5py.Dataset, group["positions"])[:]
+            )
+        return result
 
 
 def save_unembedding(path: Path, tensor: torch.Tensor) -> None:

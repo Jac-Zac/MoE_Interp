@@ -34,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument(
         "--batch_size", type=int, default=8, help="Batch size for capture"
     )
+    extract_parser.add_argument(
+        "--token_selection",
+        type=str,
+        default="last",
+        choices=["last", "all"],
+        help="Tokens to store per prompt: last real token or all real tokens",
+    )
 
     pursuit_parser = subparsers.add_parser(
         "pursuit", help="Run projection pursuit analysis"

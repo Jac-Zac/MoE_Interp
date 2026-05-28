@@ -53,6 +53,7 @@ def main():
             model_name=model_name,
             dataset_name=args.dataset,
             batch_size=args.batch_size,
+            token_selection=args.token_selection,
         )
 
     elif args.command == "pursuit":

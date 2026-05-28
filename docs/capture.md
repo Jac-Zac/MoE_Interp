@@ -1,7 +1,9 @@
 # Capture
 
-Capture stores expert outputs for the **last real token** of each prompt.
-This matters because the model uses RoPE, so token position must stay correct.
+Capture stores expert outputs for selected real tokens in each prompt. The default
+is the **last real token** of each prompt. Pass `--token_selection all` to store
+all real non-padding tokens routed to each expert. This matters because the model
+uses RoPE, so token position must stay correct.
 
 Prompts are sorted by length and batched with **right-padding**:
 
@@ -30,6 +32,13 @@ Only the selected expert outputs are written. Each layer gets one HDF5 file and 
 ```text
 layer_00.h5 -> expert_000/activations, expert_000/tokens, ...
 ```
+
+Each expert group stores:
+
+- `activations`: routed expert contribution vectors.
+- `tokens`: source token ids for the stored positions.
+- `routing_weights`: router weight for the selected expert/token pair.
+- `positions`: token position within the prompt.
 
 Notes:
 

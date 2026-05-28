@@ -1,7 +1,7 @@
 """Expert activation capture for Expert Pursuit."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import h5py
 import torch
@@ -45,26 +45,34 @@ def apply_component_rmsnorm(
 
 def build_pending_writes(
     layer_data_list: list,
-    last_token_ids: torch.Tensor,
+    padded_token_ids: torch.Tensor,
     last_positions: torch.Tensor,
-    second_moment_last: torch.Tensor,
+    prompt_lengths: torch.Tensor,
+    second_moment: torch.Tensor,
     max_len: int,
     norm_weight: torch.Tensor,
     norm_eps: float,
-) -> dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]]:
-    """Pass 2: filter to last-token positions, normalise, stage writes.
+) -> dict[
+    tuple[int, int],
+    list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+]:
+    """Pass 2: filter token positions, normalise, stage writes.
 
     Takes the per-layer traced data collected during Pass 1 and produces a dict
-    keyed by ``(layer_idx, expert_id)`` containing ``(expert_output, last_token_ids)``
-    tensor pairs on CPU (float16 activations). Pure tensor math — no nnsight
-    dependency — so the notebook can share this with `capture_expert_activations`.
+    keyed by ``(layer_idx, expert_id)``. Values are CPU tensors containing
+    activations, token ids, routing weights, and prompt-relative positions.
+    Pure tensor math — no nnsight dependency — so notebooks can share this with
+    `capture_expert_activations`.
 
     The ``down_projs`` tensors are already routing-weight-scaled contributions to
     the residual stream, captured right before each expert's ``index_add_`` call:
       OLMoE:   (act_fn(gate) * up) @ down_proj * routing_weight
       GPT-oss: (gated_output @ down_proj + down_proj_bias) * routing_weight
     """
-    pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]] = {}
+    pending_writes: dict[
+        tuple[int, int],
+        list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+    ] = {}
 
     for layer_idx, layer_data in enumerate(layer_data_list):
         active_experts = layer_data["active_experts"]
@@ -74,7 +82,9 @@ def build_pending_writes(
         # All experts in the same layer share a device (pipeline/tensor parallel).
         target_device = layer_data["down_projs"][0].device
         lp = last_positions.to(target_device)
-        sm_last = second_moment_last.to(target_device)
+        lengths = prompt_lengths.to(target_device)
+        token_ids = padded_token_ids.to(target_device)
+        sm = second_moment.to(target_device)
         nw = norm_weight.to(target_device)
 
         n_iters = len(layer_data["token_indices"])
@@ -95,47 +105,74 @@ def build_pending_writes(
         for i in range(n_iters):
             token_idx = layer_data["token_indices"][i].to(target_device).flatten()
             expert_output = layer_data["down_projs"][i].to(target_device)
+            top_k_pos = layer_data["top_k_pos"][i].to(target_device).flatten()
             if expert_output.ndim == 1:
                 expert_output = expert_output.unsqueeze(0)
             expert_id = int(active_experts[i].item())
 
-            # Filter to last-token positions only
-            is_last = torch.isin(token_idx, lp)
-            if not is_last.any():
+            batch_indices = token_idx // max_len
+            token_positions = token_idx % max_len
+            if layer_data["token_selection"] == "last":
+                keep = torch.isin(token_idx, lp)
+            elif layer_data["token_selection"] == "all":
+                keep = token_positions < lengths[batch_indices]
+            else:
+                raise ValueError(
+                    f"Unknown token selection: {layer_data['token_selection']}"
+                )
+            if not keep.any():
                 continue
 
-            expert_output = expert_output[is_last]
-            last_token_idx_flat = token_idx[is_last]
-
-            # Map flat indices back to batch positions and token IDs
-            batch_indices = last_token_idx_flat // max_len
-            batch_last_token_ids = last_token_ids[batch_indices]
+            expert_output = expert_output[keep]
+            batch_indices = batch_indices[keep]
+            token_positions = token_positions[keep]
+            token_idx = token_idx[keep]
+            top_k_pos = top_k_pos[keep]
+            batch_token_ids = token_ids[batch_indices, token_positions]
+            routing_weights = layer_data["weights"][token_idx, top_k_pos].float()
 
             # Apply component RMSNorm using residual stream stats
             expert_output = apply_component_rmsnorm(
                 hidden_states=expert_output,
-                second_moment=sm_last[batch_indices],
+                second_moment=sm[token_idx],
                 weight=nw,
                 eps=norm_eps,
             )
 
             key = (layer_idx, expert_id)
             pending_writes.setdefault(key, []).append(
-                (expert_output.half().cpu(), batch_last_token_ids.cpu())
+                (
+                    expert_output.half().cpu(),
+                    batch_token_ids.cpu(),
+                    routing_weights.cpu(),
+                    token_positions.cpu(),
+                )
             )
 
     return pending_writes
 
 
 def flush_pending_writes(
-    pending_writes: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]],
+    pending_writes: dict[
+        tuple[int, int],
+        list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+    ],
     layer_files: dict[int, h5py.File],
 ) -> None:
     """Concatenate staged per-expert tensors and append them to the HDF5 files."""
     for (layer_idx, expert_id), writes in pending_writes.items():
-        all_activations = torch.cat([act for act, _ in writes], dim=0)
-        all_tokens = torch.cat([tok for _, tok in writes], dim=0)
-        append_to_file(layer_files[layer_idx], expert_id, all_activations, all_tokens)
+        all_activations = torch.cat([act for act, _, _, _ in writes], dim=0)
+        all_tokens = torch.cat([tok for _, tok, _, _ in writes], dim=0)
+        all_weights = torch.cat([weight for _, _, weight, _ in writes], dim=0)
+        all_positions = torch.cat([pos for _, _, _, pos in writes], dim=0)
+        append_to_file(
+            layer_files[layer_idx],
+            expert_id,
+            all_activations,
+            all_tokens,
+            routing_weights=all_weights,
+            positions=all_positions,
+        )
 
 
 def prepare_prompts_dataset(prompts: Dataset | list[list[int]]) -> Dataset:
@@ -170,17 +207,20 @@ def _capture_batch(
     layer_files: dict[int, h5py.File],
     norm_weight: torch.Tensor,
     norm_eps: float,
+    token_selection: Literal["last", "all"],
 ) -> int:
     """Trace one batch, normalise Pass-2 outputs, flush to HDF5. Returns batch size."""
     batch_tokens = batch["input_ids"]
     prompt_lengths = batch["length"]
     b_size = len(batch_tokens)
     max_len = max(len(tokens) for tokens in batch_tokens)
-    last_token_ids = torch.tensor([int(tokens[-1]) for tokens in batch_tokens], dtype=torch.long)
+    padded_token_ids = torch.full((b_size, max_len), -1, dtype=torch.long)
+    for i, tokens in enumerate(batch_tokens):
+        padded_token_ids[i, : len(tokens)] = torch.tensor(tokens, dtype=torch.long)
 
     with torch.no_grad(), model.trace(batch_tokens) as tracer:
-        # NOTE: Here we take the last token but averaging over content
-        # tokens can also be performed instead
+        # NOTE: Here we can take either only last tokens or all real tokens.
+        # Averaging over content tokens can also be performed instead.
 
         # Pre-compute last-token positions for all batches (vectorized)
         batch_offsets = torch.arange(b_size) * max_len
@@ -216,13 +256,24 @@ def _capture_batch(
                     "down_projs": down_projs_list,
                     "top_k_pos": top_k_pos_list,
                     "weights": top_k_weights,
+                    "token_selection": token_selection,
                 }
             )
 
         # Access the final norm input only after all layer nodes have been
         # materialized; nnsight traces are order-sensitive.
-        pre_norm_last = model.model.norm.input[sample_indices, actual_lens_tensor - 1].save().detach()
-        second_moment_last = torch.atleast_1d(pre_norm_last.float().pow(2).mean(dim=-1))
+        if token_selection == "last":
+            pre_norm = model.model.norm.input[
+                sample_indices, actual_lens_tensor - 1
+            ].save().detach()
+            second_moment = torch.full((b_size, max_len), float("nan"))
+            second_moment[sample_indices, actual_lens_tensor - 1] = torch.atleast_1d(
+                pre_norm.float().pow(2).mean(dim=-1)
+            )
+        else:
+            pre_norm = model.model.norm.input.save().detach()
+            second_moment = pre_norm.float().pow(2).mean(dim=-1)
+        second_moment = second_moment.reshape(-1)
 
         # Pass 2: apply normalisation and stage per-expert writes. Kept inside
         # the trace context to match the working semantics with nnsight
@@ -230,9 +281,10 @@ def _capture_batch(
         if is_rank0():
             pending_writes = build_pending_writes(
                 layer_data_list=layer_data_list,
-                last_token_ids=last_token_ids,
+                padded_token_ids=padded_token_ids,
                 last_positions=last_positions,
-                second_moment_last=second_moment_last,
+                prompt_lengths=actual_lens_tensor,
+                second_moment=second_moment,
                 max_len=max_len,
                 norm_weight=norm_weight,
                 norm_eps=norm_eps,
@@ -250,12 +302,16 @@ def capture_expert_activations(
     model_name: str | None = None,
     dataset_name: str | None = None,
     batch_size: int = 8,
+    token_selection: Literal["last", "all"] = "last",
 ) -> dict:
     """Capture expert activations for all prompts using nnsight tracing.
 
-    Processes prompts in batches with right-padding so each prompt's tokens
-    stay at their true positions, preserving RoPE positional encodings.
+    Processes prompts in batches with right-padding so each prompt's tokens stay
+    at their true positions, preserving RoPE positional encodings.
     """
+    if token_selection not in {"last", "all"}:
+        raise ValueError("token_selection must be 'last' or 'all'")
+
     output_dir = Path(output_dir)
     if is_rank0():
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -294,6 +350,7 @@ def capture_expert_activations(
                     layer_files=layer_files,
                     norm_weight=model.model.norm.weight,
                     norm_eps=model.model.norm.variance_epsilon,
+                    token_selection=token_selection,
                 )
                 progress.advance(task, b_size)
         finally:
@@ -308,6 +365,9 @@ def capture_expert_activations(
         "n_layers": adapter.n_layers,
         "n_experts": adapter.n_experts,
         "d_model": adapter.d_model,
+        "token_selection": token_selection,
+        "stores_routing_weights": True,
+        "stores_positions": True,
     }
     save_capture_artifacts(model, model_name, output_dir, metadata)
     return metadata

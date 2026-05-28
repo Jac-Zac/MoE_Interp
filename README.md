@@ -39,6 +39,9 @@ python -m pytest
 # Capture expert activations
 python main.py extract --n_docs 5000
 
+# Capture all real token positions instead of only last tokens
+python main.py extract --n_docs 5000 --token_selection all
+
 # Multi-GPU capture
 torchrun --nproc_per_node=2 main.py extract --model "openai/gpt-oss-20b" --n_docs=10000
 
@@ -51,10 +54,12 @@ python main.py pursuit --k 100
 ### `extract` - Capture expert activations
 
 ```bash
-python main.py extract [--model MODEL] [--n_docs N]
+python main.py extract [--model MODEL] [--n_docs N] [--token_selection last|all]
 ```
 
 Saves per-layer HDF5 activations and metadata to `data/<model>/extractions/<dataset>/`.
+Default capture stores the last real token per prompt. `--token_selection all`
+stores every real non-padding token plus routing weights and prompt positions.
 
 **Multi-GPU Support:** For better GPU utilization with 2 GPUs, use tensor parallelism:
 
@@ -117,6 +122,8 @@ Outputs to `data/<model>/pursuit/<dataset>/` (or `.../<concept>/` when `--concep
 2. **CONTENT-TOKEN AVERAGING** (not yet implemented): Average over question tokens.
    Semantic: "Which experts are consistently used for this question type?"
    MoE consideration: each token routes to only top-k experts (k=8).
+
+See [next_steps.md](next_steps.md) for the full research roadmap.
 
 ## Links
 
