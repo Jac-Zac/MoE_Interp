@@ -4,15 +4,15 @@
 
 # %% Imports
 import numpy as np
-from dotenv import load_dotenv
 import plotly.express as px
 import plotly.graph_objects as go
+from dotenv import load_dotenv
 from plotly.subplots import make_subplots
 from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
-from moe_interp.capture.cache import load_layer_h5, load_metadata
+from moe_interp.capture.cache import load_layer_activations, load_metadata
 from moe_interp.config import get_data_dir, set_seed
 
 # %% Configuration
@@ -52,7 +52,7 @@ def _l2_normalize_rows(X: np.ndarray) -> np.ndarray:
 
 print("Loading activations layer by layer...")
 for layer_idx in range(n_layers):
-    expert_acts = load_layer_h5(extractions_dir, layer_idx, n_experts)
+    expert_acts = load_layer_activations(extractions_dir, layer_idx, n_experts)
     if not expert_acts:
         continue
     Xs, labels = [], []

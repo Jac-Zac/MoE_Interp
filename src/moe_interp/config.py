@@ -86,3 +86,11 @@ def get_pursuit_dir(
     if concept:
         pursuit_dir = pursuit_dir / concept
     return pursuit_dir
+
+
+def get_analysis_dir(model_name: str, dataset: str | None = None) -> Path:
+    """Get the unsupervised-analysis output directory for a specific model."""
+    analysis_dir = get_model_dir(model_name) / "analysis"
+    if dataset:
+        analysis_dir = analysis_dir / dataset
+    return analysis_dir

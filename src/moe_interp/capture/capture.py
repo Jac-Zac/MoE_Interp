@@ -263,9 +263,11 @@ def _capture_batch(
         # Access the final norm input only after all layer nodes have been
         # materialized; nnsight traces are order-sensitive.
         if token_selection == "last":
-            pre_norm = model.model.norm.input[
-                sample_indices, actual_lens_tensor - 1
-            ].save().detach()
+            pre_norm = (
+                model.model.norm.input[sample_indices, actual_lens_tensor - 1]
+                .save()
+                .detach()
+            )
             second_moment = torch.full((b_size, max_len), float("nan"))
             second_moment[sample_indices, actual_lens_tensor - 1] = torch.atleast_1d(
                 pre_norm.float().pow(2).mean(dim=-1)

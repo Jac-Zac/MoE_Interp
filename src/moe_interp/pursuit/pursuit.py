@@ -14,7 +14,11 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from moe_interp.capture.cache import load_layer_h5, load_metadata, load_unembedding
+from moe_interp.capture.cache import (
+    load_layer_activations,
+    load_metadata,
+    load_unembedding,
+)
 from moe_interp.config import get_device, get_unembedding_dir
 from moe_interp.pursuit.concepts import CONCEPT_WORDS
 from moe_interp.pursuit.decomposition import SOMP
@@ -210,6 +214,7 @@ def run_pursuit(
         else:
             labels = None
             base_vocab_size = None
+            dictionary = dictionary.to(device)
     else:
         dictionary = word_dictionary.embeddings.float().to(device)
         labels = word_dictionary.labels
@@ -242,7 +247,7 @@ def run_pursuit(
             layer_task = progress.add_task("Projection pursuit", total=n_layers)
 
             for layer_idx in range(n_layers):
-                expert_acts = load_layer_h5(
+                expert_acts = load_layer_activations(
                     extractions_dir, layer_idx, n_experts, min_activations
                 )
                 expert_task = progress.add_task(

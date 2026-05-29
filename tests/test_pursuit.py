@@ -3,7 +3,7 @@
 import torch
 import torch.nn.functional as F
 
-from moe_interp.pursuit.decomposition import somp
+from moe_interp.pursuit.decomposition import SOMP, somp
 from moe_interp.pursuit.pursuit import projection_pursuit
 
 
@@ -198,7 +198,7 @@ def test_run_pursuit_handles_concepts_with_only_single_token_words(
     monkeypatch.setattr(pursuit, "load_unembedding", lambda path: torch.eye(4))
     monkeypatch.setattr(pursuit, "get_unembedding_dir", lambda model_name: tmp_path)
     monkeypatch.setattr(pursuit, "get_device", lambda: "cpu")
-    monkeypatch.setattr(pursuit, "load_layer_h5", lambda *args, **kwargs: {})
+    monkeypatch.setattr(pursuit, "load_layer_activations", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         "transformers.AutoTokenizer.from_pretrained",
         lambda model_name: _DummyTokenizerForConcepts(),
@@ -245,3 +245,21 @@ def test_somp_uses_double_precision_for_lstsq(monkeypatch):
 
     assert captured["a"] == torch.float64
     assert captured["b"] == torch.float64
+
+
+def test_somp_supports_pca_reduced_path():
+    torch.manual_seed(1)
+    X = torch.randn(20, 8)
+    dictionary = F.normalize(torch.randn(12, 8), dim=1)
+
+    result = SOMP(k=3, pc=4, compute_evr=True, return_full=False)(
+        X=X,
+        dictionary=dictionary,
+        descriptors=list(range(12)),
+        device="cpu",
+    )
+
+    assert result["chosen"].shape == (3,)
+    assert result["evr"].shape == (3,)
+    assert len(set(result["chosen"].tolist())) == 3
+    assert all(0.0 <= val <= 1.0 + 1e-6 for val in result["evr"].tolist())

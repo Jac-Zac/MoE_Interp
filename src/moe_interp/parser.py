@@ -86,4 +86,70 @@ def build_parser() -> argparse.ArgumentParser:
         "Mutually exclusive with --concept.",
     )
 
+    analysis_parser = subparsers.add_parser(
+        "analysis", help="Run unsupervised expert clustering analysis"
+    )
+    analysis_parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model name (if not specified, reads from metadata.json)",
+    )
+    analysis_parser.add_argument(
+        "--dataset",
+        type=str,
+        default="triviaqa",
+        choices=sorted(DATASET_SPECS),
+        required=False,
+        help="Dataset used for the extractions (default: triviaqa)",
+    )
+    analysis_parser.add_argument(
+        "--min_activations",
+        type=int,
+        default=20,
+        help="Minimum activations to include an expert (default: 20)",
+    )
+    analysis_parser.add_argument(
+        "--methods",
+        type=str,
+        default="kmeans,agglomerative,spectral",
+        help="Comma-separated clustering methods to run",
+    )
+    analysis_parser.add_argument(
+        "--pursuit_dir",
+        type=str,
+        default=None,
+        help="Override path to precomputed pursuit results for semantic interpretation",
+    )
+    analysis_parser.add_argument(
+        "--top_k", type=int, default=20, help="Top tokens for logit-lens decoding"
+    )
+    analysis_parser.add_argument(
+        "--skip_logit_lens",
+        action="store_true",
+        help="Skip the logit-lens centroid decoding (avoids loading the unembedding)",
+    )
+    analysis_parser.add_argument(
+        "--adp",
+        action="store_true",
+        help="Run per-expert ADP (DADApy) manifold analysis on well-populated experts",
+    )
+    analysis_parser.add_argument(
+        "--adp_min_rows",
+        type=int,
+        default=100,
+        help="Minimum activation rows for an expert to be ADP-analyzed (default: 100)",
+    )
+    analysis_parser.add_argument(
+        "--n_bootstrap",
+        type=int,
+        default=20,
+        help="Bootstrap resamples for clustering stability (default: 20)",
+    )
+    analysis_parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Also write a self-contained report.html summarizing findings",
+    )
+
     return parser

@@ -7,6 +7,8 @@ from typing import Any, cast
 import h5py
 import torch
 
+_OPTIONAL_EXPERT_FIELDS = ("routing_weights", "positions")
+
 
 def _metadata_path(path: Path) -> Path:
     path = Path(path)
@@ -15,6 +17,17 @@ def _metadata_path(path: Path) -> Path:
 
 def _expert_group_name(expert_id: int) -> str:
     return f"expert_{expert_id:03d}"
+
+
+def _read_expert_group(group: h5py.Group) -> dict[str, torch.Tensor]:
+    entry = {
+        "activations": torch.from_numpy(cast(h5py.Dataset, group["activations"])[:]),
+        "tokens": torch.from_numpy(cast(h5py.Dataset, group["tokens"])[:]),
+    }
+    for name in _OPTIONAL_EXPERT_FIELDS:
+        if name in group:
+            entry[name] = torch.from_numpy(cast(h5py.Dataset, group[name])[:])
+    return entry
 
 
 def save_metadata(path: Path, **kwargs) -> None:
@@ -115,21 +128,7 @@ def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
         if group_name not in f:
             return {"activations": torch.empty(0), "tokens": torch.empty(0)}
         group = cast(h5py.Group, f[group_name])
-        result = {
-            "activations": torch.from_numpy(
-                cast(h5py.Dataset, group["activations"])[:]
-            ),
-            "tokens": torch.from_numpy(cast(h5py.Dataset, group["tokens"])[:]),
-        }
-        if "routing_weights" in group:
-            result["routing_weights"] = torch.from_numpy(
-                cast(h5py.Dataset, group["routing_weights"])[:]
-            )
-        if "positions" in group:
-            result["positions"] = torch.from_numpy(
-                cast(h5py.Dataset, group["positions"])[:]
-            )
-        return result
+        return _read_expert_group(group)
 
 
 def save_unembedding(path: Path, tensor: torch.Tensor) -> None:
@@ -161,8 +160,8 @@ def load_layer_h5(
     layer_idx: int,
     n_experts: int,
     min_activations: int = 0,
-) -> dict[int, torch.Tensor]:
-    """Return {expert_id: activations} for one layer.
+) -> dict[int, dict[str, torch.Tensor]]:
+    """Return {expert_id: {activations, tokens, [routing_weights], [positions]}}.
 
     Experts with fewer than min_activations rows are excluded.
     Returns an empty dict if the layer file does not exist.
@@ -170,7 +169,7 @@ def load_layer_h5(
     layer_path = Path(extractions_dir) / f"layer_{layer_idx:02d}.h5"
     if not layer_path.exists():
         return {}
-    result: dict[int, torch.Tensor] = {}
+    result: dict[int, dict[str, torch.Tensor]] = {}
     with h5py.File(layer_path, "r") as f:
         for ei in range(n_experts):
             group_name = _expert_group_name(ei)
@@ -180,5 +179,16 @@ def load_layer_h5(
             acts_ds = cast(h5py.Dataset, group["activations"])
             if acts_ds.shape[0] < min_activations:
                 continue
-            result[ei] = torch.from_numpy(acts_ds[:])
+            result[ei] = _read_expert_group(group)
     return result
+
+
+def load_layer_activations(
+    extractions_dir: Path,
+    layer_idx: int,
+    n_experts: int,
+    min_activations: int = 0,
+) -> dict[int, torch.Tensor]:
+    """Return only activations for callers that do not need token metadata."""
+    layer = load_layer_h5(extractions_dir, layer_idx, n_experts, min_activations)
+    return {ei: entry["activations"] for ei, entry in layer.items()}

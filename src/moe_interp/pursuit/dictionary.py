@@ -29,14 +29,15 @@ def load_common_words(top_k: int = 10000, source: str = "default") -> list[str]:
         ds = load_dataset("jaagli/common-words-79k")["whole"]
         sorted_ds = ds.sort("frequency", reverse=True)
         return [w.strip().lower() for w in sorted_ds["alias"][:top_k] if w.strip()]
-    elif source == "full":
+    if source == "full":
         ds = load_dataset(
             "Maximax67/English-Valid-Words",
             subset="sorted_by_frequency",
         )["train"]
         return [w.strip().lower() for w in ds["Word"][:top_k] if w.strip()]
-    else:
-        raise ValueError(f"Unknown source: {source}. Use 'default' or 'full'")
+    raise ValueError(f"Unknown source: {source}. Use 'default' or 'full'")
+
+
 def build_word_dictionary(
     tokenizer,
     dictionary: torch.Tensor,
@@ -82,7 +83,7 @@ def build_word_dictionary(
         labels.append(cleaned)
         label_token_ids.append(token_ids)
 
-    # Filter: keep sub-tokens that are themselves promoted words; remove the rest from the base vocab.
+    # Keep promoted words and remove their remaining sub-tokens from the base vocab.
     promoted_words = set(labels)
     subtoken_list = list(subtoken_ids)
     tokens_to_remove = {
