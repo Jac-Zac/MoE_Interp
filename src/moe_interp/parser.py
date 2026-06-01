@@ -45,8 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--max_rows_per_expert",
         type=int,
         default=None,
-        help="Cap rows kept per (layer, expert) via uniform reservoir sampling "
-        "(recommended with --token_selection all to bound disk/RAM; default: unbounded)",
+        help="Cap rows kept per (layer, expert); extra rows are dropped once full "
+        "(recommended with --token_selection all to bound disk; default: unbounded)",
     )
     extract_parser.add_argument(
         "--max_length",

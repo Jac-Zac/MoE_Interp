@@ -26,6 +26,26 @@ def test_projection_pursuit_greedy_monotonic():
     assert all(evr[i] <= evr[i + 1] for i in range(len(evr) - 1))
 
 
+def test_projection_pursuit_pc1_is_not_zeroed_by_centering():
+    torch.manual_seed(0)
+    direction = F.normalize(torch.randn(16), dim=0)
+    X = torch.randn(64, 1) @ direction[None, :] + 0.02 * torch.randn(64, 16)
+    dictionary = F.normalize(torch.stack([direction, torch.randn(16)]), dim=1)
+    tokenizer = _DummyTokenizer()
+
+    tokens, evr = projection_pursuit(
+        X,
+        dictionary,
+        tokenizer,
+        device="cpu",
+        k=1,
+        pc=1,
+    )
+
+    assert tokens == ["tok_0"]
+    assert evr[0] > 0.9
+
+
 def test_projection_pursuit_empty_on_zero_variance():
     X = torch.zeros(8, 4)
     dictionary = torch.randn(10, 4)

@@ -51,6 +51,7 @@ class SOMP:
             k=self.k,
             device=device,
             criterion=self.criterion,
+            centering=self.pc is None,
             compute_evr=self.compute_evr,
             return_full=self.return_full,
         )

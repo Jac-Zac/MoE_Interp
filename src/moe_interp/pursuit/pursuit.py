@@ -31,6 +31,7 @@ def projection_pursuit(
     tokenizer,
     device: torch.device | str,
     k: int = 50,
+    pc: int | None = None,
     token_ids: list[int] | None = None,
     labels: list[str] | None = None,
     base_vocab_size: int | None = None,
@@ -52,7 +53,7 @@ def projection_pursuit(
     if X.var(dim=0).sum().item() < 1e-10:
         return [], []
 
-    decomposition = SOMP(k=k, compute_evr=True, return_full=False)
+    decomposition = SOMP(k=k, pc=pc, compute_evr=True, return_full=False)
     result = decomposition(
         X=X,
         dictionary=dictionary,

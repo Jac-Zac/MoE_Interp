@@ -43,28 +43,11 @@ from moe_interp.analysis.decode import (
 from moe_interp.analysis.normalize import normalize_features
 from moe_interp.analysis.summaries import compute_expert_summary
 from moe_interp.capture.cache import load_layer_h5, load_metadata, load_unembedding
-from moe_interp.config import get_data_dir, get_model_dir, get_unembedding_dir
+from moe_interp.config import get_unembedding_dir, resolve_pursuit_dir
 from moe_interp.io.plots import plot_label_grid, plot_scatter_grid
 from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 FEATURE_NORM = "layer_centered+l2"
-
-
-def _resolve_pursuit_dir(
-    model_name: str, dataset: str, explicit: Path | None
-) -> Path | None:
-    """Find precomputed pursuit results, preferring an explicit path, then the standard
-    location, then the synced Orfeo-cluster results."""
-    safe = get_model_dir(model_name).name
-    candidates = []
-    if explicit is not None:
-        candidates.append(Path(explicit))
-    candidates.append(get_model_dir(model_name) / "pursuit" / dataset)
-    candidates.append(get_data_dir() / "orfeo" / safe / "pursuit" / dataset)
-    for c in candidates:
-        if (c / "results.jsonl").exists():
-            return c
-    return None
 
 
 def _feature_sets(summaries: dict) -> tuple[list[int], dict[str, torch.Tensor]]:
@@ -157,7 +140,7 @@ def run_analysis(
     n_experts = metadata["n_experts"]
     token_selection = metadata.get("token_selection", "last")
 
-    resolved_pursuit = _resolve_pursuit_dir(model_name, dataset, pursuit_dir)
+    resolved_pursuit = resolve_pursuit_dir(model_name, dataset, pursuit_dir)
     pursuit = load_pursuit_results(resolved_pursuit) if resolved_pursuit else {}
     if resolved_pursuit:
         print(f"Loaded {len(pursuit)} pursuit records from {resolved_pursuit}")

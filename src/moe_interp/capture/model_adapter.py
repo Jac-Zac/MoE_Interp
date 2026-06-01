@@ -1,7 +1,17 @@
-"""Model adapters for MoE trace access.
+"""Model adapters for MoE expert-contribution reconstruction.
 
-This module isolates model-specific nnsight trace node access so capture logic can
-stay shared across MoE architectures.
+Capture taps each MoE block's boundary tensors once per forward
+(``hidden_states``, ``top_k_index``, ``top_k_weights``) and re-derives every
+expert's per-token contribution from the block's weight params — fused MoE
+kernels never materialise the per-expert vectors, and nnsight 0.7's
+``tracer.iter`` does not step the internal expert loop, so they cannot be traced
+directly.
+
+The boundary tap and the surrounding reconstruction loop (real-token masking,
+routing-weight scaling, component RMSNorm) are shared. The only model-specific
+piece is ``expert_forward`` — one expert's raw transform — which mirrors that
+model's own expert math so the reconstruction is exact. Pick an adapter with
+``get_model_adapter(model)``.
 """
 
 from __future__ import annotations
@@ -10,10 +20,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+import torch
+import torch.nn.functional as F
+
 
 @dataclass(frozen=True)
 class MoEConfig:
-    """Model configuration extracted once at adapter construction time."""
+    """MoE model config fields needed by capture, extracted from ``model.config``."""
 
     model_name: str
     model_type: str
@@ -22,59 +35,26 @@ class MoEConfig:
     d_model: int
     experts_per_tok: int
 
-
-class MoEAdapter(ABC):
-    """Abstract adapter for model-specific MoE trace access.
-
-    Subclass properties expose model config (n_layers, n_experts, d_model, etc.)
-    and rich renders a config table.
-    """
-
-    def __init__(self, model: Any) -> None:
-        self._config = self._extract_config(model)
-
-    def _extract_config(self, model: Any) -> MoEConfig:
+    @classmethod
+    def from_model(cls, model: Any) -> "MoEConfig":
         cfg = model.config
-        return MoEConfig(
+        # OLMoE/Mixtral/gpt-oss expose `num_local_experts`; some configs use `num_experts`.
+        n_experts = getattr(cfg, "num_local_experts", None)
+        if n_experts is None:
+            n_experts = cfg.num_experts
+        return cls(
             model_name=cfg._name_or_path,
             model_type=cfg.model_type,
             n_layers=cfg.num_hidden_layers,
-            n_experts=self._get_n_experts(cfg),
+            n_experts=n_experts,
             d_model=cfg.hidden_size,
             experts_per_tok=cfg.num_experts_per_tok,
         )
 
-    def _get_n_experts(self, cfg: Any) -> int:
-        return cfg.num_experts
-
-    @property
-    def model_name(self) -> str:
-        return self._config.model_name
-
-    @property
-    def model_type(self) -> str:
-        return self._config.model_type
-
-    @property
-    def n_layers(self) -> int:
-        return self._config.n_layers
-
-    @property
-    def n_experts(self) -> int:
-        return self._config.n_experts
-
-    @property
-    def d_model(self) -> int:
-        return self._config.d_model
-
-    @property
-    def experts_per_tok(self) -> int:
-        return self._config.experts_per_tok
-
     def _rich_table(self):
         from rich.table import Table
 
-        t = Table(title=f"Model Config [{self.__class__.__name__}]")
+        t = Table(title="MoE Config")
         t.add_column("Property", style="cyan")
         t.add_column("Value", style="magenta")
         t.add_row("Model", self.model_name)
@@ -85,113 +65,195 @@ class MoEAdapter(ABC):
         t.add_row("Experts per Token", str(self.experts_per_tok))
         return t
 
+
+def apply_component_rmsnorm(
+    hidden_states: torch.Tensor,
+    second_moment: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+) -> torch.Tensor:
+    """Approximate component RMSNorm using the residual stream second moment.
+
+    This keeps the expert output on the same scale as the final model norm while
+    avoiding recomputing the full residual-stream normalization.
+    """
+    input_dtype = hidden_states.dtype
+    # NOTE: Keep float32 here for stability (HF issue #33133).
+    hidden_states = hidden_states.to(torch.float32)
+    hidden_states = hidden_states * torch.rsqrt(second_moment.unsqueeze(-1) + eps)
+    return weight * hidden_states.to(input_dtype)
+
+
+class MoEAdapter(ABC):
+    """Abstract adapter: model config + model-specific expert reconstruction."""
+
+    def __init__(self, model: Any) -> None:
+        self.config = MoEConfig.from_model(model)
+
+    # --- config passthroughs -------------------------------------------------
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name
+
+    @property
+    def model_type(self) -> str:
+        return self.config.model_type
+
+    @property
+    def n_layers(self) -> int:
+        return self.config.n_layers
+
+    @property
+    def n_experts(self) -> int:
+        return self.config.n_experts
+
+    @property
+    def d_model(self) -> int:
+        return self.config.d_model
+
+    @property
+    def experts_per_tok(self) -> int:
+        return self.config.experts_per_tok
+
     def __repr__(self) -> str:
+        c = self.config
         return (
-            f"{self.__class__.__name__}("
-            f"model_name={self.model_name!r}, "
-            f"model_type={self.model_type!r}, "
-            f"n_layers={self.n_layers}, "
-            f"n_experts={self.n_experts}, "
-            f"d_model={self.d_model}, "
-            f"experts_per_tok={self.experts_per_tok})"
+            f"{self.__class__.__name__}(model_name={c.model_name!r}, "
+            f"model_type={c.model_type!r}, n_layers={c.n_layers}, "
+            f"n_experts={c.n_experts}, d_model={c.d_model}, "
+            f"experts_per_tok={c.experts_per_tok})"
         )
 
     def __rich_console__(self, console: Any, options: Any):
-        yield self._rich_table()
+        yield self.config._rich_table()
 
+    # --- boundary tap (shared; override only if a model differs) -------------
+    def tap_layer(self, layer: Any) -> Any:
+        """Proxy to ``.save()`` inside the trace for one layer's MoE block.
+
+        Fused experts modules (gpt-oss / OLMoE / Mixtral) are all called as
+        ``experts(hidden_states, top_k_index, top_k_weights)``.
+        """
+        return layer.mlp.experts.inputs
+
+    def unpack_boundary(self, saved: Any) -> tuple[Any, Any, Any]:
+        """Return ``(hidden_states, top_k_index, top_k_weights)`` from a saved tap."""
+        return saved[0]
+
+    # --- model-specific expert math ------------------------------------------
     @abstractmethod
-    def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
-        """Return router output tuple from the layer trace."""
+    def expert_forward(
+        self, experts: Any, expert_id: int, hidden_states: torch.Tensor
+    ) -> torch.Tensor:
+        """One expert's raw output over a token subset.
 
-    @abstractmethod
-    def get_expert_hit(self, layer: Any) -> Any:
-        """Return expert-hit tensor from the layer trace."""
+        ``hidden_states`` is ``(n_tokens, d_model)`` float32. Returns
+        ``(n_tokens, d_model)`` float32, BEFORE routing-weight scaling and the
+        component RMSNorm (both applied by ``reconstruct_expert_contributions``).
+        """
 
-    @abstractmethod
-    def get_top_k_pos_token_idx(self, layer: Any) -> tuple[Any, Any]:
-        """Return `(top_k_pos, token_idx)` for one active expert iteration."""
+    # --- shared reconstruction loop ------------------------------------------
+    def reconstruct_expert_contributions(
+        self,
+        experts: Any,
+        hidden_states: torch.Tensor,
+        top_k_index: torch.Tensor,
+        top_k_weights: torch.Tensor,
+        *,
+        real_mask: torch.Tensor,
+        second_moment: torch.Tensor,
+        token_ids: torch.Tensor,
+        max_len: int,
+        norm_weight: torch.Tensor,
+        norm_eps: float,
+    ) -> dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Recompute each expert's per-token contribution from one MoE block's inputs.
 
-    @abstractmethod
-    def get_expert_output(self, layer: Any) -> Any:
-        """Return per-expert output tensor from the layer trace."""
+        Loops only over experts that fired; for each, batches all its (token, slot)
+        pairs through ``expert_forward``, scales by the routing weight, then applies
+        component RMSNorm. Returns ``{expert_id: (activations, token_ids,
+        routing_weights, positions)}`` over real tokens only, CPU/float16 ready to
+        write. Args mirror the flattened ``(b_size * max_len)`` token axis;
+        ``real_mask``/``second_moment``/``token_ids`` are length N and are moved to
+        the experts' device here (TP/pipeline can place layers on different devices).
+        """
+        dev = hidden_states.device
+        hidden_states = hidden_states.float()
+        top_k_weights = top_k_weights.float()
+        real_mask = real_mask.to(dev)
+        second_moment = second_moment.to(dev)
+        token_ids = token_ids.to(dev)
+        norm_weight = norm_weight.to(dev)
 
+        out: dict[int, tuple] = {}
+        for e in torch.unique(top_k_index).tolist():
+            t_idx, k_idx = (top_k_index == e).nonzero(as_tuple=True)
+            keep = real_mask[t_idx]
+            t_idx, k_idx = t_idx[keep], k_idx[keep]
+            if t_idx.numel() == 0:
+                continue
 
-class OLMoEAdapter(MoEAdapter):
-    """Adapter for OLMoE-style MoE blocks."""
-
-    def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
-        # top_k_weights: weight for each expert
-        # top_k_indices: expert id active for each token
-        # source.self_gate_0 outputs: (_, top_k_weights, top_k_indices)
-        return layer.mlp.gate.output  # we can directly get gate output
-
-    def get_expert_hit(self, layer: Any) -> Any:
-        # NOTE: One must be very careful of what to get.
-        # We need expert_hit after `nonzero_0`:
-        # expert_mask_sum_0 -> expert_hit = torch.greater(...).nonzero()
-        # torch_greater_0   -> + ...
-        # nonzero_0         -> + ...
-        return layer.mlp.experts.source.nonzero_0.output
-
-    def get_top_k_pos_token_idx(self, layer: Any) -> tuple[Any, Any]:
-        return layer.mlp.experts.source.torch_where_0.output
-
-    def get_expert_output(self, layer: Any) -> Any:
-        # Captures the expert contribution right before index_add_ into
-        # final_hidden_states:
-        #   (act_fn(gate) * up) @ down_proj * routing_weight
-        # Shape: [active_tokens, d_model]. Routing weight is already included.
-        return layer.mlp.experts.source.current_hidden_states_to_0.output
-
-
-class GPTOSSAdapter(MoEAdapter):
-    """Adapter for GPT-oss-style MoE blocks."""
-
-    def _get_n_experts(self, cfg: Any) -> int:
-        return cfg.num_local_experts
-
-    def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
-        return layer.mlp.router.output
-
-    def get_expert_hit(self, layer: Any) -> Any:
-        return layer.mlp.experts.source.nonzero_0.output
-
-    def get_top_k_pos_token_idx(self, layer: Any) -> tuple[Any, Any]:
-        return layer.mlp.experts.source.torch_where_0.output
-
-    def get_expert_output(self, layer: Any) -> Any:
-        # Captures the expert contribution right before index_add_ into
-        # next_states:
-        #   (gated_output @ down_proj + down_proj_bias) * routing_weight
-        # Shape: [active_tokens, d_model]. Routing weight is already included.
-        # NOTE: For this model intermediate_size == d_model == 2880, so the shape matches
-        # self__apply_gate_0(pre - down_proj) but weighted_output_to_0 is the expert outptut
-        return layer.mlp.experts.source.weighted_output_to_0.output
+            contrib = self.expert_forward(experts, e, hidden_states[t_idx])
+            contrib = contrib * top_k_weights[t_idx, k_idx, None]
+            contrib = apply_component_rmsnorm(
+                contrib, second_moment[t_idx], norm_weight, norm_eps
+            )
+            out[e] = (
+                contrib.half().cpu(),
+                token_ids[t_idx].cpu(),
+                top_k_weights[t_idx, k_idx].cpu(),
+                (t_idx % max_len).cpu(),
+            )
+        return out
 
 
-class MixtralAdapter(MoEAdapter):
-    """Adapter for Mixtral-style MoE blocks."""
+class SwiGLUMoEAdapter(MoEAdapter):
+    """Adapter for fused SwiGLU experts (OLMoE, Mixtral).
 
-    def _get_n_experts(self, cfg: Any) -> int:
-        return cfg.num_local_experts
+    Mirrors ``OlmoeExperts``/``MixtralExperts``: ``gate_up_proj`` is
+    ``(E, 2I, D)`` and gate/up are contiguous halves; no biases, no clamp::
 
-    def get_router_output(self, layer: Any) -> tuple[Any, Any, Any]:
-        return layer.mlp.gate.output
+        gate, up = F.linear(h, gate_up_proj[e]).chunk(2)
+        out = F.linear(act_fn(gate) * up, down_proj[e])
+    """
 
-    def get_expert_hit(self, layer: Any) -> Any:
-        return layer.mlp.experts.source.nonzero_0.output
+    def expert_forward(
+        self, experts: Any, expert_id: int, hidden_states: torch.Tensor
+    ) -> torch.Tensor:
+        gate_up = experts.gate_up_proj[expert_id].detach().float()  # (2I, D)
+        down = experts.down_proj[expert_id].detach().float()  # (D, I)
+        gate, up = F.linear(hidden_states, gate_up).chunk(2, dim=-1)
+        return F.linear(experts.act_fn(gate) * up, down)
 
-    def get_top_k_pos_token_idx(self, layer: Any) -> tuple[Any, Any]:
-        return layer.mlp.experts.source.torch_where_0.output
 
-    def get_expert_output(self, layer: Any) -> Any:
-        return layer.mlp.experts.source.nn_functional_linear_1.output
+class GptOssAdapter(MoEAdapter):
+    """Adapter for gpt-oss fused experts.
+
+    Mirrors ``GptOssExperts``: ``gate_up_proj`` is ``(E, D, 2I)`` (no transpose),
+    gate/up are interleaved, with clamps, biases and the ``(up + 1) * gate *
+    sigmoid(alpha * gate)`` gating. Reuses the module's own ``_apply_gate`` so the
+    interleave/clamp/alpha details stay in lockstep with the model::
+
+        gate_up = h @ gate_up_proj[e] + gate_up_proj_bias[e]
+        out = experts._apply_gate(gate_up) @ down_proj[e] + down_proj_bias[e]
+    """
+
+    def expert_forward(
+        self, experts: Any, expert_id: int, hidden_states: torch.Tensor
+    ) -> torch.Tensor:
+        gate_up_w = experts.gate_up_proj[expert_id].detach().float()  # (D, 2I)
+        gate_up_b = experts.gate_up_proj_bias[expert_id].detach().float()  # (2I,)
+        down_w = experts.down_proj[expert_id].detach().float()  # (I, D)
+        down_b = experts.down_proj_bias[expert_id].detach().float()  # (D,)
+        gate_up = hidden_states @ gate_up_w + gate_up_b
+        gated = experts._apply_gate(gate_up)
+        return gated @ down_w + down_b
 
 
 MODEL_TYPE_TO_ADAPTER: dict[str, type[MoEAdapter]] = {
-    "gpt_oss": GPTOSSAdapter,
-    "mixtral": MixtralAdapter,
-    "olmoe": OLMoEAdapter,
+    "gpt_oss": GptOssAdapter,
+    "olmoe": SwiGLUMoEAdapter,
+    "mixtral": SwiGLUMoEAdapter,
 }
 
 KNOWN_MODEL_NAME_TO_TYPE: dict[str, str] = {
@@ -206,19 +268,14 @@ def get_model_adapter(
     model_name: str | None = None,
     model_type: str | None = None,
 ) -> MoEAdapter:
-    """Return the correct adapter based on model metadata.
+    """Return the correct adapter, resolving the model type in order:
 
-    Resolution order:
-    1) `model.config.model_type`
-    2) explicit `model_type`
-    3) exact lookup from known `model_name`
+    1) ``model.config.model_type``  2) explicit ``model_type``
+    3) exact lookup from known ``model_name``.
     """
     resolved_type: str | None = None
-
-    if (
-        model is not None
-        and hasattr(model, "config")
-        and hasattr(model.config, "model_type")
+    if model is not None and getattr(
+        getattr(model, "config", None), "model_type", None
     ):
         resolved_type = model.config.model_type
     elif model_type is not None:
@@ -227,12 +284,10 @@ def get_model_adapter(
         resolved_type = KNOWN_MODEL_NAME_TO_TYPE.get(model_name)
 
     if resolved_type in MODEL_TYPE_TO_ADAPTER:
-        adapter_cls = MODEL_TYPE_TO_ADAPTER[resolved_type]
-        return adapter_cls(model)
+        return MODEL_TYPE_TO_ADAPTER[resolved_type](model)
 
     raise ValueError(
         "Could not resolve model adapter. Supported model_type values: "
-        f"{sorted(MODEL_TYPE_TO_ADAPTER.keys())}. "
-        "For model_name fallback, supported names: "
-        f"{sorted(KNOWN_MODEL_NAME_TO_TYPE.keys())}."
+        f"{sorted(MODEL_TYPE_TO_ADAPTER)}. For model_name fallback, supported "
+        f"names: {sorted(KNOWN_MODEL_NAME_TO_TYPE)}."
     )

@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from moe_interp.capture import prepare_prompts_dataset, save_capture_artifacts
 from moe_interp.capture.cache import append_to_file
-from moe_interp.capture.capture import apply_component_rmsnorm
+from moe_interp.capture.capture import token_real_mask
 from moe_interp.capture.model_adapter import get_model_adapter
 from moe_interp.config import get_data_dir, get_extractions_dir, set_seed
 from moe_interp.io.data import load_dataset_prompts
@@ -32,6 +32,7 @@ REMOTE = False
 load_dotenv()
 set_seed(seed)
 data_dir = get_data_dir()
+
 # The main.py CLI automatically detects distributed setup and uses tp_plan="auto"
 # TODO: Change this code if on remote device
 model = LanguageModel(
@@ -42,17 +43,14 @@ model = LanguageModel(
     # # cast to bfloat16 gpt-oss on V100 because of unsupported default dtype
     dtype="auto",
     dispatch=True,
-    # "eager" keeps the original Python loop over experts so nnsight can
-    # intercept per-expert nodes (torch_where_0, nn_functional_linear_1, etc.).
-    # The default "grouped_mm" fuses all experts into a single kernel with no
-    # per-expert trace points, which breaks activation capture entirely.
-    # experts_implementation="eager",
+    # Captures tap the MoE block's boundary tensors (hidden_states, top_k_index, top_k_weights) once per forward
+    # and reconstruct each expert's contribution from the expert weights.
 )
 
 print(model.dtype)  # Show dtype
 tokenizer = model.tokenizer
 
-adapter = get_model_adapter(model=model)
+adapter = get_model_adapter(model)
 rprint(adapter)
 n_layers = adapter.n_layers
 n_experts = adapter.n_experts
@@ -61,7 +59,7 @@ norm_weight = model.model.norm.weight
 norm_eps = model.model.norm.variance_epsilon
 
 # %% Load prompts
-DATASET_NAME = "triviaqa"
+DATASET_NAME = "pile10k"
 prompts = load_dataset_prompts(DATASET_NAME, tokenizer, n_docs=n_docs)
 print(f"Loaded {len(prompts)} {DATASET_NAME} prompts")
 
@@ -89,123 +87,47 @@ for batch in tqdm(
     batch_tokens = batch["input_ids"]  # type: ignore[index]
     prompt_lengths = batch["length"]  # type: ignore[index]
     b_size = len(batch_tokens)
-    pending_writes = {}
 
-    with torch.no_grad(), model.trace(batch_tokens, remote=REMOTE) as tracer:
-        input_ids = model.inputs[1]["input_ids"].save().detach()  # type: ignore[index]
+    # --- Pass 1: ONE trace, grab the 3 inputs OlmoeExperts.forward receives
+    # and recompute every expert's contribution afterwards from the expert weights via
+    # the model-specific adapter.reconstruct_expert_contributions. Works under grouped_mm / eager / batched_mm.
+    expert_inputs = []
+    with torch.no_grad(), model.trace(batch_tokens, remote=REMOTE):
+        input_ids = model.inputs[1]["input_ids"].save()  # type: ignore[index]
 
-        layer_datas: list = []
-        for layer_idx, layer in enumerate(model.model.layers):
-            _, weights, indices = adapter.get_router_output(layer)
-            top_k_weights = weights.save().detach()
+        for layer in model.model.layers:
+            expert_inputs.append(adapter.tap_layer(layer).save())
 
-            token_indices_list: list[torch.Tensor] = []
-            down_projs_list: list[torch.Tensor] = []
-            top_k_pos_list: list[torch.Tensor] = []
+        pre_norm_hidden = model.model.norm.input.save()
 
-            expert_hit = adapter.get_expert_hit(layer)
-            active_experts = (
-                expert_hit[expert_hit != adapter.n_experts].squeeze(-1).save().detach()
+    # --- Pass 2: reconstruct & write every (token, expert) contribution, per layer ---
+    max_len = input_ids.shape[1]
+    real_mask = token_real_mask(prompt_lengths, max_len)  # (b*max_len,) drop padding
+    second_moment = pre_norm_hidden.float().pow(2).mean(-1).reshape(-1)  # for RMSNorm
+
+    for layer_idx, layer in enumerate(model.model.layers):
+        hidden_states, top_k_index, top_k_weights = adapter.unpack_boundary(
+            expert_inputs[layer_idx]
+        )
+        for expert_id, rows in adapter.reconstruct_expert_contributions(
+            layer.mlp.experts,
+            hidden_states,
+            top_k_index,
+            top_k_weights,
+            real_mask=real_mask,
+            second_moment=second_moment,
+            token_ids=input_ids.reshape(-1),
+            max_len=max_len,
+            norm_weight=norm_weight,
+            norm_eps=norm_eps,
+        ).items():
+            append_to_file(
+                layer_files[layer_idx],
+                expert_id,
+                *rows[:2],
+                routing_weights=rows[2],
+                positions=rows[3],
             )
-            num_iters = active_experts.numel()
-
-            # NOTE: Maybe this could work too but it is a bit less robust I think
-            # for _step in tracer.all()
-
-            for _step in tracer.iter[:num_iters]:
-                top_k_pos, token_idx = adapter.get_top_k_pos_token_idx(layer)
-                down_proj = adapter.get_expert_output(layer)
-
-                token_indices_list.append(token_idx.save().detach())
-                down_projs_list.append(down_proj.save().detach())
-                top_k_pos_list.append(top_k_pos.save().detach())
-
-            layer_datas.append(
-                {
-                    "active_experts": active_experts,
-                    "token_indices": token_indices_list,
-                    "down_projs": down_projs_list,
-                    "top_k_pos": top_k_pos_list,
-                    "weights": top_k_weights,
-                }
-            )
-
-        pre_norm_hidden = model.model.norm.input.save().detach()
-        max_len = input_ids.shape[1]
-
-        # NOTE: Here we take the last token but averaging over content tokens can also be performed instead
-
-        # Pre-compute last-token positions for all batches (vectorized)
-        batch_offsets = torch.arange(b_size) * max_len
-        actual_lens_tensor = torch.tensor(prompt_lengths, dtype=torch.long)
-        last_positions = batch_offsets + actual_lens_tensor - 1
-        sample_indices = torch.arange(b_size)
-        pre_norm_last = pre_norm_hidden[sample_indices, actual_lens_tensor - 1]
-        second_moment_last = torch.atleast_1d(pre_norm_last.float().pow(2).mean(dim=-1))
-
-        for layer_idx, layer_data in enumerate(layer_datas):
-            active_experts = layer_data["active_experts"]
-            token_indices_list = layer_data["token_indices"]
-            down_projs_list = layer_data["down_projs"]
-            top_k_pos_list = layer_data["top_k_pos"]
-            if not (
-                len(active_experts)
-                == len(token_indices_list)
-                == len(down_projs_list)
-                == len(top_k_pos_list)
-            ):
-                raise RuntimeError(
-                    "Mismatched traced event counts in notebook capture loop: "
-                    f"active_experts={len(active_experts)}, "
-                    f"token_indices={len(token_indices_list)}, "
-                    f"down_projs={len(down_projs_list)}, "
-                    f"top_k_pos={len(top_k_pos_list)}"
-                )
-
-            for expert_id, token_idx, down_proj, top_k_pos in zip(
-                active_experts.tolist(),
-                token_indices_list,
-                down_projs_list,
-                top_k_pos_list,
-            ):
-                target_device = down_proj.device
-                lp = last_positions.to(target_device)
-                ids = input_ids.to(target_device)
-                sm_last = second_moment_last.to(target_device)
-
-                # Vectorized: single mask
-                is_last = torch.isin(token_idx, lp)
-
-                if not is_last.any():
-                    continue
-
-                # down_proj already holds the routing-weight-scaled contribution:
-                #   OLMoE:   (act_fn(gate) * up) @ down_proj * routing_weight
-                #   GPT-oss: (gated_output @ down_proj + bias) * routing_weight
-                expert_output = down_proj[is_last]
-                last_token_idx_flat = token_idx[is_last]
-
-                batch_indices = last_token_idx_flat // max_len
-                pos_in_batch = last_token_idx_flat % max_len
-                expert_output = apply_component_rmsnorm(
-                    hidden_states=expert_output,
-                    second_moment=sm_last[batch_indices],
-                    weight=norm_weight.to(target_device),
-                    eps=norm_eps,
-                )
-
-                # Map flat indices back to get token IDs
-                last_token_ids = ids[batch_indices, pos_in_batch]
-
-                key = (layer_idx, expert_id)
-                pending_writes.setdefault(key, []).append(
-                    (expert_output.half().cpu(), last_token_ids.cpu())
-                )
-
-    for (layer_idx, expert_id), writes in pending_writes.items():
-        activations = torch.cat([activations for activations, _ in writes], dim=0)
-        tokens = torch.cat([tokens for _, tokens in writes], dim=0)
-        append_to_file(layer_files[layer_idx], expert_id, activations, tokens)
 
 # Set back tokenizer to pad to the left
 model.tokenizer.padding_side = "left"

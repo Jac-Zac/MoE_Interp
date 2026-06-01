@@ -47,6 +47,7 @@ def append_to_file(
     tokens: torch.Tensor,
     routing_weights: torch.Tensor | None = None,
     positions: torch.Tensor | None = None,
+    max_rows: int | None = None,
 ) -> None:
     group_name = _expert_group_name(expert_id)
     acts = activations.detach().cpu()
@@ -56,6 +57,17 @@ def append_to_file(
     if acts.numel() == 0:
         return
     group = f.require_group(group_name)
+    if max_rows is not None:
+        # Cap rows per expert: keep at most max_rows, truncating the incoming batch to
+        # whatever space is left (keeps disk bounded for all-token captures).
+        existing = group["activations"].shape[0] if "activations" in group else 0
+        room = max_rows - existing
+        if room <= 0:
+            return
+        if acts.shape[0] > room:
+            acts, toks = acts[:room], toks[:room]
+            weights = weights[:room] if weights is not None else None
+            pos = pos[:room] if pos is not None else None
     if "activations" not in group:
         group.create_dataset(
             "activations",

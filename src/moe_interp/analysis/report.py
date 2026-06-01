@@ -12,6 +12,8 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 
+from moe_interp.analysis.report_html import fig_html as _fig_html
+from moe_interp.analysis.report_html import table as _table
 from moe_interp.io.plots import plot_label_grid, plot_scatter_grid
 
 
@@ -27,18 +29,6 @@ def _fmt(x, nd: int = 3) -> str:
     if isinstance(x, float):
         return f"{x:.{nd}f}"
     return str(x)
-
-
-def _fig_html(fig: go.Figure, first: bool) -> str:
-    return fig.to_html(full_html=False, include_plotlyjs=("inline" if first else False))
-
-
-def _table(headers: list[str], rows: list[list]) -> str:
-    head = "".join(f"<th>{h}</th>" for h in headers)
-    body = "".join(
-        "<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>" for row in rows
-    )
-    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
 def write_report(output_dir: Path, model_name: str, dataset: str) -> Path:

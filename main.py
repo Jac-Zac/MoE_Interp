@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from moe_interp.capture import capture_expert_activations
 from moe_interp.config import (
     get_default_model,
+    get_device,
     get_extractions_dir,
     get_pursuit_dir,
     get_unembedding_dir,
@@ -32,16 +33,21 @@ def main():
         if dist.is_initialized() and dist.get_world_size() > 1:
             model_kwargs["tp_plan"] = "auto"
         else:
-            model_kwargs["device_map"] = "auto"
+            # Pin the whole model to the single best device. `device_map="auto"`
+            # probes free memory at load time and can flakily offload a sliver of an
+            # MoE model to disk (which then fails: MoE weights can't be re-saved
+            # without an offload_folder). Forcing the device avoids that when it fits.
+            model_kwargs["device_map"] = str(get_device())
 
         model_name = args.model
-        model = LanguageModel(model_name, **model_kwargs)  # type: ignore[arg-type, call-arg]
+        model = LanguageModel(model_name, **model_kwargs)  # type: ignore
 
+        max_length = args.max_length or model.config.max_position_embeddings
         prompts = load_dataset_prompts(
             args.dataset,
             model.tokenizer,
             n_docs=args.n_docs,
-            max_length=model.config.max_position_embeddings,
+            max_length=max_length,
         )
         print(f"Loaded {len(prompts)} {args.dataset} prompts")
 
@@ -54,6 +60,7 @@ def main():
             dataset_name=args.dataset,
             batch_size=args.batch_size,
             token_selection=args.token_selection,
+            max_rows_per_expert=args.max_rows_per_expert,
         )
 
     elif args.command == "pursuit":

@@ -27,13 +27,21 @@ FUTURE WORK (gradient / causal validation, see TODO.md & NEXT_STEPS.md):
 from __future__ import annotations
 
 import argparse
-import json
-from pathlib import Path
+from collections import Counter
+from html import escape
 
 import numpy as np
 import plotly.graph_objects as go
 import torch
 
+from moe_interp.analysis.decode import top_tokens_for_vector
+from moe_interp.analysis.report_html import (
+    figs_to_html,
+    html_page,
+    load_pursuit_map,
+    table,
+)
+from moe_interp.analysis.summaries import compute_expert_summary
 from moe_interp.capture.cache import load_layer_h5, load_metadata, load_unembedding
 from moe_interp.config import (
     get_analysis_dir,
@@ -41,13 +49,23 @@ from moe_interp.config import (
     get_model_dir,
     get_unembedding_dir,
 )
+from moe_interp.pursuit import projection_pursuit
 
 
 def _decode_dir(vec: np.ndarray, U: torch.Tensor, tok, k: int = 8) -> list[str]:
-    """Logit-lens a residual-space direction: top-k unembedding tokens (both signs)."""
-    scores = U @ torch.from_numpy(vec).float()
-    idx = torch.topk(scores, k).indices.tolist()
-    return [tok.decode([i]).strip() for i in idx]
+    """Logit-lens a residual-space direction: top-k unembedding tokens (stripped)."""
+    return [
+        t.strip() for t in top_tokens_for_vector(torch.from_numpy(vec), U, tok, k=k)
+    ]
+
+
+def _top_input_tokens(tokens: torch.Tensor, tok, k: int = 8) -> list[str]:
+    counts = Counter(int(t) for t in tokens.tolist())
+    return [tok.decode([tid]).strip() for tid, _ in counts.most_common(k)]
+
+
+def _join_tokens(tokens: list[str], limit: int = 6) -> str:
+    return ", ".join(escape(t) for t in tokens[:limit])
 
 
 def main() -> None:
@@ -56,50 +74,47 @@ def main() -> None:
     ap.add_argument("--model", default=None)
     ap.add_argument("--min_activations", type=int, default=200)
     ap.add_argument("--top_pcs", type=int, default=3)
+    ap.add_argument("--pc1_pursuit_k", type=int, default=10)
     args = ap.parse_args()
 
     model_name = args.model or get_default_model()
     ed = get_model_dir(model_name) / "extractions" / args.dataset
     meta = load_metadata(ed / "metadata.json")
-    n_layers, n_experts = meta["n_layers"], meta["n_experts"]
+    n_layers, n_experts, d_model = meta["n_layers"], meta["n_experts"], meta["d_model"]
 
     U = load_unembedding(get_unembedding_dir(model_name) / "dictionary.h5").float()
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model_name)
+    pursuit = load_pursuit_map(model_name, args.dataset)
 
-    # ---- per-expert SVD spectrum + PC direction decoding ----
-    print("SVD per expert ...")
+    # ---- per-expert centered spectrum (shared robust Gram-SVD) + PC direction decoding ----
+    print("Spectrum per expert ...")
     records = []  # one per expert
     pc1_evrs, eff_ranks = [], []
     for L in range(n_layers):
         full = load_layer_h5(ed, L, n_experts, args.min_activations)
         for e, entry in full.items():
-            X = entry["activations"].float()
-            Xc = X - X.mean(0)
-            # economy SVD via Gram eigendecomposition (n << d not guaranteed here; n~1.6k)
-            try:
-                u, s, vh = torch.linalg.svd(Xc, full_matrices=False)
-            except Exception:  # noqa: BLE001
-                continue
-            sq = s**2
+            summ = compute_expert_summary(
+                entry["activations"], L, e, top_pcs=args.top_pcs
+            )
+            sq = summ.singular_values**2
             total = sq.sum().clamp_min(1e-12)
-            pc1 = (sq[0] / total).item()
-            erank = (total**2 / (sq**2).sum().clamp_min(1e-12)).item()
-            pc1_evrs.append(pc1)
-            eff_ranks.append(erank)
+            pc1_evrs.append(summ.pc1_evr)
+            eff_ranks.append(summ.effective_rank)
             pc_tokens = [
-                _decode_dir(vh[i].numpy(), U, tok)
-                for i in range(min(args.top_pcs, vh.shape[0]))
+                _decode_dir(summ.top_pc_directions[i].numpy(), U, tok)
+                for i in range(summ.top_pc_directions.shape[0])
             ]
             records.append(
                 {
                     "layer": L,
                     "expert": e,
-                    "pc1_evr": pc1,
-                    "eff_rank": erank,
-                    "n": X.shape[0],
+                    "pc1_evr": summ.pc1_evr,
+                    "eff_rank": summ.effective_rank,
+                    "n": summ.count,
                     "pc_tokens": pc_tokens,
+                    "input_tokens": _top_input_tokens(entry["tokens"], tok),
                     "evr2": (sq[:2].sum() / total).item(),
                     "evr3": (sq[:3].sum() / total).item(),
                 }
@@ -113,13 +128,11 @@ def main() -> None:
     for r in records:
         if r["pc1_evr"] > 0.5:
             r["case"] = "A monosemantic"
-        elif r["eff_rank"] > 0.25 * 2048:  # variance spread very widely
+        elif r["eff_rank"] > 0.25 * d_model:  # variance spread very widely
             r["case"] = "C generic"
         else:
             r["case"] = "B polysemantic"
         case.append(r["case"])
-    from collections import Counter
-
     case_counts = Counter(case)
 
     figs = []
@@ -196,6 +209,25 @@ def main() -> None:
         reverse=True,
     )[:8]
 
+    device = "cpu"
+    dictionary = U.to(device)
+    for r in mono:
+        source = load_layer_h5(ed, r["layer"], n_experts, args.min_activations)
+        X = source[r["expert"]]["activations"].float()
+        tokens, evr = projection_pursuit(
+            X,
+            dictionary,
+            tok,
+            device=device,
+            k=args.pc1_pursuit_k,
+            pc=1,
+        )
+        full = pursuit.get((r["layer"], r["expert"]), {})
+        r["pursuit_tokens"] = full.get("tokens", [])
+        r["pursuit_evr"] = (full.get("evr") or [None])[-1]
+        r["pc1_pursuit_tokens"] = tokens
+        r["pc1_pursuit_evr"] = evr[-1] if evr else None
+
     findings = [
         f"<b>Single-token logit-lens under-reads experts.</b> Mean PC1-EVR is "
         f"{pc1_evrs.mean():.3f}: the top direction explains only ~{pc1_evrs.mean():.0%} of "
@@ -212,20 +244,13 @@ def main() -> None:
         f"logit lens would report only one of these meanings.",
     ]
 
-    def table(headers, rows):
-        h = "".join(f"<th>{x}</th>" for x in headers)
-        b = "".join(
-            "<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows
-        )
-        return f"<table><thead><tr>{h}</tr></thead><tbody>{b}</tbody></table>"
-
     poly_rows = [
         (
             f"L{r['layer']}E{r['expert']}",
             f"{r['pc1_evr']:.2f}",
             f"{r['eff_rank']:.0f}",
             *[
-                " / ".join(r["pc_tokens"][i][:5])
+                " / ".join(escape(t) for t in r["pc_tokens"][i][:5])
                 for i in range(min(3, len(r["pc_tokens"])))
             ],
         )
@@ -235,36 +260,53 @@ def main() -> None:
         (
             f"L{r['layer']}E{r['expert']}",
             f"{r['pc1_evr']:.2f}",
-            ", ".join(r["pc_tokens"][0][:6]),
+            _join_tokens(r["pc_tokens"][0]),
+            _join_tokens(r.get("pursuit_tokens", [])),
+            "" if r.get("pursuit_evr") is None else f"{r['pursuit_evr']:.3f}",
+            _join_tokens(r.get("pc1_pursuit_tokens", [])),
+            "" if r.get("pc1_pursuit_evr") is None else f"{r['pc1_pursuit_evr']:.3f}",
+            _join_tokens(r["input_tokens"]),
         )
         for r in mono
     ]
 
-    figs_html = "".join(
-        f.to_html(full_html=False, include_plotlyjs=("inline" if i == 0 else False))
-        for i, f in enumerate(figs)
-    )
     findings_html = "".join(f"<li>{x}</li>" for x in findings)
+    body = (
+        f"<h2>Key findings</h2><ul>{findings_html}</ul>"
+        f"<h2>Figures</h2>{figs_to_html(figs)}"
+        "<h2>Polysemantic experts: top-3 PC directions decode to different concepts</h2>"
+        + table(
+            ["expert", "PC1-EVR", "eff rank", "PC1 tokens", "PC2 tokens", "PC3 tokens"],
+            poly_rows,
+        )
+        + "<h2>Monosemantic experts (Case A): one dominant direction</h2>"
+        + table(
+            [
+                "expert",
+                "PC1-EVR",
+                "PC1 tokens",
+                "pursuit tokens",
+                "pursuit EVR",
+                "PC1-pursuit tokens",
+                "PC1-pursuit EVR",
+                "input tokens",
+            ],
+            mono_rows,
+        )
+    )
     out = get_analysis_dir(model_name, args.dataset) / "nlp_report.html"
-    out.write_text(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>SOMP & Polysemanticity — {args.dataset}</title>
-<style>body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:1000px;
-margin:2rem auto;padding:0 1rem;color:#1a1a1a;line-height:1.55}}h1{{margin-bottom:0}}
-.sub{{color:#666}}h2{{margin-top:2.4rem;border-bottom:2px solid #eee;padding-bottom:.3rem}}
-table{{border-collapse:collapse;width:100%;font-size:.82rem;margin:1rem 0}}
-th,td{{border:1px solid #ddd;padding:.35rem .5rem;text-align:left}}th{{background:#f5f7fa}}
-tr:nth-child(even){{background:#fafbfc}}li{{margin-bottom:.6rem}}
-code{{background:#f3f3f3;padding:0 .3rem}}</style></head><body>
-<h1>SOMP &amp; expert polysemanticity</h1>
-<p class="sub">{model_name} · {args.dataset} · {len(records)} experts (≥{args.min_activations}
-rows) · each expert's activation subspace decoded via PC→unembedding projection</p>
-<h2>Key findings</h2><ul>{findings_html}</ul>
-<h2>Figures</h2>{figs_html}
-<h2>Polysemantic experts: top-3 PC directions decode to different concepts</h2>
-{table(["expert", "PC1-EVR", "eff rank", "PC1 tokens", "PC2 tokens", "PC3 tokens"], poly_rows)}
-<h2>Monosemantic experts (Case A): one dominant direction</h2>
-{table(["expert", "PC1-EVR", "PC1 tokens"], mono_rows)}
-</body></html>""")
+    out.write_text(
+        html_page(
+            title=f"SOMP & Polysemanticity — {args.dataset}",
+            heading="SOMP &amp; expert polysemanticity",
+            subtitle=(
+                f"{model_name} · {args.dataset} · {len(records)} experts "
+                f"(≥{args.min_activations} rows) · each expert's activation subspace "
+                "decoded via PC→unembedding projection"
+            ),
+            body=body,
+        )
+    )
     print(f"Wrote {out}")
 
 
