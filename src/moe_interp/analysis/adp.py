@@ -62,7 +62,6 @@ def adp_expert(
     min_rows: int = 100,
     maxk: int = 100,
     z: float = 3.0,
-    subsample: int = 8000,
     seed: int = 1337,
     top_tokens: int = 6,
     max_decoded_peaks: int = 12,
@@ -90,12 +89,6 @@ def adp_expert(
             if isinstance(token_ids, torch.Tensor)
             else np.asarray(token_ids)
         )
-
-    if n > subsample:
-        pick = rng.choice(n, size=subsample, replace=False)
-        X = X[pick]
-        if ids_arr is not None:
-            ids_arr = ids_arr[pick]
 
     # Break exact duplicate rows (common with quantized float16 captures): identical
     # points give zero nearest-neighbour distances, which crash density estimation.

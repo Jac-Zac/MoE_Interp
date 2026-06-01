@@ -121,16 +121,6 @@ def append_to_file(
         pos_ds[-pos.shape[0] :] = pos
 
 
-def load_expert_h5(path: Path, expert_id: int) -> dict[str, torch.Tensor]:
-    path = Path(path)
-    group_name = _expert_group_name(expert_id)
-    with h5py.File(path, "r") as f:
-        if group_name not in f:
-            return {"activations": torch.empty(0), "tokens": torch.empty(0)}
-        group = cast(h5py.Group, f[group_name])
-        return _read_expert_group(group)
-
-
 def save_unembedding(path: Path, tensor: torch.Tensor) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

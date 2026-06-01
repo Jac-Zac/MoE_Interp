@@ -41,6 +41,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["last", "all"],
         help="Tokens to store per prompt: last real token or all real tokens",
     )
+    extract_parser.add_argument(
+        "--max_rows_per_expert",
+        type=int,
+        default=None,
+        help="Cap rows kept per (layer, expert) via uniform reservoir sampling "
+        "(recommended with --token_selection all to bound disk/RAM; default: unbounded)",
+    )
+    extract_parser.add_argument(
+        "--max_length",
+        type=int,
+        default=None,
+        help="Max prompt token length (default: model max_position_embeddings). "
+        "Lower values (e.g. 256) fit far more documents per GB for all-token capture.",
+    )
 
     pursuit_parser = subparsers.add_parser(
         "pursuit", help="Run projection pursuit analysis"

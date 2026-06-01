@@ -82,7 +82,6 @@ def write_report(output_dir: Path, model_name: str, dataset: str) -> Path:
     ]
 
     ari_valid = [a for a in ari if a is not None]
-    sil_valid = [(L, s) for L, s in zip(layers, sil) if s is not None]
     pc1_vals = (
         np.array([r["pc1_evr"] for r in summaries]) if summaries else np.array([])
     )
