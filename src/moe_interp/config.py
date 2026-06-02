@@ -101,11 +101,3 @@ def resolve_pursuit_dir(
         get_data_dir() / "orfeo" / get_model_dir(model_name).name / "pursuit" / dataset
     )
     return next((c for c in candidates if (c / "results.jsonl").exists()), None)
-
-
-def get_analysis_dir(model_name: str, dataset: str | None = None) -> Path:
-    """Get the unsupervised-analysis output directory for a specific model."""
-    analysis_dir = get_model_dir(model_name) / "analysis"
-    if dataset:
-        analysis_dir = analysis_dir / dataset
-    return analysis_dir

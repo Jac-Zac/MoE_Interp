@@ -106,35 +106,6 @@ def main():
         )
         print(f"Saved results to {output_dir}")
 
-    elif args.command == "analysis":
-        from moe_interp.analysis.pipeline import run_analysis
-        from moe_interp.analysis.report import write_report
-        from moe_interp.config import get_analysis_dir
-
-        model_name = args.model or get_default_model()
-        dataset_name = args.dataset
-
-        extractions_dir = get_extractions_dir(model_name, dataset_name)
-        output_dir = get_analysis_dir(model_name, dataset_name)
-
-        run_analysis(
-            extractions_dir,
-            output_dir,
-            model_name=model_name,
-            dataset=dataset_name,
-            min_activations=args.min_activations,
-            methods=tuple(m.strip() for m in args.methods.split(",") if m.strip()),
-            pursuit_dir=args.pursuit_dir,
-            top_k=args.top_k,
-            logit_lens=not args.skip_logit_lens,
-            adp=args.adp,
-            adp_min_rows=args.adp_min_rows,
-            n_bootstrap=args.n_bootstrap,
-        )
-        if args.report:
-            report_path = write_report(output_dir, model_name, dataset_name)
-            print(f"Wrote report to {report_path}")
-
 
 if __name__ == "__main__":
     main()
