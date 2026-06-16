@@ -41,8 +41,8 @@ def plot_scatter_grid(
     experts = experts_grid.ravel().tolist()
     flat_values = values.T.ravel().tolist()
     hovers = [
-        f"L{l} E{e}<br>{color_label}: {v:.4f}"
-        for l, e, v in zip(layers, experts, flat_values)
+        f"L{lyr} E{exp}<br>{color_label}: {v:.4f}"
+        for lyr, exp, v in zip(layers, experts, flat_values)
     ]
 
     fig = go.Figure()
@@ -172,7 +172,7 @@ def plot_label_grid(
             coords[2].append(hover)
 
     # "other" always last in legend so it doesn't dominate
-    ordered_labels = [l for l in label_coords if l != "other"] + (
+    ordered_labels = [lbl for lbl in label_coords if lbl != "other"] + (
         ["other"] if "other" in label_coords else []
     )
 

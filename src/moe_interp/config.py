@@ -86,18 +86,3 @@ def get_pursuit_dir(
     if concept:
         pursuit_dir = pursuit_dir / concept
     return pursuit_dir
-
-
-def resolve_pursuit_dir(
-    model_name: str, dataset: str, explicit: Path | None = None
-) -> Path | None:
-    """First existing directory holding ``results.jsonl``: an explicit path, then the
-    standard local location, then the synced Orfeo-cluster results. ``None`` if none."""
-    candidates: list[Path] = []
-    if explicit is not None:
-        candidates.append(Path(explicit))
-    candidates.append(get_pursuit_dir(model_name, dataset))
-    candidates.append(
-        get_data_dir() / "orfeo" / get_model_dir(model_name).name / "pursuit" / dataset
-    )
-    return next((c for c in candidates if (c / "results.jsonl").exists()), None)
