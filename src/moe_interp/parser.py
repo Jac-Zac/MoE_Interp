@@ -100,4 +100,35 @@ def build_parser() -> argparse.ArgumentParser:
         "Mutually exclusive with --concept.",
     )
 
+    # analysis: logit-lens baseline vs SOMP (no model needed)
+    analysis_parser = subparsers.add_parser(
+        "analysis",
+        help="Post-hoc analysis on stored activations: logit-lens baseline vs SOMP",
+    )
+    analysis_parser.add_argument("--model", type=str, default=None)
+    analysis_parser.add_argument(
+        "--dataset", type=str, default="pile10k", choices=sorted(DATASET_SPECS)
+    )
+    analysis_parser.add_argument(
+        "--min_activations", type=int, default=50, help="Min rows to analyze an expert"
+    )
+    analysis_parser.add_argument(
+        "--max_rows",
+        type=int,
+        default=1500,
+        help="Per-expert row cap (subsample) for speed",
+    )
+    analysis_parser.add_argument(
+        "--extractions_dir",
+        type=str,
+        default=None,
+        help="Override the activations dir (default: data/<model>/extractions/<dataset>)",
+    )
+    analysis_parser.add_argument(
+        "--pursuit_dir",
+        type=str,
+        default=None,
+        help="Override the SOMP results dir (default: data/<model>/pursuit/<dataset>)",
+    )
+
     return parser

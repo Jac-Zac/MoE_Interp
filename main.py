@@ -106,6 +106,28 @@ def main():
         )
         print(f"Saved results to {output_dir}")
 
+    elif args.command == "analysis":
+        from moe_interp.analysis import run_logit_lens_comparison
+        from moe_interp.config import get_model_dir
+
+        model_name = args.model or get_default_model()
+        out_dir = get_model_dir(model_name) / "analysis" / args.dataset
+
+        lens = run_logit_lens_comparison(
+            model_name,
+            args.dataset,
+            min_activations=args.min_activations,
+            max_rows=args.max_rows,
+            extractions_dir=args.extractions_dir,
+            pursuit_dir=args.pursuit_dir,
+            output_dir=out_dir,
+        )["summary"]
+        print(
+            f"logit-lens vs SOMP: Jaccard@{lens['k']}={lens['mean_jaccard_topk']:.3f}  "
+            f"EVR@10 lens={lens['mean_lens_evr_10']:.4f} somp={lens['mean_somp_evr_10']:.4f}"
+        )
+        print(f"Saved analysis to {out_dir}")
+
 
 if __name__ == "__main__":
     main()

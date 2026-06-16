@@ -2,7 +2,7 @@
 
 The repository uses a simple on-disk layout so capture and pursuit can run separately.
 
-Model names are sanitized by `src/environment.py` before they become directory names.
+Model names are sanitized by `moe_interp/config.py` (`/` and `-` become `_`) before they become directory names.
 
 ## Metadata
 
@@ -23,6 +23,10 @@ data/<model>/
     results.jsonl
     evr_matrix.npy
     count_matrix.npy
+    evr_heatmap.html
+    count_heatmap.html
+  analysis/<dataset>/
+    logit_lens_comparison.json
 ```
 
 ## Activations
@@ -35,10 +39,11 @@ layer_01.h5
 ...
 ```
 
-Each expert inside the file gets a group like `expert_012/` with two datasets:
+Each expert inside the file gets a group like `expert_012/`:
 
-- `activations` — the selected gated outputs
-- `tokens` — token ids for those activations
+- `activations` — the selected gated outputs (always)
+- `tokens` — token ids for those activations (always)
+- `routing_weights`, `positions` — only when capturing with `--token_selection all`
 
 ## Unembedding cache
 
