@@ -4,9 +4,19 @@ We presented Expert Pursuit, an adaptation of Head Pursuit to MoE expert FFNs. B
 SOMP on aggregated gated outputs against the unembedding dictionary, we obtain human-readable
 token summaries for each expert. Applied to OLMoE-1B-7B-Instruct on 50,000 TriviaQA
 questions, the method recovers interpretable specialists in numbers, geography, names,
-biology, religion, and entertainment, concentrated in the later layers. The concept-
+biology, kinship, and entertainment, concentrated in the later layers. The concept-
 restricted mode enables targeted queries that confirm and quantify specialization along
 specific semantic axes.
+
+Two results temper the "specialist" reading and align with recent MoE interpretability work.
+First, only a minority of experts are cleanly specialized: the median final EVR is low, so most
+experts are polysemantic @lecomte2025sparsity @illusionspecialization2026. Second, SOMP explains
+$approx 2.6 times$ the variance of a single mean-direction logit lens while sharing almost none
+of its top tokens, confirming that a one-shot per-expert readout under-reads a polysemantic
+expert. We therefore read Expert Pursuit not as evidence that experts are crisp concept
+detectors, but as a sparse, honest summary of the *limited* low-dimensional structure a single
+expert carries --- consistent with the view that MoE semantics live largely in cross-layer
+routing paths rather than individual experts @monosemanticpaths2026.
 
 == Future Work
 
@@ -26,3 +36,9 @@ specific semantic axes.
 - *Cross-model comparison.* Applying the same pipeline to other MoE models (Mixtral,
   DeepSeek-MoE, gpt-oss) would test whether the observed specialization patterns are
   model-specific or a general property of MoE routing.
+
+- *Cross-layer paths.* Since semantics in MoEs appear to live in routing trajectories rather
+  than single experts @monosemanticpaths2026, decomposing the gated outputs *along an expert
+  path* (a sequence of experts across layers selected for the same token), rather than one
+  expert in isolation, is a natural way to extend pursuit toward the unit the literature
+  suggests is monosemantic.

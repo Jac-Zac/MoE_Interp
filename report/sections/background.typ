@@ -34,6 +34,19 @@ interpretability analyses such as MoE Lens @chaudhari2026moelens emphasize that 
 of experts can dominate decoding behavior. These results motivate treating expert activations
 as structured, interpretable objects rather than only efficiency mechanisms.
 
+A second, more cautionary line of work bears directly on what a single-expert readout can
+recover. MoE experts are *polysemantic*: they pack many unrelated features into superposition,
+so one expert rarely corresponds to one human concept. @lecomte2025sparsity find experts are
+somewhat *more* monosemantic than dense FFN neurons but still polysemantic; @monosemanticpaths2026
+show that an individual expert at one layer yields little interpretable structure and that
+semantics instead live in cross-layer routing *paths*; and @illusionspecialization2026 report
+a domain-invariant ``standing committee'' of experts active across domains, i.e. specialization
+is weaker than routing statistics suggest. Architectures such as Monet @park2024monet and
+intrinsically-interpretable MoEs @he2025intrinsic are built specifically to *force* the
+monosemanticity that standard experts lack. The defensible reading is therefore not that
+per-expert decomposition is uninformative, but that any *single-expert, single-readout* summary
+under-reads a polysemantic expert --- a claim we test directly in @sec:results.
+
 == SOMP
 
 Simultaneous Orthogonal Matching Pursuit @tropp2006algorithms @mallat1993matching is a

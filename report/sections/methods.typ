@@ -37,7 +37,7 @@ SOMP. Documents where expert $e$ receives no routed tokens are excluded.
 == SOMP Decomposition
 
 For each expert, we run SOMP with the L2-normalized unembedding matrix as dictionary and
-$T = 50$ iterations. This produces a ranked list of vocabulary tokens that best explain the
+$T = 25$ iterations. This produces a ranked list of vocabulary tokens that best explain the
 expert's variance across questions, along with cumulative EVR scores.
 
 == Word-Dictionary Mode
@@ -59,7 +59,8 @@ primary mode for discovering what each expert specializes in.
 predefined concept word list (e.g., `numbers`, `countries`). SOMP then decomposes each
 expert's activations against only those directions, and final EVR scores rank experts by how
 strongly they respond to that concept. This allows targeted queries such as: _which experts
-are most active on numeric content?_ The concept word lists are defined in `src/concepts.py`.
+are most active on numeric content?_ The concept word lists are defined in
+`src/moe_interp/pursuit/concepts.py`.
 
 The two modes are complementary: full-dictionary pursuit discovers specialists without prior
 hypotheses, while concept-restricted pursuit quantifies specialization along a specific

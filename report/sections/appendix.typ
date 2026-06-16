@@ -47,7 +47,7 @@ which the current results were generated.
 
 The concept-restricted pursuit mode restricts the SOMP dictionary to token IDs
 corresponding to predefined word lists. The three lists used in this work are defined in
-`src/concepts.py`.
+`src/moe_interp/pursuit/concepts.py`.
 
 *Numbers.* Digit strings (0--9, 10, 100, 1000) and English number words:
 _zero, one, two, ..., nineteen, twenty, thirty, ..., ninety, hundred, thousand, million,
