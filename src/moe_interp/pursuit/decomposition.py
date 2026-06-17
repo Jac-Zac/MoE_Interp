@@ -36,6 +36,7 @@ class SOMP:
         dictionary: torch.Tensor,
         descriptors: list,
         device: torch.device | str,
+        dict_t: torch.Tensor | None = None,
     ) -> dict:
         orig_X = X
         if self.pc is not None:
@@ -54,6 +55,7 @@ class SOMP:
             centering=self.pc is None,
             compute_evr=self.compute_evr,
             return_full=self.return_full,
+            dict_t=dict_t,
         )
 
     def forward(
@@ -90,8 +92,14 @@ def somp(
     centering: bool = True,
     compute_evr: bool = False,
     return_full: bool = True,
+    dict_t: torch.Tensor | None = None,
 ) -> dict:
-    """Greedy SOMP decomposition."""
+    """Greedy SOMP decomposition.
+
+    `dict_t` is the transposed dictionary (d_model × n_atoms). When pursuit runs
+    over many experts with the same dictionary, pass it in precomputed to skip
+    the per-call 412 MB transpose-and-copy.
+    """
     if dictionary.shape[0] < k:
         raise ValueError(f"Dictionary has {dictionary.shape[0]} rows, k={k}")
     if dictionary.shape[1] != X.shape[1]:
@@ -105,7 +113,13 @@ def somp(
 
     X = X.to(device)
     dictionary = dictionary.to(device)
-    dict_t = dictionary.T.contiguous()
+    if dict_t is None:
+        dict_t = dictionary.T.contiguous()
+    elif dict_t.device != dictionary.device or dict_t.shape != (
+        dictionary.shape[1],
+        dictionary.shape[0],
+    ):
+        raise ValueError("dict_t inconsistent with dictionary")
 
     if compute_evr:
         orig_X = orig_X.to(device)
@@ -133,6 +147,12 @@ def somp(
     l2 = torch.zeros(k, device=device) if return_full else None
     cosine = torch.zeros(k, device=device) if return_full else None
 
+    # `X` is constant inside the loop; only `current_atoms` grows. Materialize the
+    # lstsq right-hand side once instead of re-transferring it every iteration
+    # (on MPS the solve runs on CPU, so this also avoids k host transfers of X).
+    is_mps = torch.device(device).type == "mps"
+    X_rhs = X.T.float().cpu() if is_mps else X.T.double()
+
     for i in range(k):
         cross = residual @ dict_t
         if criterion == "l1":
@@ -147,13 +167,13 @@ def somp(
         notchosen[atom_idx] = 0
 
         current_atoms = torch.index_select(dictionary, 0, chosen[: i + 1])
-        if torch.device(device).type == "mps":
+        if is_mps:
             lstsq_weights = torch.linalg.lstsq(
-                current_atoms.T.float().cpu(), X.T.float().cpu()
+                current_atoms.T.float().cpu(), X_rhs
             ).solution.to(device=device, dtype=X.dtype)
         else:
             lstsq_weights = torch.linalg.lstsq(
-                current_atoms.T.double(), X.T.double()
+                current_atoms.T.double(), X_rhs
             ).solution.to(dtype=X.dtype)
 
         recon = (current_atoms.T @ lstsq_weights).T

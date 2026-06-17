@@ -25,6 +25,17 @@ from moe_interp.pursuit.decomposition import SOMP
 from moe_interp.pursuit.dictionary import WordDictionary
 
 
+def _empty_device_cache(device: torch.device) -> None:
+    """Return freed blocks to the OS so the caching allocator's high-water mark
+    doesn't accumulate one `cross` matrix per expert.
+
+    Only done on MPS, whose allocator fragments badly across the per-expert
+    size changes. CUDA's caching allocator handles this fine, and a per-expert
+    `empty_cache()` there only forces a synchronizing free + re-malloc."""
+    if device.type == "mps":
+        torch.mps.empty_cache()
+
+
 def projection_pursuit(
     X: torch.Tensor,
     dictionary: torch.Tensor,
@@ -35,6 +46,7 @@ def projection_pursuit(
     token_ids: list[int] | None = None,
     labels: list[str] | None = None,
     base_vocab_size: int | None = None,
+    dict_t: torch.Tensor | None = None,
 ) -> tuple[list[str], list[float]]:
     """Greedy projection pursuit with SOMP.
 
@@ -45,6 +57,7 @@ def projection_pursuit(
         tokenizer: Tokenizer for decoding base-vocab atom indices.
         k: Number of atoms to select.
         device: Device to run on.
+        dict_t: Optional precomputed dictionary transpose, shared across experts.
     """
     if k <= 0 or X.shape[0] <= 1:
         return [], []
@@ -59,6 +72,7 @@ def projection_pursuit(
         dictionary=dictionary,
         descriptors=list(range(len(dictionary))),
         device=device,
+        dict_t=dict_t,
     )
 
     tokens = [
@@ -236,6 +250,10 @@ def run_pursuit(
     count_matrix = np.zeros((n_layers, n_experts))
     k = min(k, dictionary.shape[0])
 
+    # Transpose the dictionary once and reuse it for every expert — otherwise
+    # somp() rebuilds this ~400 MB contiguous copy on all 1024 expert calls.
+    dict_t = dictionary.T.contiguous()
+
     jsonl_path = output_dir / "results.jsonl" if output_dir is not None else None
     with open(jsonl_path, "w") if jsonl_path else nullcontext() as jsonl_file:
         with Progress(
@@ -257,6 +275,7 @@ def run_pursuit(
 
                 for expert_idx, acts in expert_acts.items():
                     X = acts.float().to(device)
+                    n_acts = X.shape[0]
                     tokens, evr = projection_pursuit(
                         X,
                         dictionary,
@@ -266,7 +285,13 @@ def run_pursuit(
                         token_ids=token_ids,
                         labels=labels,
                         base_vocab_size=base_vocab_size,
+                        dict_t=dict_t,
                     )
+                    # Free this expert's device tensors before the next expert
+                    # allocates a differently-sized `cross` matrix. Without this,
+                    # the caching allocator accumulates ~ one block per expert
+                    del X
+                    _empty_device_cache(device)
                     if not tokens:
                         progress.advance(expert_task)
                         continue
@@ -274,14 +299,14 @@ def run_pursuit(
                     record = {
                         "layer": layer_idx,
                         "expert": expert_idx,
-                        "n_activations": X.shape[0],
+                        "n_activations": n_acts,
                         "tokens": tokens,
                         "evr": evr,
                     }
                     results.append(record)
 
                     evr_matrix[layer_idx, expert_idx] = evr[-1]
-                    count_matrix[layer_idx, expert_idx] = X.shape[0]
+                    count_matrix[layer_idx, expert_idx] = n_acts
 
                     if jsonl_file is not None:
                         jsonl_file.write(json.dumps(record) + "\n")

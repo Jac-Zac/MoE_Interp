@@ -2,8 +2,11 @@
 
 We ran Expert Pursuit on 50,000 TriviaQA questions using OLMoE-1B-7B-Instruct, capturing
 last-token gated outputs for all 16 layers $times$ 64 experts. Of the 1,024 experts, 393 had
-sufficient activations (at least 5 routed documents) to analyze. These results are a snapshot
-of the current last-token pipeline.
+sufficient activations (at least 5 routed documents) to analyze. We then re-ran the pipeline in
+an *all-token* capture mode on a 10,000-document Pile sample @gao2020pile (@sec:alltoken),
+which routes every token position to its experts rather than only the final token of each
+document; this both raises the per-expert sample size enough to cover all 1,024 experts and
+sharpens the resulting bases.
 
 == Expert Specialization
 
@@ -51,7 +54,112 @@ highest-ranked readable atoms (sub-word fragments omitted).
 Specialists tend to cluster in the later layers (L12--L15), consistent with the view that
 deeper layers encode more abstract semantic content. Early layers (L00--L04) exhibit lower EVR
 values and less coherent token lists, suggesting they operate on lower-level distributional
-features.
+features. The all-token Pile run (@sec:alltoken) refines this picture: the *mean* EVR still
+rises monotonically with depth, but the *sharpest* individual specialists turn out to live in
+the early and middle layers.
+
+== All-Token Capture on the Pile <sec:alltoken>
+
+The last-token run above samples one activation per routed document, which leaves most experts
+under-sampled --- only 393 of 1,024 cleared the 5-document threshold. Capturing *every* token
+position instead routes far more activations to each expert: on the 10,000-document Pile sample
+all 1,024 experts are covered, with a median of 1,630 activations per expert (minimum 351,
+1.73 M activations in total, $approx 5 times$ the last-token yield). This is the run that made
+the pursuit step substantially more expensive, and it gives the cleanest view of expert
+structure we have.
+
+Polysemanticity survives the extra data. Even with five times more activations per expert, the
+mean cumulative EVR after 50 SOMP atoms is only $0.057$ (median $0.044$), and ten atoms explain
+just $1.65%$ of an expert's variance --- the same order of magnitude as the last-token run.
+Low-rank vocabulary structure is therefore an intrinsic property of the experts, not an
+artefact of sparse last-token sampling.
+
+The all-token bases also expose structure the last-token run could not. Two families dominate
+the high-EVR tail (@tab:alltoken). First, the ten most concentrated experts in the *entire*
+network all encode the *same* lexical feature: British/Commonwealth spellings and formal
+connectives (`amongst`, `among`, `whilst`, `neighbourhood`, `flavour`, `organisations`). These
+experts sit in layers 1--11 and reach EVR $approx 0.35$--$0.48$, roughly $6 times$ the global
+mean, yet their token lists are nearly identical. The same register feature is thus represented
+redundantly by many experts across depth --- a per-feature instance of the distributed,
+non-monosemantic organisation reported for MoEs @monosemanticpaths2026
+@illusionspecialization2026. Second, the late-layer specialists are predominantly *syntactic*
+rather than topical: distinct L15 experts collect finite verbs and auxiliaries (`are`, `was`,
+`had`, `did`), possessive and personal pronouns (`their`, `your`, `her`, `my`), sentence-initial
+tokens (`It`, `If`, `This`, `When`), and whitespace/formatting markers. The number specialist
+L15 E03 reappears here exactly as in the last-token run (@tab:experts), a useful cross-corpus
+consistency check.
+
+#figure(
+  table(
+    columns: (auto, auto, 1fr, auto),
+    align: (left, left, left, right),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Expert*], [*Category*], [*Top tokens*], [*EVR*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [L02 E30], [British / formal],    [amongst, among, Whilst, have, While],          [0.475],
+    [L09 E08], [British / formal],    [amongst, among, Whilst, neighbourhood, have],  [0.472],
+    [L08 E22], [British / formal],    [amongst, among, Whilst, flavour, While],       [0.451],
+    [L03 E39], [British / formal],    [amongst, among, Whilst, neighbourhood, have],  [0.430],
+    [L15 E28], [Verbs / auxiliaries], [are, was, doesn, have, weren, did, will, had], [0.201],
+    [L15 E33], [Sentence-initial],    [It, it, If, This, When, Why, which, there],    [0.193],
+    [L15 E56], [Pronouns],            [their, your, it, which, her, we, this, my],    [0.187],
+    [L15 E01], [Formatting / layout], [newline, code-fence, indent, "This"],          [0.184],
+    [L15 E03], [Numbers],             [35, 9, 66, 150, 20, five, 13, 317],            [0.227],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Representative experts from the all-token Pile run, ranked within two families: the cross-layer
+British/formal-register cluster (the highest-EVR experts in the whole network) and the
+syntactic specialists of the final layer. EVR is the cumulative explained variance ratio after
+50 SOMP atoms. Top tokens are the highest-ranked readable atoms (sub-word fragments omitted).
+  ],
+) <tab:alltoken>
+
+@fig:dists summarises the population. The per-expert EVR distribution (a) is sharply
+right-skewed --- a dense bulk of polysemantic experts below the $0.044$ median and a thin tail
+of specialists --- and the layer view (d) makes the two trends in @tab:alltoken concrete: the
+mean (bars) climbs steadily toward L15 while the per-layer maximum (line) is bimodal, spiking in
+the early/middle layers where the British/formal experts sit. The recurrence of shared rank-1
+atoms (@fig:atoms) is the redundancy finding in one plot: `amongst` is the single most common
+top atom in the whole network, tied with the function word `of`.
+
+#figure(
+  image("../figures/pursuit_distributions.png", width: 92%),
+  caption: [
+Population statistics over all 1,024 experts (all-token Pile run). (a) Final EVR per expert
+(dashed line: median $0.044$). (b) Activations per expert (log scale). (c) Cumulative EVR vs
+SOMP depth --- median with inter-quartile band, and the single best expert (dotted). (d) Mean
+(bars) and maximum (line) EVR by layer.
+  ],
+) <fig:dists>
+
+#figure(
+  image("../figures/pursuit_top_atoms.png", width: 62%),
+  caption: [
+The 18 most frequent rank-1 (highest-ranked) atoms across all 1,024 experts. `amongst` ties
+`of` as the most common top atom, despite being a far rarer word --- a direct view of the
+British/formal-register feature being encoded redundantly across many experts.
+  ],
+) <fig:atoms>
+
+=== Topic Families
+
+To check whether the hand-picked families of @tab:alltoken reflect global structure, we cluster
+all experts directly. Each expert is encoded as a TF-IDF bag of its readable atom tokens
+(rank-weighted, function words removed) and grouped by agglomerative clustering with cosine
+distance into 16 families (`scripts/analyze_pursuit.py`). The result reinforces both findings.
+The single highest-EVR family (24 experts, mean EVR $0.172$, $approx 3 times$ the global mean)
+is exactly the British/formal-register cluster --- recovered automatically rather than by
+inspection. At the other extreme, two large generic families (379 and 204 experts) absorb more
+than half of all experts at near-baseline EVR: most experts do *not* fall into a sharp topic,
+the population-level signature of polysemanticity. The remaining $approx 13$ families are small
+and loosely topical (e.g. science/nature: `sec, trans, elephant, water, chief`; web/data:
+`international, data, series, group, countries`). An interactive `expert_explorer.html` (filter
+by layer, topic family, or token; click an expert for its full atom basis and EVR curve) ships
+alongside the results for browsing these groupings.
 
 == Concept-Restricted Pursuit: Numbers
 
