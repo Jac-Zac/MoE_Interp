@@ -164,4 +164,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict the neuron-basis methods to these layers (default: all)",
     )
 
+    # circuit-steer: generation-time interventions (knockout / steer) vs baseline
+    steer_parser = subparsers.add_parser(
+        "circuit-steer",
+        help="Suppress toxic generation by knocking out top gate-AtP experts / steering",
+    )
+    steer_parser.add_argument("--model", type=str, default=None)
+    steer_parser.add_argument("--batch_size", type=int, default=8)
+    steer_parser.add_argument(
+        "--knockout_k", type=int, default=15, help="How many top gate-AtP experts to knock out"
+    )
+    steer_parser.add_argument("--steer_layer", type=int, default=12)
+    steer_parser.add_argument("--steer_alpha", type=float, default=8.0)
+    steer_parser.add_argument("--max_new_tokens", type=int, default=24)
+
+    # circuit-report: assemble all circuit artifacts into one HTML report (no model)
+    report_parser = subparsers.add_parser(
+        "circuit-report", help="Build the self-contained toxic-circuit HTML report"
+    )
+    report_parser.add_argument("--model", type=str, default=None)
+
     return parser

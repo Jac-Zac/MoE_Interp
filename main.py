@@ -222,6 +222,110 @@ def main():
             print(f"  {name:18s} r = {s['pooled_r']:+.3f}")
         print(f"Saved comparison to {out_dir}")
 
+    elif args.command == "circuit-steer":
+        import json
+        import random
+
+        import numpy as np
+        import torch
+        from nnsight import LanguageModel
+
+        from moe_interp.analysis.common import load_somp_results
+        from moe_interp.circuit.attribution import gate_attribution
+        from moe_interp.circuit.direction import collect_last_token_residuals
+        from moe_interp.circuit.intervene import (
+            downweight_intervention,
+            knockout_intervention,
+            run_intervention_experiment,
+            steer_intervention,
+        )
+        from moe_interp.circuit.pipeline import default_prompts
+        from moe_interp.circuit.toxicity import build_toxic_token_ids
+        from moe_interp.config import get_model_dir, get_pursuit_dir
+        from moe_interp.pursuit.concepts import CONCEPT_WORDS
+
+        model_name = args.model or get_default_model()
+        k = args.knockout_k
+        model = LanguageModel(
+            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+        )
+        ne = model.config.num_local_experts
+        toxic, neutral = default_prompts(model.tokenizer)
+        toxic_ids = build_toxic_token_ids(model.tokenizer)
+        md = get_model_dir(model_name)
+
+        def topk_grid(grid: np.ndarray) -> list[tuple[int, int]]:
+            order = np.argsort(-grid.flatten())[:k]
+            return [(int(i // ne), int(i % ne)) for i in order]
+
+        # --- candidate toxic-expert sets from each identification method ---
+        sets: dict[str, list[tuple[int, int]]] = {}
+        atp = gate_attribution(model, toxic, toxic_ids, batch_size=args.batch_size)
+        sets["AtP"] = topk_grid(atp.numpy())
+        for name, rel in [("patching", "patching/patching_grid.npy"),
+                          ("DLA", "dla/pile10k/dla_grid.npy")]:
+            p = md / "circuit" / rel
+            if p.exists():
+                sets[name] = topk_grid(np.load(p))
+        # SOMP: experts whose pursuit atoms most overlap the offensive lexicon
+        pursuit_dir = get_pursuit_dir(model_name, "pile10k")
+        if (pursuit_dir / "results.jsonl").exists():
+            offensive = {w.lower() for w in CONCEPT_WORDS["offensive"]}
+            somp = load_somp_results(pursuit_dir)
+            scored = sorted(
+                ((sum(t.strip().lower() in offensive for t in r.get("tokens", [])), le)
+                 for le, r in somp.items()),
+                reverse=True,
+            )
+            sets["SOMP"] = [le for s, le in scored[:k] if s > 0]
+        # random control matched to AtP's layers
+        rng = random.Random(0)
+        used = set(sets["AtP"])
+        rand = []
+        for layer, _ in sets["AtP"]:
+            while (layer, e := rng.randrange(ne)) in used:
+                pass
+            used.add((layer, e))
+            rand.append((layer, e))
+        sets["random"] = rand
+
+        # --- steering direction (diff-of-means) ---
+        layer, alpha = args.steer_layer, args.steer_alpha
+        v = collect_last_token_residuals(model, toxic, layer).mean(0) - (
+            collect_last_token_residuals(model, neutral, layer).mean(0)
+        )
+
+        # --- methods: vary the ID method (all knockout) + the intervention strength ---
+        methods: dict = {"baseline": None}
+        for name, experts in sets.items():
+            methods[f"{name}-knockout"] = knockout_intervention(experts)
+        methods["AtP-downweight0.5"] = downweight_intervention(sets["AtP"], 0.5)
+        methods[f"steer(-{alpha:g}@L{layer})"] = steer_intervention(layer, v, -alpha)
+
+        res = run_intervention_experiment(
+            model, toxic, neutral, toxic_ids, methods, max_new_tokens=args.max_new_tokens
+        )
+        res["_meta"] = {"k": k, "sets": {n: s for n, s in sets.items()},
+                        "steer_layer": layer, "steer_alpha": alpha}
+
+        out_dir = md / "circuit" / "steer"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "intervention.json").write_text(json.dumps(res, indent=2))
+        base = res["baseline"]["toxic_propensity"]
+        print(f"toxic propensity (baseline={base:+.3f}; lower = less toxic):")
+        for name, b in res.items():
+            if name == "_meta":
+                continue
+            print(f"  {name:22s} toxic={b['toxic_propensity']:+.3f}  "
+                  f"neutral={b['neutral_propensity']:+.3f}  off-word-frac={b['toxic_toxic_frac']:.2f}")
+        print(f"Saved intervention results to {out_dir}")
+
+    elif args.command == "circuit-report":
+        from moe_interp.circuit.report import build_report
+
+        out = build_report(args.model or get_default_model())
+        print(f"Wrote report to {out}")
+
 
 if __name__ == "__main__":
     main()
