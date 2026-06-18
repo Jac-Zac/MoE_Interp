@@ -20,10 +20,17 @@ to the residual, so its attribution onto a backward direction ``R`` is
 only the experts actually selected at the scored (last-token) position — mirroring
 ``neuron.py``/``capture.py`` since the fused kernel is not differentiable per neuron.
 
-Three backward signals share the same neuron formula, for a clean comparison:
+Two backward directions share the same neuron formula, for a clean comparison:
   - **RelP** : R = toxic unembedding direction         (LRP, RMSNorm-as-constant)
-  - **AtP**  : R = autograd dL/d(layer-ℓ residual)      (raw gradient, last token)
   - **DLA**  : R = diff-of-means toxic direction        (see neuron.py)
+
+NB: an *AtP* signal at this neuron basis would need ``dL/d(layer residual)``, but nnsight
+0.7 does not provide that gradient through the traced forward (``MissedProviderError`` — the
+same limitation that makes ``neuron.py`` gradient-free). AtP is therefore taken at the
+*gate* node instead (``attribution.gate_attribution``, where the gate is a differentiable
+leaf), and empirically gate-AtP is by far the most faithful predictor of the causal patching
+grid (r≈0.80 pooled), so the direction-based RelP/DLA here are diagnostic rather than the
+recommended attributor. See ``compare.py``.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ import torch.nn.functional as F
 
 from moe_interp.capture.capture import token_real_mask
 from moe_interp.capture.model_adapter import get_model_adapter
-from moe_interp.circuit.toxicity import right_padded, toxic_logit_score
+from moe_interp.circuit.toxicity import right_padded
 
 
 def toxic_relevance_direction(
@@ -45,41 +52,6 @@ def toxic_relevance_direction(
     stream for the toxic-logit metric.
     """
     return (dictionary[toxic_ids].mean(0) - dictionary.mean(0)).float().cpu()
-
-
-def residual_gradient(
-    model,
-    prompts: list[list[int]],
-    toxic_ids: list[int],
-    layer: int,
-    batch_size: int = 6,
-) -> torch.Tensor:
-    """AtP backward signal: mean last-token autograd ``dL/d(layer-ℓ residual)`` ``(d_model,)``.
-
-    The raw gradient (with the RMSNorm Jacobian baked in) that RelP deliberately replaces.
-    """
-    grads: list[torch.Tensor] = []
-    with right_padded(model):
-        for i in range(0, len(prompts), batch_size):
-            batch = prompts[i : i + batch_size]
-            lengths = [len(t) for t in batch]
-            max_len = max(lengths)
-            with model.trace(batch):
-                hidden = model.model.layers[layer].output[0]
-                hidden.requires_grad_(True)
-                hidden_saved = hidden.save()
-                logits = model.output.logits
-                rows = torch.arange(logits.shape[0])
-                last = logits[rows, torch.tensor(lengths) - 1]
-                metric = toxic_logit_score(last, toxic_ids).sum()
-                with metric.backward():
-                    grad = hidden_saved.grad.save()
-            g = grad.detach().float().cpu()
-            # g is (batch*max_len, d_model) or (batch, max_len, d_model); normalise shape.
-            g = g.reshape(len(batch), max_len, -1)
-            for p, length in enumerate(lengths):
-                grads.append(g[p, length - 1])
-    return torch.stack(grads).mean(0)
 
 
 def neuron_attribution(

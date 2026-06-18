@@ -152,4 +152,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cap the number of toxic seed prompts (default: all built-in seeds)",
     )
 
+    # circuit-compare: faithfulness of cheap attributors vs the causal patching grid
+    cmp_parser = subparsers.add_parser(
+        "circuit-compare",
+        help="Score gate-AtP / RelP / DLA against the causal patching grid (needs `circuit` first)",
+    )
+    cmp_parser.add_argument("--model", type=str, default=None)
+    cmp_parser.add_argument("--batch_size", type=int, default=8)
+    cmp_parser.add_argument(
+        "--layers", type=int, nargs="+", default=None,
+        help="Restrict the neuron-basis methods to these layers (default: all)",
+    )
+
     return parser

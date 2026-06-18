@@ -170,6 +170,58 @@ def main():
             print(f"  L{r['layer']}E{r['expert']}  effect={r['effect']:+.4f}")
         print(f"Saved patching grid + heatmap to {out_dir}")
 
+    elif args.command == "circuit-compare":
+        import json
+
+        import numpy as np
+        import torch
+        from nnsight import LanguageModel
+
+        from moe_interp.capture.cache import load_unembedding
+        from moe_interp.circuit.compare import (
+            faithfulness,
+            method_grids,
+            plot_faithfulness,
+        )
+        from moe_interp.circuit.pipeline import default_prompts
+        from moe_interp.circuit.toxicity import build_toxic_token_ids
+        from moe_interp.config import get_model_dir, get_unembedding_dir
+
+        model_name = args.model or get_default_model()
+        md = get_model_dir(model_name)
+        grid_path = md / "circuit" / "patching" / "patching_grid.npy"
+        if not grid_path.exists():
+            raise FileNotFoundError(
+                f"No patching grid at {grid_path}. Run `python main.py circuit` first."
+            )
+        patching = torch.from_numpy(np.load(grid_path)).float()
+        unembedding = load_unembedding(
+            get_unembedding_dir(model_name) / "dictionary.h5"
+        ).float()
+
+        model = LanguageModel(
+            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+        )
+        toxic, neutral = default_prompts(model.tokenizer)
+        toxic_ids = build_toxic_token_ids(model.tokenizer)
+        grids = method_grids(
+            model, toxic, neutral, toxic_ids, unembedding,
+            batch_size=args.batch_size, layers=args.layers,
+        )
+        scores = faithfulness(grids, patching)
+
+        out_dir = md / "circuit" / "compare"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "faithfulness.json").write_text(json.dumps(scores, indent=2))
+        plot_faithfulness(
+            scores, out_dir / "faithfulness.html",
+            title=f"Attributor faithfulness vs causal patching — {model_name}",
+        )
+        print("faithfulness vs causal patching grid (pooled r):")
+        for name, s in scores.items():
+            print(f"  {name:18s} r = {s['pooled_r']:+.3f}")
+        print(f"Saved comparison to {out_dir}")
+
 
 if __name__ == "__main__":
     main()

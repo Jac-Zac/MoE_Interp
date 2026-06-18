@@ -14,6 +14,35 @@ toxic-logit metric. Writes to `data/<model>/circuit/patching/`:
 `patching_grid.npy`, `patching_grid.html` (layer×expert heatmap, red = expert promotes
 toxicity), `top_experts.json`.
 
+## Faithfulness comparison (vs the causal patching grid)
+
+```bash
+python main.py circuit            # build the causal ground-truth grid first
+python main.py circuit-compare    # score the cheap attributors against it
+```
+
+Pooled Pearson r of each method's per-expert effect against the 16-layer patching grid
+(913 scored experts, OLMoE pile10k toxic prompts):
+
+| method | cost | r vs patching |
+|---|---|---|
+| **gate-AtP** (`attribution.py`) | 1 backward pass | **+0.80** (per-layer up to +0.98) |
+| RelP, neuron basis (`relp.py`) | per-layer forward | +0.07 |
+| DLA, diff-of-means (neuron) | per-layer forward | +0.09 |
+| DLA, activations only (`analysis/toxic_dla.py`) | no model | +0.005 |
+
+Takeaways: **gradient attribution patching over the router gates is both cheap and faithful**
+— one backward pass recovers the expensive causal grid. The direction-based RelP/DLA methods
+only track the causal effect at the final write-to-vocab layer (L14), because they measure an
+expert's *direct* push on the toxic logits and miss its downstream causal paths (which the
+gate gradient captures). This is the opposite of the RelP paper's AtP≪RelP result, for two
+reasons: OLMoE's router gate is a clean differentiable leaf (so AtP is not noisy here, unlike
+their LayerNorm-bottlenecked MLP nodes), and the RelP here is a deliberately simple
+approximation (single skip-dominant relevance direction + last-token direct effect; a full
+multi-layer LRP backward is future work). NB: AtP at the *neuron* basis is unavailable —
+nnsight 0.7 does not provide `dL/d(residual)` through the traced forward (`MissedProviderError`),
+the same limitation that makes `neuron.py` gradient-free.
+
 ## Methods in `src/moe_interp/circuit/`
 
 - `patching.py` — the brute-force **causal grid** (one forward per routed expert; experts
