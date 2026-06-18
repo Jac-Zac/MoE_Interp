@@ -131,4 +131,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the SOMP results dir (default: data/<model>/pursuit/<dataset>)",
     )
 
+    # circuit: causal expert activation-patching grid (loads the model via nnsight)
+    circuit_parser = subparsers.add_parser(
+        "circuit",
+        help="Causal toxic-expert study: per-(layer,expert) ablation-patching effect grid",
+    )
+    circuit_parser.add_argument("--model", type=str, default=None)
+    circuit_parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Restrict the grid to these layers (default: all)",
+    )
+    circuit_parser.add_argument("--batch_size", type=int, default=6)
+    circuit_parser.add_argument(
+        "--n_prompts",
+        type=int,
+        default=None,
+        help="Cap the number of toxic seed prompts (default: all built-in seeds)",
+    )
+
     return parser

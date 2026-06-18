@@ -128,6 +128,48 @@ def main():
         )
         print(f"Saved analysis to {out_dir}")
 
+    elif args.command == "circuit":
+        import json
+
+        import numpy as np
+        from nnsight import LanguageModel
+
+        from moe_interp.circuit.patching import (
+            expert_patching_grid,
+            plot_expert_effect_grid,
+            top_grid_experts,
+        )
+        from moe_interp.circuit.pipeline import default_prompts
+        from moe_interp.circuit.toxicity import build_toxic_token_ids
+        from moe_interp.config import get_model_dir
+
+        model_name = args.model or get_default_model()
+        model = LanguageModel(
+            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+        )
+        toxic_prompts, _ = default_prompts(model.tokenizer)
+        if args.n_prompts:
+            toxic_prompts = toxic_prompts[: args.n_prompts]
+        toxic_ids = build_toxic_token_ids(model.tokenizer)
+
+        grid = expert_patching_grid(
+            model, toxic_prompts, toxic_ids,
+            batch_size=args.batch_size, layers=args.layers,
+        )
+        out_dir = get_model_dir(model_name) / "circuit" / "patching"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        np.save(out_dir / "patching_grid.npy", grid.numpy())
+        plot_expert_effect_grid(
+            grid, out_dir / "patching_grid.html",
+            title=f"Expert ablation effect on toxic-logit — {model_name}",
+        )
+        top = top_grid_experts(grid)
+        (out_dir / "top_experts.json").write_text(json.dumps(top, indent=2))
+        print("top causal toxic experts (by |ablation effect|):")
+        for r in top[:10]:
+            print(f"  L{r['layer']}E{r['expert']}  effect={r['effect']:+.4f}")
+        print(f"Saved patching grid + heatmap to {out_dir}")
+
 
 if __name__ == "__main__":
     main()
