@@ -56,11 +56,30 @@ def downweight_intervention(experts: list[tuple[int, int]], factor: float) -> Ca
 
 
 def steer_intervention(layer: int, v: torch.Tensor, alpha: float) -> Callable:
-    """Intervention that adds ``alpha * v`` to the residual stream at ``layer``."""
+    """Intervention that adds ``alpha * v`` to the residual stream at ``layer``.
+
+    A large fixed ``alpha`` over-steers and degrades all generation; prefer
+    :func:`projectout_intervention` for a non-destructive "remove toxicity" edit.
+    """
 
     def fn(model):
         h = model.model.layers[layer].output
         h[:] = h + alpha * v.to(h.device, h.dtype)
+
+    return fn
+
+
+def projectout_intervention(layer: int, v: torch.Tensor) -> Callable:
+    """Remove the ``v`` component from the residual stream at ``layer`` (ablate the direction).
+
+    Far gentler than additive steering: it only zeroes the projection onto the (unit) toxic
+    direction, leaving every orthogonal feature untouched, so neutral generation is preserved.
+    """
+
+    def fn(model):
+        h = model.model.layers[layer].output
+        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
+        h[:] = h - (h @ vhat).unsqueeze(-1) * vhat
 
     return fn
 

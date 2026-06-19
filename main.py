@@ -251,8 +251,8 @@ def main():
         from moe_interp.circuit.intervene import (
             downweight_intervention,
             knockout_intervention,
+            projectout_intervention,
             run_intervention_experiment,
-            steer_intervention,
         )
         from moe_interp.circuit.prompts import default_prompts
         from moe_interp.circuit.toxicity import build_toxic_token_ids
@@ -315,7 +315,7 @@ def main():
         for name, experts in sets.items():
             methods[f"{name}-knockout"] = knockout_intervention(experts)
         methods["AtP-downweight0.5"] = downweight_intervention(sets["AtP"], 0.5)
-        methods[f"steer(-{alpha:g}@L{layer})"] = steer_intervention(layer, v, -alpha)
+        methods[f"projectout-v@L{layer}"] = projectout_intervention(layer, v)
 
         res = run_intervention_experiment(
             model, toxic, neutral, toxic_ids, methods, max_new_tokens=args.max_new_tokens
