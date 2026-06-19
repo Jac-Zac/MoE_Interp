@@ -12,6 +12,7 @@ wheels/
 # Agent
 AGENTS.md
 .opencode/
+.claude/
 
 # Environment variables
 .env

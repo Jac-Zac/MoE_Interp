@@ -128,6 +128,25 @@ def main():
         )
         print(f"Saved analysis to {out_dir}")
 
+    elif args.command == "toxic-dla":
+        from moe_interp.analysis.toxic_dla import run_dla
+        from moe_interp.config import get_model_dir
+
+        model_name = args.model or get_default_model()
+        out_dir = get_model_dir(model_name) / "circuit" / "dla" / args.dataset
+        res = run_dla(
+            model_name, args.dataset, out_dir,
+            min_activations=args.min_activations, max_rows=args.max_rows,
+        )
+        print(
+            f"DLA toxic score: scored {res['n_scored']} experts "
+            f"({res['n_toxic_ids']} toxic token ids)"
+        )
+        print("experts that write most toward toxic vocab:")
+        for r in res["top"][:10]:
+            print(f"  L{r['layer']}E{r['expert']}  score={r['score']:+.4f}")
+        print(f"Saved DLA grid + heatmap to {out_dir}")
+
     elif args.command == "circuit":
         import json
 
@@ -139,7 +158,7 @@ def main():
             plot_expert_effect_grid,
             top_grid_experts,
         )
-        from moe_interp.circuit.pipeline import default_prompts
+        from moe_interp.circuit.prompts import default_prompts
         from moe_interp.circuit.toxicity import build_toxic_token_ids
         from moe_interp.config import get_model_dir
 
@@ -177,15 +196,11 @@ def main():
         import torch
         from nnsight import LanguageModel
 
-        from moe_interp.capture.cache import load_unembedding
-        from moe_interp.circuit.compare import (
-            faithfulness,
-            method_grids,
-            plot_faithfulness,
-        )
-        from moe_interp.circuit.pipeline import default_prompts
+        from moe_interp.circuit.attribution import gate_attribution
+        from moe_interp.circuit.compare import faithfulness, plot_faithfulness
+        from moe_interp.circuit.prompts import default_prompts
         from moe_interp.circuit.toxicity import build_toxic_token_ids
-        from moe_interp.config import get_model_dir, get_unembedding_dir
+        from moe_interp.config import get_model_dir
 
         model_name = args.model or get_default_model()
         md = get_model_dir(model_name)
@@ -195,19 +210,19 @@ def main():
                 f"No patching grid at {grid_path}. Run `python main.py circuit` first."
             )
         patching = torch.from_numpy(np.load(grid_path)).float()
-        unembedding = load_unembedding(
-            get_unembedding_dir(model_name) / "dictionary.h5"
-        ).float()
 
         model = LanguageModel(
             model_name, device_map=str(get_device()), dtype="auto", dispatch=True
         )
-        toxic, neutral = default_prompts(model.tokenizer)
+        toxic, _ = default_prompts(model.tokenizer)
         toxic_ids = build_toxic_token_ids(model.tokenizer)
-        grids = method_grids(
-            model, toxic, neutral, toxic_ids, unembedding,
-            batch_size=args.batch_size, layers=args.layers,
-        )
+
+        # gate-AtP (one backward pass); compare against the gradient-free activation-DLA
+        # grid if it has been produced (`python main.py toxic-dla`).
+        grids = {"gate-AtP": gate_attribution(model, toxic, toxic_ids, batch_size=args.batch_size)}
+        dla_path = md / "circuit" / "dla" / "pile10k" / "dla_grid.npy"
+        if dla_path.exists():
+            grids["DLA(activations)"] = torch.from_numpy(np.nan_to_num(np.load(dla_path))).float()
         scores = faithfulness(grids, patching)
 
         out_dir = md / "circuit" / "compare"
@@ -239,7 +254,7 @@ def main():
             run_intervention_experiment,
             steer_intervention,
         )
-        from moe_interp.circuit.pipeline import default_prompts
+        from moe_interp.circuit.prompts import default_prompts
         from moe_interp.circuit.toxicity import build_toxic_token_ids
         from moe_interp.config import get_model_dir, get_pursuit_dir
         from moe_interp.pursuit.concepts import CONCEPT_WORDS

@@ -81,21 +81,3 @@ def top_experts(attr: torch.Tensor, k: int = 15) -> list[tuple[int, int, float]]
     return [
         (int(i // n_experts), int(i % n_experts), float(flat[i])) for i in order.tolist()
     ]
-
-
-def faithfulness(
-    attr: torch.Tensor, ablation_results: list, scale: float
-) -> float:
-    """Pearson r between the gradient attribution and the *true* ablation effect.
-
-    ``ablation_results`` are ``ExpertAblationResult`` from ``run_expert_ablation`` (their
-    ``delta_mean`` is the measured base-minus-ablated change). A high r means the one
-    backward pass faithfully predicts what costly per-expert ablation measures. ``scale``
-    converts the summed-over-positions attribution to the per-prompt-mean ablation units
-    (= number of prompts), so the two are comparable in magnitude as well as rank.
-    """
-    pred = torch.tensor([attr[r.layer, r.expert] / scale for r in ablation_results])
-    true = torch.tensor([r.delta_mean for r in ablation_results])
-    pred, true = pred - pred.mean(), true - true.mean()
-    denom = (pred.norm() * true.norm()).clamp_min(1e-12)
-    return float((pred @ true) / denom)

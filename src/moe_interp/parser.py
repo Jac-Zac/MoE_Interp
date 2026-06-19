@@ -131,6 +131,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the SOMP results dir (default: data/<model>/pursuit/<dataset>)",
     )
 
+    # toxic-dla: gradient-free toxic-expert classifier from stored activations (no model)
+    dla_parser = subparsers.add_parser(
+        "toxic-dla",
+        help="Direct Logit Attribution: which experts write toward toxic vocab (no model)",
+    )
+    dla_parser.add_argument("--model", type=str, default=None)
+    dla_parser.add_argument(
+        "--dataset", type=str, default="pile10k", choices=sorted(DATASET_SPECS),
+        help="All-token extraction to score over (default: pile10k; rtp is too sparse)",
+    )
+    dla_parser.add_argument(
+        "--min_activations", type=int, default=50, help="Min rows to score an expert"
+    )
+    dla_parser.add_argument(
+        "--max_rows", type=int, default=2000, help="Per-expert row cap (subsample)"
+    )
+
     # circuit: causal expert activation-patching grid (loads the model via nnsight)
     circuit_parser = subparsers.add_parser(
         "circuit",
@@ -155,14 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
     # circuit-compare: faithfulness of cheap attributors vs the causal patching grid
     cmp_parser = subparsers.add_parser(
         "circuit-compare",
-        help="Score gate-AtP / RelP / DLA against the causal patching grid (needs `circuit` first)",
+        help="Score gate-AtP (+ DLA) against the causal patching grid (needs `circuit` first)",
     )
     cmp_parser.add_argument("--model", type=str, default=None)
     cmp_parser.add_argument("--batch_size", type=int, default=8)
-    cmp_parser.add_argument(
-        "--layers", type=int, nargs="+", default=None,
-        help="Restrict the neuron-basis methods to these layers (default: all)",
-    )
 
     # circuit-steer: generation-time interventions (knockout / steer) vs baseline
     steer_parser = subparsers.add_parser(
