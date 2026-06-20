@@ -20,9 +20,9 @@ import torch
 
 from moe_interp.circuit.toxicity import (
     Metric,
+    relative_logit_score,
     right_padded,
-    toxic_logit_score,
-    _scorer,
+    scorer,
 )
 
 
@@ -53,7 +53,7 @@ def expert_patching_grid(
     prompts: list[list[int]],
     toxic_ids: list[int],
     *,
-    metric: Metric = toxic_logit_score,
+    metric: Metric = relative_logit_score,
     batch_size: int = 6,
     layers: list[int] | None = None,
 ) -> torch.Tensor:
@@ -70,7 +70,7 @@ def expert_patching_grid(
 
     active = selected_experts(model, prompts, batch_size)
     with right_padded(model):
-        score = _scorer(model, prompts, toxic_ids, metric, batch_size)
+        score = scorer(model, prompts, toxic_ids, metric, batch_size)
         base = score(None)
         for layer in sorted(want):
             for expert in sorted(active[layer]):
@@ -96,25 +96,11 @@ def top_grid_experts(grid: torch.Tensor, k: int = 20) -> list[dict]:
 
 def plot_expert_effect_grid(grid: torch.Tensor, output_path, *, title: str) -> None:
     """Save a layer×expert heatmap of the causal effect (diverging, centred at 0)."""
-    import plotly.graph_objects as go
+    from moe_interp.io.plots import diverging_expert_heatmap
 
-    z = grid.cpu().numpy()
-    vmax = float(abs(z).max()) or 1.0
-    fig = go.Figure(
-        go.Heatmap(
-            z=z,
-            zmid=0,
-            zmin=-vmax,
-            zmax=vmax,
-            colorscale="RdBu_r",
-            colorbar={"title": "Δ toxic score<br>(ablation effect)"},
-        )
-    )
-    fig.update_layout(
+    diverging_expert_heatmap(
+        grid,
         title=title,
-        xaxis_title="expert",
-        yaxis_title="layer",
-        height=560,
-        yaxis={"autorange": "reversed"},  # layer 0 at top
+        colorbar_title="Δ toxic score<br>(ablation effect)",
+        output_path=output_path,
     )
-    fig.write_html(str(output_path))

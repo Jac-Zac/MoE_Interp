@@ -242,6 +242,129 @@ This is the per-expert analogue of the cross-layer finding that semantics in MoE
 distributed structure rather than any single component @monosemanticpaths2026, and it is the
 empirical justification for preferring a sparse multi-atom basis over a one-shot logit lens.
 
+== Causal Toxic-Expert Circuit <sec:causal>
+
+The pursuit results above are correlational. We now test, on OLMoE, _which_ experts causally
+drive a concrete behavior --- toxic continuation --- and whether acting on them suppresses it
+(@sec:causal-methods). The probe and prompts are as defined there; the patching grid is computed
+over all 16 layers on the toxic-eliciting prompt set, covering 913 routed experts.
+
+=== Causal Localization: Experts Span All Depths, Including Suppressors
+
+The activation-patching grid (@eq:patch) shows that the causally important experts are *not*
+confined to the late layers where the pursuit and DLA specialists live. @tab:patch lists the ten
+experts with the largest absolute effect: they range from layer~0 to layer~15, and roughly half
+are *suppressors* (negative effect --- ablating them _raises_ toxicity). The single most causal
+expert, L09~E12, is a strong suppressor. This is structure that a vocabulary-aligned classifier
+cannot see: DLA (@eq:dla) concentrates almost entirely in the final two layers (its top experts
+are L14~E38, L14~E56, L15~E07), because projecting _early_-layer activations onto the unembedding
+is ill-posed --- the early residual basis is positional and syntactic, not yet semantic.
+
+#figure(
+  table(
+    columns: (auto, auto, auto, auto, auto, auto),
+    align: (left, right) * 3,
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Expert*], [*Effect*], [*Expert*], [*Effect*], [*Expert*], [*Effect*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [L09 E12], [$-0.27$], [L04 E30], [$+0.24$], [L04 E48], [$-0.14$],
+    [L14 E55], [$+0.14$], [L06 E36], [$+0.13$], [L02 E23], [$-0.13$],
+    [L10 E06], [$-0.13$], [L00 E01], [$+0.10$], [L08 E35], [$+0.10$],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Experts with the largest absolute causal effect (@eq:patch) on the toxic-logit probe. Positive =
+the expert promotes toxicity (ablation lowers the score); negative = suppressor. The effects span
+all depths, unlike the late-layer DLA/pursuit specialists.
+  ],
+) <tab:patch>
+
+=== Faithfulness: gate-AtP Recovers the Causal Grid Cheaply
+
+@tab:faith compares the two _cheap_ expert scores against the patching grid by Pearson
+correlation over all 913 scored experts. Gate attribution patching (@eq:atp) --- a single
+backward pass --- predicts the expensive grid closely (pooled $r approx 0.80$, and $0.83$--$0.98$
+within individual layers), whereas the gradient-free activation-DLA score is essentially
+_uncorrelated_ with causal effect. The lesson is sharp: token association (DLA, and by extension
+SOMP) is not causation, but a first-order gradient on the gate _is_ a faithful, one-pass proxy
+for the full ablation sweep.
+
+#figure(
+  table(
+    columns: (1fr, auto, auto),
+    align: (left, right, right),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Method*], [*Cost*], [*Pearson $r$ vs patching*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [gate-AtP (gradient)],       [1 backward pass], [$+0.80$],
+    [DLA (activations only)],    [no model],        [$+0.005$],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Faithfulness of the cheap attributors to the causal patching grid, pooled over 913 experts. The
+gradient method is faithful; the activation-only classifier is not.
+  ],
+) <tab:faith>
+
+=== Intervention: Causal Identification and Project-Out Suppress Toxicity
+
+@tab:intervene reports the mean toxic-logit propensity over generated continuations under each
+intervention (knockout of the top-15 experts from each identifier, plus down-weight and
+project-out), relative to an unintervened baseline of $+2.48$. Two results stand out. First,
+_only the causally-identified experts matter_: knocking out the AtP or patching set lowers
+toxicity (by $0.48$ and $0.34$), while knocking out the SOMP-, DLA-, or random-identified sets
+does essentially nothing --- a direct demonstration that correlational expert identification is
+causally inert. Second, *project-out is the best suppressor*: removing the toxic direction from
+the residual stream gives the largest drop ($-0.58$, a $approx 24%$ reduction) while keeping
+generation fluent, whereas naive additive steering with a large coefficient collapses both toxic
+_and_ neutral generation (and is excluded here). Knockout is effective but blunt --- it can leave
+residual toxicity or degrade coherence --- so _identify causally, suppress by direction removal_
+is the recipe we recommend.
+
+#figure(
+  table(
+    columns: (1fr, auto, auto, auto),
+    align: (left, right, right, right),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Intervention*], [*Toxic propensity*], [*$Delta$ vs base*], [*Neutral*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [baseline],                 [$+2.48$], [---],     [$+0.92$],
+    [AtP-knockout (top 15)],    [$+2.00$], [$-0.48$], [$+1.00$],
+    [patching-knockout],        [$+2.14$], [$-0.34$], [$+0.83$],
+    [AtP-downweight ($times 0.5$)], [$+2.20$], [$-0.28$], [$+0.90$],
+    [DLA-knockout],             [$+2.50$], [$+0.02$], [$+0.94$],
+    [SOMP-knockout],            [$+2.50$], [$+0.02$], [$+0.87$],
+    [random-knockout],          [$+2.58$], [$+0.10$], [$+0.85$],
+    [*project-out* (\@L12)],    [$bold(+1.90)$], [$bold(-0.58)$], [$+1.26$],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Toxic-logit propensity over generated continuations under each intervention (lower = less toxic).
+$Delta$ is the reduction from baseline; the neutral column is the collateral check. Causal
+identifiers (AtP, patching) and project-out suppress toxicity; correlational identifiers (DLA,
+SOMP, random) do not.
+  ],
+) <tab:intervene>
+
+Qualitatively, project-out de-toxifies while preserving fluency. For the seed _"...the worst kind
+of people are"_, the baseline continues _"those who are always trying to be nice. They're
+insufferable..."_, whereas under project-out it becomes _"...always trying to be friendly, always
+trying to make you feel comfortable..."_; for _"...I just want to slap them"_ the baseline
+_"I can't stand it when people do something stupid..."_ becomes the more reflective _"I don't know
+what it is about them that makes me so angry. Maybe it's their..."_. Because the direction and
+probe are built from any concept's token set, the same `circuit-steer --concept` machinery applies
+beyond toxicity (we verified, e.g., that projecting out a `numbers` direction lowers the model's
+number-token propensity).
+
 == GPT-OSS Support
 
 The codebase also supports `openai/gpt-oss-20b` as a second target model. GPT-OSS is a

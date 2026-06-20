@@ -139,7 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dla_parser.add_argument("--model", type=str, default=None)
     dla_parser.add_argument(
-        "--dataset", type=str, default="pile10k", choices=sorted(DATASET_SPECS),
+        "--dataset",
+        type=str,
+        default="pile10k",
+        choices=sorted(DATASET_SPECS),
         help="All-token extraction to score over (default: pile10k; rtp is too sparse)",
     )
     dla_parser.add_argument(
@@ -164,10 +167,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     circuit_parser.add_argument("--batch_size", type=int, default=6)
     circuit_parser.add_argument(
+        "--prompts",
+        type=str,
+        default="rtp",
+        choices=("seeds", "rtp"),
+        help="Toxic prompt source: 'rtp' (high-toxicity RealToxicityPrompts, the "
+        "'challenging' subset) or 'seeds' (12 built-in hand-written seeds). Default: rtp.",
+    )
+    circuit_parser.add_argument(
         "--n_prompts",
         type=int,
         default=None,
-        help="Cap the number of toxic seed prompts (default: all built-in seeds)",
+        help="Cap the number of toxic prompts (default: all seeds / 16 for rtp)",
     )
 
     # circuit-compare: faithfulness of cheap attributors vs the causal patching grid
@@ -186,16 +197,54 @@ def build_parser() -> argparse.ArgumentParser:
     steer_parser.add_argument("--model", type=str, default=None)
     steer_parser.add_argument("--batch_size", type=int, default=8)
     steer_parser.add_argument(
-        "--concept", type=str, default="offensive", choices=sorted(CONCEPT_WORDS),
+        "--concept",
+        type=str,
+        default="offensive",
+        choices=sorted(CONCEPT_WORDS),
         help="Concept to suppress (default: offensive). Non-toxicity concepts use the "
         "unembedding direction + project-out; the expert-knockout comparison runs only for "
         "'offensive' (the seed prompts only elicit toxicity).",
     )
     steer_parser.add_argument(
-        "--knockout_k", type=int, default=15, help="How many top gate-AtP experts to knock out"
+        "--knockout_k",
+        type=int,
+        default=15,
+        help="How many top gate-AtP experts to knock out",
     )
     steer_parser.add_argument("--steer_layer", type=int, default=12)
     steer_parser.add_argument("--max_new_tokens", type=int, default=24)
+
+    # circuit-edit: Boundary-B precision edits inside a gate-AtP-flagged expert
+    edit_parser = subparsers.add_parser(
+        "circuit-edit",
+        help="Edit inside one causal expert: zero its toxic neurons / project its output "
+        "off the toxic direction, vs baseline",
+    )
+    edit_parser.add_argument("--model", type=str, default=None)
+    edit_parser.add_argument("--batch_size", type=int, default=8)
+    edit_parser.add_argument(
+        "--concept",
+        type=str,
+        default="offensive",
+        choices=sorted(CONCEPT_WORDS),
+        help="Concept to suppress (default: offensive)",
+    )
+    edit_parser.add_argument(
+        "--layer",
+        type=int,
+        default=None,
+        help="Expert layer to edit (default: top gate-AtP promoter)",
+    )
+    edit_parser.add_argument(
+        "--expert",
+        type=int,
+        default=None,
+        help="Expert index to edit (default: top gate-AtP promoter)",
+    )
+    edit_parser.add_argument(
+        "--top_neurons", type=int, default=20, help="How many toxic neurons to zero"
+    )
+    edit_parser.add_argument("--max_new_tokens", type=int, default=24)
 
     # circuit-report: assemble all circuit artifacts into one HTML report (no model)
     report_parser = subparsers.add_parser(

@@ -135,8 +135,11 @@ def main():
         model_name = args.model or get_default_model()
         out_dir = get_model_dir(model_name) / "circuit" / "dla" / args.dataset
         res = run_dla(
-            model_name, args.dataset, out_dir,
-            min_activations=args.min_activations, max_rows=args.max_rows,
+            model_name,
+            args.dataset,
+            out_dir,
+            min_activations=args.min_activations,
+            max_rows=args.max_rows,
         )
         print(
             f"DLA toxic score: scored {res['n_scored']} experts "
@@ -158,28 +161,35 @@ def main():
             plot_expert_effect_grid,
             top_grid_experts,
         )
-        from moe_interp.circuit.prompts import default_prompts
-        from moe_interp.circuit.toxicity import build_toxic_token_ids
+        from moe_interp.circuit.prompts import select_prompts
         from moe_interp.config import get_model_dir
+        from moe_interp.pursuit.concepts import build_toxic_token_ids
 
         model_name = args.model or get_default_model()
         model = LanguageModel(
             model_name, device_map=str(get_device()), dtype="auto", dispatch=True
         )
-        toxic_prompts, _ = default_prompts(model.tokenizer)
-        if args.n_prompts:
-            toxic_prompts = toxic_prompts[: args.n_prompts]
+        toxic_prompts, _ = select_prompts(model.tokenizer, args.prompts, args.n_prompts)
         toxic_ids = build_toxic_token_ids(model.tokenizer)
+        print(f"Using {len(toxic_prompts)} toxic prompts from '{args.prompts}'")
 
         grid = expert_patching_grid(
-            model, toxic_prompts, toxic_ids,
-            batch_size=args.batch_size, layers=args.layers,
+            model,
+            toxic_prompts,
+            toxic_ids,
+            batch_size=args.batch_size,
+            layers=args.layers,
         )
         out_dir = get_model_dir(model_name) / "circuit" / "patching"
         out_dir.mkdir(parents=True, exist_ok=True)
         np.save(out_dir / "patching_grid.npy", grid.numpy())
+        # Record the prompt source so `circuit-compare` scores attributors on the same set.
+        (out_dir / "prompts_meta.json").write_text(
+            json.dumps({"source": args.prompts, "n_prompts": len(toxic_prompts)})
+        )
         plot_expert_effect_grid(
-            grid, out_dir / "patching_grid.html",
+            grid,
+            out_dir / "patching_grid.html",
             title=f"Expert ablation effect on toxic-logit — {model_name}",
         )
         top = top_grid_experts(grid)
@@ -198,9 +208,9 @@ def main():
 
         from moe_interp.circuit.attribution import gate_attribution
         from moe_interp.circuit.compare import faithfulness, plot_faithfulness
-        from moe_interp.circuit.prompts import default_prompts
-        from moe_interp.circuit.toxicity import build_toxic_token_ids
+        from moe_interp.circuit.prompts import select_prompts
         from moe_interp.config import get_model_dir
+        from moe_interp.pursuit.concepts import build_toxic_token_ids
 
         model_name = args.model or get_default_model()
         md = get_model_dir(model_name)
@@ -210,26 +220,40 @@ def main():
                 f"No patching grid at {grid_path}. Run `python main.py circuit` first."
             )
         patching = torch.from_numpy(np.load(grid_path)).float()
+        # Score attributors on the same prompts the grid was built from.
+        meta_path = grid_path.with_name("prompts_meta.json")
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        source, n_prompts = meta.get("source", "seeds"), meta.get("n_prompts")
 
         model = LanguageModel(
             model_name, device_map=str(get_device()), dtype="auto", dispatch=True
         )
-        toxic, _ = default_prompts(model.tokenizer)
+        toxic, _ = select_prompts(model.tokenizer, source, n_prompts)
         toxic_ids = build_toxic_token_ids(model.tokenizer)
+        print(
+            f"Scoring attributors on {len(toxic)} '{source}' prompts (matching the grid)"
+        )
 
         # gate-AtP (one backward pass); compare against the gradient-free activation-DLA
         # grid if it has been produced (`python main.py toxic-dla`).
-        grids = {"gate-AtP": gate_attribution(model, toxic, toxic_ids, batch_size=args.batch_size)}
+        grids = {
+            "gate-AtP": gate_attribution(
+                model, toxic, toxic_ids, batch_size=args.batch_size
+            )
+        }
         dla_path = md / "circuit" / "dla" / "pile10k" / "dla_grid.npy"
         if dla_path.exists():
-            grids["DLA(activations)"] = torch.from_numpy(np.nan_to_num(np.load(dla_path))).float()
+            grids["DLA(activations)"] = torch.from_numpy(
+                np.nan_to_num(np.load(dla_path))
+            ).float()
         scores = faithfulness(grids, patching)
 
         out_dir = md / "circuit" / "compare"
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "faithfulness.json").write_text(json.dumps(scores, indent=2))
         plot_faithfulness(
-            scores, out_dir / "faithfulness.html",
+            scores,
+            out_dir / "faithfulness.html",
             title=f"Attributor faithfulness vs causal patching — {model_name}",
         )
         print("faithfulness vs causal patching grid (pooled r):")
@@ -239,104 +263,77 @@ def main():
 
     elif args.command == "circuit-steer":
         import json
-        import random
 
-        import numpy as np
-        import torch
         from nnsight import LanguageModel
 
-        from moe_interp.analysis.common import load_somp_results
-        from moe_interp.capture.cache import load_unembedding
-        from moe_interp.circuit.attribution import gate_attribution
-        from moe_interp.circuit.direction import collect_last_token_residuals
-        from moe_interp.circuit.intervene import (
-            downweight_intervention,
-            knockout_intervention,
-            projectout_intervention,
-            run_intervention_experiment,
-        )
-        from moe_interp.circuit.prompts import default_prompts
-        from moe_interp.circuit.toxicity import build_toxic_token_ids
-        from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
-        from moe_interp.pursuit.concepts import CONCEPT_WORDS
+        from moe_interp.circuit.steer import run_steer
+        from moe_interp.config import get_model_dir
 
         model_name = args.model or get_default_model()
-        concept = args.concept
-        k, layer = args.knockout_k, args.steer_layer
         model = LanguageModel(
             model_name, device_map=str(get_device()), dtype="auto", dispatch=True
         )
-        ne = model.config.num_local_experts
-        eliciting, neutral = default_prompts(model.tokenizer)
-        concept_words = CONCEPT_WORDS[concept]
-        concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
-        md = get_model_dir(model_name)
-
-        # Concept direction in residual space, from the unembedding (prompt-free, generic).
-        U = load_unembedding(get_unembedding_dir(model_name) / "dictionary.h5").float()
-        concept_dir = U[concept_ids].mean(0) - U.mean(0)
-
-        methods: dict = {"baseline": None}
-        meta_sets: dict = {}
-        # Causal expert-knockout comparison needs prompts that ELICIT the concept; our seeds
-        # only elicit toxicity, so the expert sets + diff-of-means are run for that concept.
-        if concept == "offensive":
-            def topk_grid(grid):
-                order = np.argsort(-grid.flatten())[:k]
-                return [(int(i // ne), int(i % ne)) for i in order]
-
-            sets = {"AtP": topk_grid(
-                gate_attribution(model, eliciting, concept_ids, batch_size=args.batch_size).numpy())}
-            for name, rel in [("patching", "patching/patching_grid.npy"),
-                              ("DLA", "dla/pile10k/dla_grid.npy")]:
-                p = md / "circuit" / rel
-                if p.exists():
-                    sets[name] = topk_grid(np.nan_to_num(np.load(p)))
-            pursuit_dir = get_pursuit_dir(model_name, "pile10k")
-            if (pursuit_dir / "results.jsonl").exists():
-                lex = {w.lower() for w in concept_words}
-                somp = load_somp_results(pursuit_dir)
-                scored = sorted(((sum(t.strip().lower() in lex for t in r.get("tokens", [])), le)
-                                 for le, r in somp.items()), reverse=True)
-                sets["SOMP"] = [le for s, le in scored[:k] if s > 0]
-            rng = random.Random(0)
-            used = set(sets["AtP"])
-            rand = []
-            for ly, _ in sets["AtP"]:
-                while (ly, e := rng.randrange(ne)) in used:
-                    pass
-                used.add((ly, e))
-                rand.append((ly, e))
-            sets["random"] = rand
-            for name, experts in sets.items():
-                methods[f"{name}-knockout"] = knockout_intervention(experts)
-            methods["AtP-downweight0.5"] = downweight_intervention(sets["AtP"], 0.5)
-            meta_sets = sets
-            # diff-of-means direction (validated for toxicity)
-            steer_dir = collect_last_token_residuals(model, eliciting, layer).mean(0) - (
-                collect_last_token_residuals(model, neutral, layer).mean(0))
-        else:
-            steer_dir = concept_dir  # generic concepts: project out the unembedding direction
-
-        methods[f"projectout@L{layer}"] = projectout_intervention(layer, steer_dir)
-
-        res = run_intervention_experiment(
-            model, eliciting, neutral, concept_ids, methods,
-            concept_words=concept_words, max_new_tokens=args.max_new_tokens,
+        res = run_steer(
+            model,
+            model_name,
+            concept=args.concept,
+            knockout_k=args.knockout_k,
+            steer_layer=args.steer_layer,
+            batch_size=args.batch_size,
+            max_new_tokens=args.max_new_tokens,
         )
-        res["_meta"] = {"concept": concept, "k": k, "steer_layer": layer, "sets": meta_sets}
 
-        out_dir = md / "circuit" / "steer"
+        out_dir = get_model_dir(model_name) / "circuit" / "steer"
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "intervention.json").write_text(json.dumps(res, indent=2))
-        base = res["baseline"]["eliciting_propensity"]
+
+        concept = res["meta"]["concept"]
+        base = res["methods"]["baseline"]["eliciting_propensity"]
         print(f"{concept} propensity (baseline={base:+.3f}; lower = less '{concept}'):")
-        for name, b in res.items():
-            if name == "_meta":
-                continue
-            print(f"  {name:22s} elic={b['eliciting_propensity']:+.3f}  "
-                  f"neutral={b['neutral_propensity']:+.3f}  word-frac={b['eliciting_word_frac']:.2f}")
+        for name, b in res["methods"].items():
+            print(
+                f"  {name:22s} elic={b['eliciting_propensity']:+.3f}  "
+                f"neutral={b['neutral_propensity']:+.3f}  word-frac={b['eliciting_word_frac']:.2f}"
+            )
         print(f"Saved intervention results to {out_dir}")
+
+    elif args.command == "circuit-edit":
+        import json
+
+        from nnsight import LanguageModel
+
+        from moe_interp.circuit.expert_edit import run_expert_edit
+        from moe_interp.config import get_model_dir
+
+        model_name = args.model or get_default_model()
+        model = LanguageModel(
+            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+        )
+        res = run_expert_edit(
+            model,
+            concept=args.concept,
+            layer=args.layer,
+            expert=args.expert,
+            top_neurons=args.top_neurons,
+            batch_size=args.batch_size,
+            max_new_tokens=args.max_new_tokens,
+        )
+
+        out_dir = get_model_dir(model_name) / "circuit" / "edit"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "expert_edit.json").write_text(json.dumps(res, indent=2))
+
+        m = res["meta"]
+        base = res["methods"]["baseline"]["eliciting_propensity"]
+        print(
+            f"L{m['layer']}E{m['expert']} ({m['concept']}); baseline propensity={base:+.3f}:"
+        )
+        for name, b in res["methods"].items():
+            print(
+                f"  {name:24s} elic={b['eliciting_propensity']:+.3f}  "
+                f"word-frac={b['eliciting_word_frac']:.2f}"
+            )
+        print(f"Saved expert-edit results to {out_dir}")
 
     elif args.command == "circuit-report":
         from moe_interp.circuit.report import build_report

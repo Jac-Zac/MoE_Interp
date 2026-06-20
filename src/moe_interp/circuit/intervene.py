@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 import torch
 
-from moe_interp.circuit.toxicity import toxic_logit_score
+from moe_interp.circuit.toxicity import relative_logit_score
 from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 
@@ -32,7 +32,9 @@ def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
         by_layer.setdefault(layer, []).append(e)
 
     def fn(model):
-        for layer in sorted(by_layer):  # nnsight 0.7 needs envoys touched in forward order
+        for layer in sorted(
+            by_layer
+        ):  # nnsight 0.7 needs envoys touched in forward order
             _, idx, w = model.model.layers[layer].mlp.experts.inputs[0]
             for e in by_layer[layer]:
                 w[idx == e] = 0.0
@@ -84,24 +86,36 @@ def projectout_intervention(layer: int, v: torch.Tensor) -> Callable:
     return fn
 
 
-def generate(model, ids: list[int], max_new_tokens: int, intervention: Callable | None) -> list[int]:
+def generate(
+    model, ids: list[int], max_new_tokens: int, intervention: Callable | None
+) -> list[int]:
     """Greedy-generate exactly ``max_new_tokens`` continuation ids, optionally under ``intervention``.
 
     ``min_new_tokens == max_new_tokens`` forces a fixed length: under ``tracer.all()`` an
     early EOS would leave some intervention iterations "not provided" and nnsight 0.7 errors.
     """
-    with torch.no_grad(), model.generate(
-        ids, max_new_tokens=max_new_tokens, min_new_tokens=max_new_tokens, do_sample=False
-    ) as tracer:
+    with (
+        torch.no_grad(),
+        model.generate(
+            ids,
+            max_new_tokens=max_new_tokens,
+            min_new_tokens=max_new_tokens,
+            do_sample=False,
+        ) as tracer,
+    ):
         if intervention is not None:
             with tracer.all():
                 intervention(model)
         out = model.generator.output.save()
-    return out[0].tolist()[len(ids):]
+    return out[0].tolist()[len(ids) :]
 
 
 def concept_propensity(
-    model, ids: list[int], cont: list[int], concept_ids: list[int], intervention: Callable | None
+    model,
+    ids: list[int],
+    cont: list[int],
+    concept_ids: list[int],
+    intervention: Callable | None,
 ) -> float:
     """Mean concept-logit score over the continuation, intervention active (one trace).
 
@@ -114,17 +128,19 @@ def concept_propensity(
         if intervention is not None:
             intervention(model)
         logits = model.output.logits.save()
-    seq = logits[0].float().cpu()  # (T, V); positions len(ids)-1 .. T-2 predict the continuation
-    pos = range(len(ids) - 1, len(full) - 1)
-    return float(
-        sum(float(toxic_logit_score(seq[p : p + 1], concept_ids)) for p in pos) / max(len(pos), 1)
-    )
+    seq = (
+        logits[0].float().cpu()
+    )  # (T, V); positions len(ids)-1 .. T-2 predict the continuation
+    cont_logits = seq[len(ids) - 1 : len(full) - 1]  # one row per continuation token
+    return float(relative_logit_score(cont_logits, concept_ids).mean())
 
 
 def concept_regex(words: list[str]) -> re.Pattern:
     """Whole-word, case-insensitive matcher for a concept lexicon."""
     return re.compile(
-        r"\b(" + "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True)) + r")\b",
+        r"\b("
+        + "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+        + r")\b",
         re.I,
     )
 
@@ -151,17 +167,24 @@ def run_intervention_experiment(
     results: dict[str, dict] = {}
     for name, intervention in methods.items():
         block: dict[str, object] = {}
-        for setname, prompts in (("eliciting", eliciting_prompts), ("neutral", neutral_prompts)):
+        for setname, prompts in (
+            ("eliciting", eliciting_prompts),
+            ("neutral", neutral_prompts),
+        ):
             print(f"  [{name} / {setname}] generating {len(prompts)} ...", flush=True)
             props, counts, examples = [], [], []
             for j, ids in enumerate(prompts):
                 cont = generate(model, ids, max_new_tokens, intervention)
-                props.append(concept_propensity(model, ids, cont, concept_ids, intervention))
+                props.append(
+                    concept_propensity(model, ids, cont, concept_ids, intervention)
+                )
                 counts.append(len(pattern.findall(tok.decode(cont))))
                 if setname == "eliciting" and j < n_examples:
                     examples.append(tok.decode(cont).strip())
             block[f"{setname}_propensity"] = float(sum(props) / max(len(props), 1))
-            block[f"{setname}_word_frac"] = float(sum(c > 0 for c in counts) / max(len(counts), 1))
+            block[f"{setname}_word_frac"] = float(
+                sum(c > 0 for c in counts) / max(len(counts), 1)
+            )
             if examples:
                 block["examples"] = examples
         results[name] = block

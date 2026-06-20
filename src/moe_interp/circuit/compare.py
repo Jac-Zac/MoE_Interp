@@ -41,5 +41,7 @@ def plot_faithfulness(scores: dict[str, dict], output_path, *, title: str) -> No
 
     names = list(scores)
     fig = go.Figure(go.Bar(x=names, y=[scores[n]["pooled_r"] for n in names]))
-    fig.update_layout(title=title, yaxis_title="Pearson r vs causal patching", height=400)
+    fig.update_layout(
+        title=title, yaxis_title="Pearson r vs causal patching", height=400
+    )
     fig.write_html(str(output_path))

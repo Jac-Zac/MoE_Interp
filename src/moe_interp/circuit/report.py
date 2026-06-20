@@ -16,6 +16,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from moe_interp.config import get_model_dir
+from moe_interp.io.plots import diverging_expert_heatmap
 
 
 def _css() -> str:
@@ -39,12 +40,7 @@ def _table(headers: Sequence[Any], rows: Iterable[Sequence[Any]]) -> str:
 
 
 def _heatmap(grid: np.ndarray, title: str, cbar: str) -> go.Figure:
-    vmax = float(np.nanmax(np.abs(grid))) or 1.0
-    fig = go.Figure(go.Heatmap(z=grid, zmid=0, zmin=-vmax, zmax=vmax,
-                               colorscale="RdBu_r", colorbar={"title": cbar}))
-    fig.update_layout(title=title, xaxis_title="expert", yaxis_title="layer",
-                      height=460, yaxis={"autorange": "reversed"})
-    return fig
+    return diverging_expert_heatmap(grid, title=title, colorbar_title=cbar, height=460)
 
 
 def build_report(model_name: str) -> Path:
@@ -55,7 +51,9 @@ def build_report(model_name: str) -> Path:
 
     def fig(f: go.Figure) -> str:
         nonlocal figs_js
-        html = f.to_html(full_html=False, include_plotlyjs=("inline" if figs_js else False))
+        html = f.to_html(
+            full_html=False, include_plotlyjs=("inline" if figs_js else False)
+        )
         figs_js = False
         return html
 
@@ -65,22 +63,54 @@ def build_report(model_name: str) -> Path:
     # 0. Overview — the pipeline, techniques, and headline findings
     parts.append('<h2 id="overview">Overview</h2>')
     parts.append(
-        '<p>A causal study of <b>which experts make OLMoE generate toxic text, and how to '
+        "<p>A causal study of <b>which experts make OLMoE generate toxic text, and how to "
         "stop it</b>, in three stages: <b>classify</b> experts by toxicity association, "
         "<b>localize</b> the causally responsible ones, and <b>intervene</b> during "
         "generation to suppress toxicity. All run locally on Apple MPS.</p>"
     )
-    parts.append(_table(
-        ["stage", "technique", "what it does", "causal?"],
-        [
-            ["classify", "SOMP / Expert Pursuit", "experts whose pursuit atoms are offensive words", "no"],
-            ["classify", "DLA (no model)", "experts that write toward toxic vocabulary, from stored activations", "no"],
-            ["localize", "activation patching", "ablate every expert's gate, measure Δ toxic-logit (ground truth)", "yes"],
-            ["localize", "gate-AtP", "one backward pass estimates the whole patching grid (gate·dL/dgate)", "yes"],
-            ["intervene", "knockout / down-weight", "zero or scale the gate of the top causal experts during generation", "yes"],
-            ["intervene", "project-out", "remove the toxic direction from the residual stream each step", "yes"],
-        ],
-    ))
+    parts.append(
+        _table(
+            ["stage", "technique", "what it does", "causal?"],
+            [
+                [
+                    "classify",
+                    "SOMP / Expert Pursuit",
+                    "experts whose pursuit atoms are offensive words",
+                    "no",
+                ],
+                [
+                    "classify",
+                    "DLA (no model)",
+                    "experts that write toward toxic vocabulary, from stored activations",
+                    "no",
+                ],
+                [
+                    "localize",
+                    "activation patching",
+                    "ablate every expert's gate, measure Δ toxic-logit (ground truth)",
+                    "yes",
+                ],
+                [
+                    "localize",
+                    "gate-AtP",
+                    "one backward pass estimates the whole patching grid (gate·dL/dgate)",
+                    "yes",
+                ],
+                [
+                    "intervene",
+                    "knockout / down-weight",
+                    "zero or scale the gate of the top causal experts during generation",
+                    "yes",
+                ],
+                [
+                    "intervene",
+                    "project-out",
+                    "remove the toxic direction from the residual stream each step",
+                    "yes",
+                ],
+            ],
+        )
+    )
     parts.append(
         '<p class="note"><b>Headline findings.</b> (1) Causally important experts span all '
         "depths, including <i>suppressor</i> experts that <i>raise</i> toxicity when removed. "
@@ -93,67 +123,155 @@ def build_report(model_name: str) -> Path:
         "generalizes to any concept via <code>circuit-steer --concept</code>.</p>"
     )
 
-    # 1. Expert identification (causal patching grid + DLA grid + top tables)
-    parts.append('<h2 id="id">Identifying toxic experts</h2>')
+    # 1. METHODS (text)
+    parts.append('<h2 id="methods">Methods</h2>')
+    parts.append(
+        "<h3>Setup</h3><p>OLMoE-1B-7B (16 layers, 64 experts, top-8 routing) run locally on "
+        "Apple MPS. The probe is the <b>toxic-logit score</b>: the mean logit over a set of "
+        "single-token offensive words minus the row-mean logit, read at the prediction "
+        "position. We use 12 toxic-eliciting prompts (<i>“Please complete the text, but don’t "
+        "say anything nice: …”</i>) and 12 matched neutral prompts. The fused-experts kernel "
+        "exposes only the router gate (<code>layer.mlp.experts.inputs[0]</code> → "
+        "<code>hidden, top_k_index, top_k_weights</code>) as a per-expert node, so all "
+        "expert-level interventions and gradients act on the gate.</p>"
+    )
+    parts.append(
+        "<h3>Classification — which experts <i>associate</i> with toxicity (no model / no causal test)</h3>"
+        "<ul>"
+        "<li><b>SOMP / Expert Pursuit.</b> Decompose each expert’s stored activations against the "
+        "unembedding dictionary (Simultaneous Orthogonal Matching Pursuit); experts whose top atoms "
+        "are offensive words are flagged. Adapts HeadPursuit (attention heads) to MoE experts.</li>"
+        "<li><b>DLA (Direct Logit Attribution).</b> Gradient-free, from stored activations only: "
+        "<code>score(l,e) = mean_tokens(contribution · toxic_dir)</code> with "
+        "<code>toxic_dir = mean(U[toxic]) − mean(U)</code> — how much an expert writes toward toxic "
+        "vocabulary.</li></ul>"
+    )
+    parts.append(
+        "<h3>Localization — which experts are <i>causally</i> responsible</h3><ul>"
+        "<li><b>Activation patching (ground truth).</b> For every routed (layer, expert), zero its "
+        "gate in one forward pass and record ΔΔ in the toxic-logit metric. Positive = the expert "
+        "promotes toxicity, negative = suppresses it. Cost: one forward per expert.</li>"
+        "<li><b>gate-AtP (attribution patching).</b> Estimates the whole grid from a single backward "
+        "pass: <code>attribution(e) ≈ gate_e · dL/dgate_e</code> summed over positions.</li>"
+        "<li><b>Faithfulness.</b> Pearson r between each cheap method’s per-expert score and the "
+        "patching ground truth.</li></ul>"
+    )
+    parts.append(
+        "<h3>Intervention — suppress the behaviour during generation</h3><ul>"
+        "<li><b>Knockout</b> — zero the gates of the top-k identified experts at every decoded step.</li>"
+        "<li><b>Down-weight</b> — scale those gates by a factor (a softer knockout).</li>"
+        "<li><b>Project-out</b> — remove the toxic direction’s component from the residual stream each "
+        "step (non-destructive: orthogonal features are untouched).</li></ul>"
+        "<p>Each is scored by greedy generation under the intervention: <b>toxic propensity</b> (mean "
+        "toxic-logit over the continuation) and offensive-word rate, with the neutral set as a "
+        "collateral check. The whole intervention generalizes to any concept via "
+        "<code>circuit-steer --concept</code> using the unembedding concept direction.</p>"
+    )
+
+    # 2. RESULTS (figures + tables + findings)
+    parts.append('<h2 id="results">Results</h2>')
+
+    parts.append("<h3>Identifying the experts</h3>")
     pg = cdir / "patching" / "patching_grid.npy"
     if pg.exists():
         parts.append(
-            '<p class="note">Causal ground truth: Δ toxic-logit when each expert\'s gate is '
-            "ablated (red = the expert promotes toxicity; blue = suppresses it).</p>"
+            fig(_heatmap(np.load(pg), "Causal patching effect per expert", "Δ toxic"))
         )
-        parts.append(fig(_heatmap(np.load(pg), "Causal patching effect per expert", "Δ toxic")))
         top = load_json(cdir / "patching" / "top_experts.json") or []
-        parts.append(_table(["expert", "effect"],
-                            [[f"L{r['layer']}E{r['expert']}", f"{r['effect']:+.3f}"] for r in top[:10]]))
+        parts.append(
+            _table(
+                ["expert", "effect"],
+                [
+                    [f"L{r['layer']}E{r['expert']}", f"{r['effect']:+.3f}"]
+                    for r in top[:10]
+                ],
+            )
+        )
+        parts.append(
+            '<p class="note">Causal effect of ablating each expert (red = promotes toxicity, '
+            "blue = suppresses). Causally important experts span <b>all depths</b> and include "
+            "<b>suppressors</b> (negative) — neither of which the classifiers below capture.</p>"
+        )
     dg = cdir / "dla" / "pile10k" / "dla_grid.npy"
     if dg.exists():
         parts.append(
-            '<p class="note">Gradient-free DLA: how much each expert writes toward toxic '
-            "vocabulary (from stored activations only, no model forward).</p>"
+            fig(_heatmap(np.load(dg), "DLA toxic-write score per expert", "DLA"))
         )
-        parts.append(fig(_heatmap(np.load(dg), "DLA toxic-write score per expert", "DLA")))
+        parts.append(
+            '<p class="note">The gradient-free DLA classifier concentrates in the <b>final '
+            "two layers</b> (where experts write to vocabulary) — it misses the early/mid "
+            "causal experts above, because projecting early activations onto the unembedding "
+            "is ill-posed.</p>"
+        )
 
-    # 2. Faithfulness of cheap attributors vs the causal grid
     fa = load_json(cdir / "compare" / "faithfulness.json")
     if fa:
-        parts.append('<h2 id="faith">Which cheap method predicts the causal grid?</h2>')
+        parts.append("<h3>Which cheap method predicts the causal grid?</h3>")
         names = list(fa)
         bar = go.Figure(go.Bar(x=names, y=[fa[n]["pooled_r"] for n in names]))
-        bar.update_layout(title="Attributor faithfulness vs causal patching",
-                          yaxis_title="Pearson r", height=380)
+        bar.update_layout(
+            title="Attributor faithfulness vs causal patching",
+            yaxis_title="Pearson r",
+            height=380,
+        )
         parts.append(fig(bar))
-        parts.append('<p class="note">gate-AtP (one backward pass) predicts the expensive '
-                     "patching grid best; direction-based methods only track it at the final layer.</p>")
+        parts.append(
+            '<p class="note"><b>gate-AtP (one backward pass) faithfully predicts the '
+            "expensive patching grid</b> (pooled r≈0.80, per-layer up to 0.98); the "
+            "activation-only DLA score is ~uncorrelated with causal effect.</p>"
+        )
 
-    # 3. Causal intervention: suppress the concept during generation
     iv = load_json(cdir / "steer" / "intervention.json")
     if iv:
-        concept = iv.get("_meta", {}).get("concept", "toxic")
-        parts.append(f'<h2 id="steer">Suppressing "{concept}" generation</h2>')
-        rows, methods = [], [m for m in iv if m != "_meta"]
-        base = iv.get("baseline", {}).get("eliciting_propensity", 0.0)
+        mm = iv.get("methods", {})
+        concept = iv.get("meta", {}).get("concept", "toxic")
+        parts.append(f"<h3>Suppressing “{concept}” generation</h3>")
+        rows, methods = [], list(mm)
+        base = mm.get("baseline", {}).get("eliciting_propensity", 0.0)
         for m in methods:
-            b = iv[m]
+            b = mm[m]
             drop = base - b.get("eliciting_propensity", 0.0)
-            rows.append([m, f"{b.get('eliciting_propensity', 0):+.3f}",
-                         f"{drop:+.3f}", f"{b.get('neutral_propensity', 0):+.3f}",
-                         f"{b.get('eliciting_word_frac', 0):.2f}"])
-        parts.append(_table(
-            ["method", "concept propensity", "Δ vs baseline", "neutral propensity", "word frac"], rows))
-        parts.append('<p class="note">Lower propensity = less of the concept; the neutral column '
-                     "is the collateral check (should stay near baseline). Δ &gt; 0 means the "
-                     "intervention suppressed the concept.</p>")
-        # example generations: baseline vs the best intervention
+            rows.append(
+                [
+                    m,
+                    f"{b.get('eliciting_propensity', 0):+.3f}",
+                    f"{drop:+.3f}",
+                    f"{b.get('neutral_propensity', 0):+.3f}",
+                    f"{b.get('eliciting_word_frac', 0):.2f}",
+                ]
+            )
+        parts.append(
+            _table(
+                [
+                    "method",
+                    "concept propensity",
+                    "Δ vs baseline",
+                    "neutral propensity",
+                    "word frac",
+                ],
+                rows,
+            )
+        )
+        parts.append(
+            '<p class="note">Lower propensity = less of the concept; neutral is the '
+            "collateral check (should stay near baseline). <b>Causally-identified knockout "
+            "(AtP / patching) suppresses toxicity; correlational (SOMP / DLA / random) does "
+            "nothing. Project-out gives the largest drop while keeping generation fluent.</b></p>"
+        )
         others = [m for m in methods if m != "baseline"]
-        best = min(others, key=lambda m: iv[m].get("eliciting_propensity", 0.0), default=None)
+        best = min(
+            others, key=lambda m: mm[m].get("eliciting_propensity", 0.0), default=None
+        )
         for label in [m for m in ("baseline", best) if m]:
-            ex = iv[label].get("examples", [])
+            ex = mm[label].get("examples", [])
             if ex:
-                parts.append(f"<h3>{label} — example continuations</h3>")
+                parts.append(f"<h4>{label} — example continuations</h4>")
                 parts.extend(f'<div class="ex">{e}</div>' for e in ex[:4])
 
-    nav = ('<nav><a href="#overview">Overview</a> · <a href="#id">Identify</a> · '
-           '<a href="#faith">Faithfulness</a> · <a href="#steer">Intervene</a></nav>')
+    nav = (
+        '<nav><a href="#overview">Overview</a> · <a href="#methods">Methods</a> · '
+        '<a href="#results">Results</a></nav>'
+    )
     body = nav + "".join(parts)
     html = (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'

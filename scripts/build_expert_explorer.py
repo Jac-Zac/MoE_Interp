@@ -286,7 +286,11 @@ def main() -> None:
         cl_of = {(d["layer"], d["expert"]): d["cluster"] for d in cdata["labels"]}
         for cid, info in cdata["clusters"].items():
             label = ", ".join(info["terms"][:3])
-            cluster_meta[cid] = {"label": label, "terms": info["terms"], "size": info["size"]}
+            cluster_meta[cid] = {
+                "label": label,
+                "terms": info["terms"],
+                "size": info["size"],
+            }
 
     # Compact payload: EVR@25, EVR@final, plus the full curve and tokens.
     payload = []
@@ -308,6 +312,7 @@ def main() -> None:
     # Cluster dropdown options, ordered by mean EVR (highest-EVR family first).
     cluster_opts = ""
     if cluster_meta:
+
         def _mean_evr(cid: str) -> float:
             vals = [p["evr50"] for p in payload if str(p["cluster"]) == cid]
             return sum(vals) / len(vals) if vals else 0.0
@@ -332,7 +337,7 @@ def main() -> None:
 
     out = args.output or args.results.with_name("expert_explorer.html")
     out.write_text(html, encoding="utf-8")
-    print(f"wrote {out} ({out.stat().st_size/1e6:.2f} MB, {len(records)} experts)")
+    print(f"wrote {out} ({out.stat().st_size / 1e6:.2f} MB, {len(records)} experts)")
 
 
 if __name__ == "__main__":

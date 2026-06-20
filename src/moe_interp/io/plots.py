@@ -17,6 +17,42 @@ def _save_fig(fig: go.Figure, output_path: Path | None) -> None:
         fig.write_html(str(output_path))
 
 
+def diverging_expert_heatmap(
+    grid,
+    *,
+    title: str,
+    colorbar_title: str,
+    height: int = 560,
+    output_path: Path | None = None,
+) -> go.Figure:
+    """Layer×expert diverging heatmap: RdBu_r, centred at 0, layer 0 at the top.
+
+    ``grid`` is an ``(n_layers, n_experts)`` array or tensor (NaNs allowed; they render as
+    gaps). Shared by the causal patching, DLA, and report figures.
+    """
+    z = grid.cpu().numpy() if hasattr(grid, "cpu") else np.asarray(grid)
+    vmax = float(np.nanmax(np.abs(z))) or 1.0
+    fig = go.Figure(
+        go.Heatmap(
+            z=z,
+            zmid=0,
+            zmin=-vmax,
+            zmax=vmax,
+            colorscale="RdBu_r",
+            colorbar={"title": colorbar_title},
+        )
+    )
+    fig.update_layout(
+        title=title,
+        xaxis_title="expert",
+        yaxis_title="layer",
+        height=height,
+        yaxis={"autorange": "reversed"},
+    )
+    _save_fig(fig, output_path)
+    return fig
+
+
 def plot_scatter_grid(
     values: np.ndarray,
     title: str,

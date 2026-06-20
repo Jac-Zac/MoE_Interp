@@ -1,20 +1,23 @@
-"""Single-expert gate-ablation on toxic-eliciting prompts.
+"""Gate-ablation primitives + the whole-set significance test.
 
-We test whether the experts Expert Pursuit flags as *toxicity specialists* are also
-*causally* responsible for toxic continuations. The intervention is a clean ablation:
-inside one traced forward we zero an expert's router gate weight wherever it was
-selected, removing exactly that expert's additive contribution to the residual stream
-(the other top-k experts are untouched, since OLMoE does not renormalise the gates
-after selection). We then read the next-token distribution at the last prompt position
-and measure the drop in probability mass on a toxic-token probe.
+The shared building blocks for every causal gate intervention in this package. The
+intervention is a clean ablation: inside one traced forward we zero an expert's router
+gate weight wherever it was selected, removing exactly that expert's additive
+contribution to the residual stream (the other top-k experts are untouched, since OLMoE
+does not renormalise the gates after selection). We then read the next-token distribution
+at the last prompt position and score it with a concept-logit probe.
+
+- ``relative_logit_score`` / ``Metric`` — the probe (see ``relative_logit_score``).
+- ``right_padded`` / ``scorer`` — shared trace plumbing, reused by ``patching`` (the
+  per-expert grid) and ``attribution`` (gate-AtP).
+- ``run_set_ablation`` — ablate a *whole flagged set jointly* vs matched random control
+  sets, reporting a z-score: the significance test for an identified circuit (e.g. the
+  top-k gate-AtP experts), which the marginal per-expert patching grid cannot give.
 
 The boundary tap mirrors ``capture.py``: ``layer.mlp.experts.inputs[0]`` yields
 ``(hidden_states, top_k_index, top_k_weights)`` for the fused experts module, which is
-the only point where per-expert routing is exposed on transformers >= 5.9.
-
-A toxicity specialist should show a *positive* effect (ablation lowers P(toxic));
-matched random control experts should cluster near zero. The metric is correlational
-about the probe but the intervention itself is causal.
+the only point where per-expert routing is exposed on transformers >= 5.9. The metric is
+correlational about the probe but the intervention itself is causal.
 """
 
 from __future__ import annotations
@@ -24,9 +27,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 import torch
-import torch.nn.functional as F
-
-from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 Metric = Callable[[torch.Tensor, list[int]], torch.Tensor]
 
@@ -34,22 +34,14 @@ Metric = Callable[[torch.Tensor, list[int]], torch.Tensor]
 @contextmanager
 def right_padded(model) -> Iterator[None]:
     """Force right-padding for the block so each prompt's last real token sits at
-    ``len - 1`` and (causally downstream) padding cannot leak into it; restore on exit."""
+    ``len - 1`` and (causally downstream) padding cannot leak into it; restore on exit.
+    """
     original = model.tokenizer.padding_side
     model.tokenizer.padding_side = "right"
     try:
         yield
     finally:
         model.tokenizer.padding_side = original
-
-
-@dataclass
-class ExpertAblationResult:
-    layer: int
-    expert: int
-    group: str  # "candidate" | "control"
-    delta_mean: float  # mean over prompts of (score_base - score_ablated)
-    delta_sem: float  # standard error of the mean of the per-prompt deltas
 
 
 @dataclass
@@ -64,33 +56,18 @@ class SetAblationResult:
     percentile: float  # fraction of control sets the flagged set beats
 
 
-def build_toxic_token_ids(tokenizer, words: list[str] | None = None) -> list[int]:
-    """Vocabulary ids of single-token toxic words (with and without a leading space)."""
-    words = words or CONCEPT_WORDS["offensive"]
-    ids: set[int] = set()
-    for w in words:
-        for variant in (w, " " + w):
-            toks = tokenizer(variant, add_special_tokens=False).input_ids
-            if len(toks) == 1:
-                ids.add(int(toks[0]))
-    return sorted(ids)
+def relative_logit_score(
+    logits_last: torch.Tensor, concept_ids: list[int]
+) -> torch.Tensor:
+    """Mean logit on the concept tokens minus the row mean logit (relative elevation).
 
-
-def toxic_probability(logits_last: torch.Tensor, toxic_ids: list[int]) -> torch.Tensor:
-    """P(next token in toxic set) for each row of ``logits_last`` ``(B, V)``."""
-    probs = F.softmax(logits_last.float(), dim=-1)
-    return probs[:, toxic_ids].sum(dim=-1)
-
-
-def toxic_logit_score(logits_last: torch.Tensor, toxic_ids: list[int]) -> torch.Tensor:
-    """Mean logit on toxic tokens minus the row mean logit (relative elevation).
-
-    More sensitive than ``toxic_probability``: the softmax floor over a 50k vocab makes
-    the absolute probability of any specific content word tiny, so small causal shifts
-    are easier to read on the (centred) logits.
+    More sensitive than a raw ``P(next token in concept set)`` probe: the softmax floor
+    over a 50k vocab makes the absolute probability of any specific content word tiny, so
+    small causal shifts are easier to read on the (centred) logits. Concept-agnostic — the
+    toxic-logit metric is just this with an offensive-word id set.
     """
     logits = logits_last.float()
-    return logits[:, toxic_ids].mean(dim=-1) - logits.mean(dim=-1)
+    return logits[:, concept_ids].mean(dim=-1) - logits.mean(dim=-1)
 
 
 def _last_token_logits(
@@ -116,7 +93,7 @@ def _last_token_logits(
     return logits[rows, lengths - 1].cpu()
 
 
-def _scorer(
+def scorer(
     model,
     prompts: list[list[int]],
     toxic_ids: list[int],
@@ -134,38 +111,6 @@ def _scorer(
     return score
 
 
-def run_expert_ablation(
-    model,
-    prompts: list[list[int]],
-    candidates: list[tuple[int, int]],
-    controls: list[tuple[int, int]],
-    toxic_ids: list[int],
-    batch_size: int = 8,
-    metric: Metric = toxic_logit_score,
-) -> list[ExpertAblationResult]:
-    """Ablate each (layer, expert) one at a time; report Δ score vs controls.
-
-    Prompts are pre-tokenised id lists.
-    """
-    with right_padded(model):
-        score = _scorer(model, prompts, toxic_ids, metric, batch_size)
-        base = score(None)
-        results: list[ExpertAblationResult] = []
-        for group, experts in (("candidate", candidates), ("control", controls)):
-            for layer_idx, expert_id in experts:
-                delta = base - score([(layer_idx, expert_id)])
-                results.append(
-                    ExpertAblationResult(
-                        layer=layer_idx,
-                        expert=expert_id,
-                        group=group,
-                        delta_mean=float(delta.mean()),
-                        delta_sem=float(delta.std(unbiased=False) / (len(delta) ** 0.5)),
-                    )
-                )
-        return results
-
-
 def run_set_ablation(
     model,
     prompts: list[list[int]],
@@ -173,7 +118,7 @@ def run_set_ablation(
     toxic_ids: list[int],
     n_controls: int = 30,
     batch_size: int = 8,
-    metric: Metric = toxic_logit_score,
+    metric: Metric = relative_logit_score,
     seed: int = 1337,
 ) -> SetAblationResult:
     """Ablate the whole flagged set vs random control sets matched in size & layers.
@@ -189,7 +134,7 @@ def run_set_ablation(
     flagged_set = {(layer, e) for layer, e in flagged}
 
     with right_padded(model):
-        score = _scorer(model, prompts, toxic_ids, metric, batch_size)
+        score = scorer(model, prompts, toxic_ids, metric, batch_size)
         base = score(None)
 
         flagged_delta = float((base - score(flagged)).mean())

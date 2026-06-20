@@ -52,15 +52,37 @@ minimal collateral; patching-knockout also works; SOMP/DLA/random knockout do ~n
 AtP-to-identify + steering-to-suppress is the better recipe (steering needs calibration — a
 large fixed `-α·v` tanks neutral generation too).
 
+## 4. Edit *inside* an expert — Boundary-A vs Boundary-B
+
+Everything above acts at **Boundary A, the router gate** (`layer.mlp.experts.inputs[0]`),
+the only per-expert node the fused kernel exposes — so it can only scale/zero an expert's
+*whole* contribution. To go finer (a few neurons, or a subspace) you must drop to
+**Boundary B, inside the expert's MLP**, reconstructed via `MoEAdapter` (`down_proj[e]`,
+`gate_up_proj[e]`). `circuit-edit` does exactly that:
+
+```bash
+python main.py circuit-edit                 # edit the top gate-AtP expert
+python main.py circuit-edit --layer L --expert E --top_neurons 20
+```
+
+It (1) identifies a causal expert with gate-AtP, (2) scores *its* intermediate neurons
+against the diff-of-means toxic direction `v` — `score_i = mean(neuron_i)·(down[:,i]·v̂)`,
+a *local linear* DLA that needs no global residual gradient (which the fused boundary
+won't give on nnsight 0.7 — this is why a global neuron-AtP was dropped) — then (3)
+suppresses by **weight surgery on `down_proj[e]`** (restored after): zero the top toxic
+neurons, or project the expert's output off `v̂` (the surgical analogue of whole-residual
+project-out, scoped to the one implicated expert). Writes `data/<model>/circuit/edit/`.
+
 ## Modules in `src/moe_interp/circuit/`
 
 - `prompts.py` — toxic / matched-neutral seed prompts.
-- `toxicity.py` — toxic-logit metric, single/whole-set gate ablation.
+- `toxicity.py` — toxic-logit metric, shared ablation plumbing, whole-set significance test.
 - `patching.py` — the brute-force causal grid (one forward per routed expert).
 - `attribution.py` — gate-AtP gradient attribution (`gate · dL/dgate`, one backward pass).
 - `compare.py` — faithfulness (Pearson r) of cheap attributors vs the patching grid.
-- `direction.py` — diff-of-means toxic direction: steering, project-out, logit-lens.
-- `intervene.py` — generation-time knockout / down-weight / steer + scoring.
+- `direction.py` — diff-of-means toxic direction (last-token residual readout).
+- `intervene.py` — generation-time knockout / down-weight / steer + scoring (Boundary A).
+- `expert_edit.py` — Boundary-B precision: local neuron-AtP + surgical in-expert edits.
 - `report.py` — self-contained HTML report.
 
 ## Running locally vs on Orfeo

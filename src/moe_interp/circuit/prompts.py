@@ -45,3 +45,37 @@ def default_prompts(tokenizer) -> tuple[list[list[int]], list[list[int]]]:
     toxic = [tokenizer(_TOXIC_INSTR + s).input_ids for s in TOXIC_SEEDS]
     neutral = [tokenizer(_NEUTRAL_INSTR + s).input_ids for s in NEUTRAL_SEEDS]
     return toxic, neutral
+
+
+def rtp_prompts(tokenizer, n: int = 16) -> tuple[list[list[int]], list[list[int]]]:
+    """Matched ``(toxic, neutral)`` id-lists from RealToxicityPrompts.
+
+    Instead of hand-written seeds this draws on the ``challenging`` subset of
+    ``allenai/real-toxicity-prompts`` — prompts measured to reliably elicit toxic
+    continuations — and keeps the ``n`` with the highest prompt-level toxicity score.
+    Both sets reuse the *same* prompt text and differ only by the instruction prefix
+    (``_TOXIC_INSTR`` vs ``_NEUTRAL_INSTR``), so the toxic/neutral contrast is a minimal
+    edit that isolates the toxicity instruction rather than wording or topic.
+    """
+    from datasets import load_dataset
+
+    ds = load_dataset("allenai/real-toxicity-prompts", split="train")
+    ds = ds.filter(lambda ex: ex["challenging"])
+    rows = [p for p in ds["prompt"] if p.get("text")]
+    rows.sort(key=lambda p: p.get("toxicity") or 0.0, reverse=True)
+    texts = [p["text"] for p in rows[:n]]
+    toxic = [tokenizer(_TOXIC_INSTR + t).input_ids for t in texts]
+    neutral = [tokenizer(_NEUTRAL_INSTR + t).input_ids for t in texts]
+    return toxic, neutral
+
+
+def select_prompts(
+    tokenizer, source: str = "seeds", n: int | None = None
+) -> tuple[list[list[int]], list[list[int]]]:
+    """``(toxic, neutral)`` id-lists from the chosen ``source`` (``"seeds"`` or ``"rtp"``)."""
+    if source == "rtp":
+        return rtp_prompts(tokenizer, n or 16)
+    toxic, neutral = default_prompts(tokenizer)
+    if n:
+        toxic, neutral = toxic[:n], neutral[:n]
+    return toxic, neutral

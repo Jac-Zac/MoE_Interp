@@ -11,8 +11,8 @@ from moe_interp.io.data import DATASET_SPECS
 
 DEFAULT_MODELS = [
     "allenai/OLMoE-1B-7B-0924-Instruct",
-    "mistralai/Mixtral-8x7B-Instruct-v0.1",
     "openai/gpt-oss-20b",
+    # "mistralai/Mixtral-8x7B-Instruct-v0.1",
 ]
 
 

@@ -338,3 +338,19 @@ CONCEPT_WORDS = {
     "countries": COUNTRY_WORDS,
     "numbers": NUMBER_WORDS,
 }
+
+
+def build_toxic_token_ids(tokenizer, words: list[str] | None = None) -> list[int]:
+    """Vocabulary ids of single-token concept words (with and without a leading space).
+
+    Defaults to the ``offensive`` lexicon; multi-token words are dropped so the ids can be
+    used directly as a logit probe.
+    """
+    words = words or CONCEPT_WORDS["offensive"]
+    ids: set[int] = set()
+    for w in words:
+        for variant in (w, " " + w):
+            toks = tokenizer(variant, add_special_tokens=False).input_ids
+            if len(toks) == 1:
+                ids.add(int(toks[0]))
+    return sorted(ids)

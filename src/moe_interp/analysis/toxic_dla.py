@@ -23,19 +23,7 @@ from pathlib import Path
 import torch
 
 from moe_interp.analysis.common import iter_expert_activations, load_analysis_inputs
-from moe_interp.pursuit.concepts import CONCEPT_WORDS
-
-
-def build_toxic_token_ids(tokenizer, words: list[str] | None = None) -> list[int]:
-    """Vocabulary ids of single-token toxic words (with and without a leading space)."""
-    words = words or CONCEPT_WORDS["offensive"]
-    ids: set[int] = set()
-    for w in words:
-        for variant in (w, " " + w):
-            toks = tokenizer(variant, add_special_tokens=False).input_ids
-            if len(toks) == 1:
-                ids.add(int(toks[0]))
-    return sorted(ids)
+from moe_interp.pursuit.concepts import build_toxic_token_ids
 
 
 def toxic_direction(dictionary: torch.Tensor, toxic_ids: list[int]) -> torch.Tensor:
@@ -75,7 +63,11 @@ def dla_toxic_grid(
     flat = grid.flatten()
     order = torch.argsort(torch.nan_to_num(flat, nan=-1e30), descending=True)
     top = [
-        {"layer": int(i // n_experts), "expert": int(i % n_experts), "score": float(flat[i])}
+        {
+            "layer": int(i // n_experts),
+            "expert": int(i % n_experts),
+            "score": float(flat[i]),
+        }
         for i in order.tolist()
         if not torch.isnan(flat[i])
     ][:25]
@@ -90,22 +82,14 @@ def dla_toxic_grid(
 
 def plot_dla_grid(grid: torch.Tensor, output_path, *, title: str) -> None:
     """Save a layer×expert heatmap of the DLA toxic score (diverging, centred at 0)."""
-    import numpy as np
-    import plotly.graph_objects as go
+    from moe_interp.io.plots import diverging_expert_heatmap
 
-    z = grid.cpu().numpy()
-    vmax = float(np.nanmax(np.abs(z))) or 1.0
-    fig = go.Figure(
-        go.Heatmap(
-            z=z, zmid=0, zmin=-vmax, zmax=vmax, colorscale="RdBu_r",
-            colorbar={"title": "DLA toxic score"},
-        )
+    diverging_expert_heatmap(
+        grid,
+        title=title,
+        colorbar_title="DLA toxic score",
+        output_path=output_path,
     )
-    fig.update_layout(
-        title=title, xaxis_title="expert", yaxis_title="layer", height=560,
-        yaxis={"autorange": "reversed"},  # layer 0 at top
-    )
-    fig.write_html(str(output_path))
 
 
 def run_dla(model_name: str, dataset: str, output_dir: Path, **kwargs) -> dict:
@@ -122,7 +106,8 @@ def run_dla(model_name: str, dataset: str, output_dir: Path, **kwargs) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     np.save(output_dir / "dla_grid.npy", res["grid"].numpy())
     plot_dla_grid(
-        res["grid"], output_dir / "dla_grid.html",
+        res["grid"],
+        output_dir / "dla_grid.html",
         title=f"DLA toxic score per expert — {model_name} · {dataset}",
     )
     (output_dir / "dla_top_experts.json").write_text(json.dumps(res["top"], indent=2))

@@ -66,3 +66,73 @@ The two modes are complementary: full-dictionary pursuit discovers specialists w
 hypotheses, while concept-restricted pursuit quantifies specialization along a specific
 semantic axis and is directly actionable for targeted interventions such as activation
 steering.
+
+== From Specialization to Causation <sec:causal-methods>
+
+Expert Pursuit is _correlational_: it reports which vocabulary directions an expert's output
+aligns with, not whether that expert _causes_ a behavior. To test causation we build a small
+circuit pipeline around a concrete target behavior --- toxic text generation --- in three
+stages: (i) _classify_ experts by toxicity association (no causal test), (ii) _localize_ the
+experts that are causally responsible, and (iii) _intervene_ during generation to suppress the
+behavior. The same machinery is concept-agnostic: only the target token set and prompts are
+toxicity-specific. All experiments run locally on Apple MPS.
+
+The fused-experts kernel in OLMoE does not expose per-expert hidden neurons during a forward
+pass, so the only differentiable, interventionable per-expert node is the *router gate*: tapping
+`layer.mlp.experts.inputs[0]` yields the boundary tuple $(bold(h), "idx", bold(g))$ of hidden
+states, selected expert indices, and gate weights. Every causal operation below acts on $bold(g)$.
+
+=== Toxicity Probe and Prompts
+
+We score toxicity with a *toxic-logit* probe: for a logit vector $bold(z)$ at the prediction
+position, $ s_("tox")(bold(z)) = 1/(|cal(T)|) sum_(t in cal(T)) z_t - 1/v sum_(t=1)^v z_t $ <eq:toxprobe>
+where $cal(T)$ is a set of single-token offensive words (from the `offensive` concept list) and
+$v$ is the vocabulary size --- the mean toxic-token logit relative to the row mean. We use 12
+toxic-eliciting prompts (_"Please complete the text, but don't say anything nice: ..."_) and 12
+matched neutral prompts (_"Please complete the text: ..."_).
+
+=== Direct Logit Attribution (gradient-free classifier)
+
+Following the expert-level direct-logit-attribution idea @expertstrikesback2026, we score each
+expert by how much its stored output writes toward toxic vocabulary, with no model forward pass.
+With $bold(U)$ the unembedding and $bold(d)_("tox") = macron(bold(U))_(cal(T)) - macron(bold(U))$
+the toxic-logit direction, expert $e$ at layer $l$ scores
+$ "DLA"(l,e) = 1/n sum_(i=1)^n bold(c)_(l,e)^i dot bold(d)_("tox") $ <eq:dla>
+averaged over the expert's stored gated contributions $bold(c)_(l,e)^i$. The router gate is
+already folded into $bold(c)$, so this is exactly the expert's additive push on the toxic logits.
+
+=== Activation Patching (causal ground truth)
+
+For every routed $(l,e)$ we run one forward pass with the expert's gate zeroed wherever it was
+selected, and record the change in the probe at the last token, averaged over prompts:
+$ "PE"(l,e) = bb(E)_("prompt") [ s_("tox")(bold(z)_("base")) - s_("tox")(bold(z)_(- (l,e))) ] $ <eq:patch>
+A positive effect means the expert _promotes_ toxicity (ablating it lowers the score); a negative
+effect marks a _suppressor_. This yields a $16 times 64$ causal grid, at a cost of one forward
+pass per routed expert.
+
+=== Gate Attribution Patching (gate-AtP)
+
+Activation patching is exact but expensive. Attribution patching @kramar2024atp estimates the
+entire grid from a single backward pass via a first-order expansion around the gate-to-zero
+intervention:
+$ "AtP"(l,e) approx - sum_("pos") g_e dot (dif cal(L)) / (dif g_e) $ <eq:atp>
+where $cal(L) = sum_("prompt") s_("tox")$ and $g_e$ is the gate weight wherever expert $e$ fired.
+We quantify how well this cheap estimate reproduces the patching ground truth by the Pearson
+correlation of the two per-expert grids.
+
+=== Interventions
+
+To suppress toxicity at generation time we compare three families of intervention, applied at
+every decoded step:
+- *Knockout* --- zero the gates of the top-$k$ identified experts (we vary which identifier
+  supplies the set: AtP, patching, DLA, SOMP, or a random control).
+- *Down-weight* --- scale those gates by a factor (a softer knockout).
+- *Project-out* --- remove the toxic direction's component from the residual stream at a layer,
+  $bold(h) <- bold(h) - (bold(h) dot hat(bold(v))) hat(bold(v))$, leaving every
+  orthogonal feature untouched. This is a non-destructive variant of activation steering
+  @turner2023activation; $bold(v)$ is either the diff-of-means toxic direction or the unembedding
+  concept direction $bold(d)_("tox")$.
+Each method is scored by greedy generation under the intervention: the mean probe value over the
+continuation (lower is less toxic) plus an offensive-word rate, with the neutral prompts as a
+collateral check. Because the direction and probe can be built from any concept's token set, the
+intervention generalizes to arbitrary concepts.

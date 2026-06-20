@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import torch
 
-from moe_interp.circuit.toxicity import right_padded, toxic_logit_score
+from moe_interp.circuit.toxicity import relative_logit_score, right_padded
 
 
 def gate_attribution(
@@ -56,7 +56,7 @@ def gate_attribution(
                 logits = model.output.logits
                 rows = torch.arange(logits.shape[0])
                 last = logits[rows, lengths - 1]
-                metric = toxic_logit_score(last, toxic_ids).sum()
+                metric = relative_logit_score(last, toxic_ids).sum()
                 # nnsight: backward() is a context manager; read .grad INSIDE it, in
                 # reverse execution order (see nnsight.net/features/3_gradients).
                 with metric.backward():
@@ -71,13 +71,3 @@ def gate_attribution(
                 contrib = (gate * grad).flatten()  # gate * dL/dgate, per (token, slot)
                 attr[layer_idx].index_add_(0, idx.flatten(), contrib)
     return attr
-
-
-def top_experts(attr: torch.Tensor, k: int = 15) -> list[tuple[int, int, float]]:
-    """Return the ``k`` (layer, expert, attribution) entries with the largest |attribution|."""
-    flat = attr.flatten()
-    order = flat.abs().argsort(descending=True)[:k]
-    n_experts = attr.shape[1]
-    return [
-        (int(i // n_experts), int(i % n_experts), float(flat[i])) for i in order.tolist()
-    ]
