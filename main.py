@@ -246,6 +246,7 @@ def main():
         from nnsight import LanguageModel
 
         from moe_interp.analysis.common import load_somp_results
+        from moe_interp.capture.cache import load_unembedding
         from moe_interp.circuit.attribution import gate_attribution
         from moe_interp.circuit.direction import collect_last_token_residuals
         from moe_interp.circuit.intervene import (
@@ -256,83 +257,85 @@ def main():
         )
         from moe_interp.circuit.prompts import default_prompts
         from moe_interp.circuit.toxicity import build_toxic_token_ids
-        from moe_interp.config import get_model_dir, get_pursuit_dir
+        from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
         from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
         model_name = args.model or get_default_model()
-        k = args.knockout_k
+        concept = args.concept
+        k, layer = args.knockout_k, args.steer_layer
         model = LanguageModel(
             model_name, device_map=str(get_device()), dtype="auto", dispatch=True
         )
         ne = model.config.num_local_experts
-        toxic, neutral = default_prompts(model.tokenizer)
-        toxic_ids = build_toxic_token_ids(model.tokenizer)
+        eliciting, neutral = default_prompts(model.tokenizer)
+        concept_words = CONCEPT_WORDS[concept]
+        concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
         md = get_model_dir(model_name)
 
-        def topk_grid(grid: np.ndarray) -> list[tuple[int, int]]:
-            order = np.argsort(-grid.flatten())[:k]
-            return [(int(i // ne), int(i % ne)) for i in order]
+        # Concept direction in residual space, from the unembedding (prompt-free, generic).
+        U = load_unembedding(get_unembedding_dir(model_name) / "dictionary.h5").float()
+        concept_dir = U[concept_ids].mean(0) - U.mean(0)
 
-        # --- candidate toxic-expert sets from each identification method ---
-        sets: dict[str, list[tuple[int, int]]] = {}
-        atp = gate_attribution(model, toxic, toxic_ids, batch_size=args.batch_size)
-        sets["AtP"] = topk_grid(atp.numpy())
-        for name, rel in [("patching", "patching/patching_grid.npy"),
-                          ("DLA", "dla/pile10k/dla_grid.npy")]:
-            p = md / "circuit" / rel
-            if p.exists():
-                sets[name] = topk_grid(np.load(p))
-        # SOMP: experts whose pursuit atoms most overlap the offensive lexicon
-        pursuit_dir = get_pursuit_dir(model_name, "pile10k")
-        if (pursuit_dir / "results.jsonl").exists():
-            offensive = {w.lower() for w in CONCEPT_WORDS["offensive"]}
-            somp = load_somp_results(pursuit_dir)
-            scored = sorted(
-                ((sum(t.strip().lower() in offensive for t in r.get("tokens", [])), le)
-                 for le, r in somp.items()),
-                reverse=True,
-            )
-            sets["SOMP"] = [le for s, le in scored[:k] if s > 0]
-        # random control matched to AtP's layers
-        rng = random.Random(0)
-        used = set(sets["AtP"])
-        rand = []
-        for layer, _ in sets["AtP"]:
-            while (layer, e := rng.randrange(ne)) in used:
-                pass
-            used.add((layer, e))
-            rand.append((layer, e))
-        sets["random"] = rand
-
-        # --- steering direction (diff-of-means) ---
-        layer, alpha = args.steer_layer, args.steer_alpha
-        v = collect_last_token_residuals(model, toxic, layer).mean(0) - (
-            collect_last_token_residuals(model, neutral, layer).mean(0)
-        )
-
-        # --- methods: vary the ID method (all knockout) + the intervention strength ---
         methods: dict = {"baseline": None}
-        for name, experts in sets.items():
-            methods[f"{name}-knockout"] = knockout_intervention(experts)
-        methods["AtP-downweight0.5"] = downweight_intervention(sets["AtP"], 0.5)
-        methods[f"projectout-v@L{layer}"] = projectout_intervention(layer, v)
+        meta_sets: dict = {}
+        # Causal expert-knockout comparison needs prompts that ELICIT the concept; our seeds
+        # only elicit toxicity, so the expert sets + diff-of-means are run for that concept.
+        if concept == "offensive":
+            def topk_grid(grid):
+                order = np.argsort(-grid.flatten())[:k]
+                return [(int(i // ne), int(i % ne)) for i in order]
+
+            sets = {"AtP": topk_grid(
+                gate_attribution(model, eliciting, concept_ids, batch_size=args.batch_size).numpy())}
+            for name, rel in [("patching", "patching/patching_grid.npy"),
+                              ("DLA", "dla/pile10k/dla_grid.npy")]:
+                p = md / "circuit" / rel
+                if p.exists():
+                    sets[name] = topk_grid(np.nan_to_num(np.load(p)))
+            pursuit_dir = get_pursuit_dir(model_name, "pile10k")
+            if (pursuit_dir / "results.jsonl").exists():
+                lex = {w.lower() for w in concept_words}
+                somp = load_somp_results(pursuit_dir)
+                scored = sorted(((sum(t.strip().lower() in lex for t in r.get("tokens", [])), le)
+                                 for le, r in somp.items()), reverse=True)
+                sets["SOMP"] = [le for s, le in scored[:k] if s > 0]
+            rng = random.Random(0)
+            used = set(sets["AtP"])
+            rand = []
+            for ly, _ in sets["AtP"]:
+                while (ly, e := rng.randrange(ne)) in used:
+                    pass
+                used.add((ly, e))
+                rand.append((ly, e))
+            sets["random"] = rand
+            for name, experts in sets.items():
+                methods[f"{name}-knockout"] = knockout_intervention(experts)
+            methods["AtP-downweight0.5"] = downweight_intervention(sets["AtP"], 0.5)
+            meta_sets = sets
+            # diff-of-means direction (validated for toxicity)
+            steer_dir = collect_last_token_residuals(model, eliciting, layer).mean(0) - (
+                collect_last_token_residuals(model, neutral, layer).mean(0))
+        else:
+            steer_dir = concept_dir  # generic concepts: project out the unembedding direction
+
+        methods[f"projectout@L{layer}"] = projectout_intervention(layer, steer_dir)
 
         res = run_intervention_experiment(
-            model, toxic, neutral, toxic_ids, methods, max_new_tokens=args.max_new_tokens
+            model, eliciting, neutral, concept_ids, methods,
+            concept_words=concept_words, max_new_tokens=args.max_new_tokens,
         )
-        res["_meta"] = {"k": k, "sets": {n: s for n, s in sets.items()},
-                        "steer_layer": layer, "steer_alpha": alpha}
+        res["_meta"] = {"concept": concept, "k": k, "steer_layer": layer, "sets": meta_sets}
 
         out_dir = md / "circuit" / "steer"
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "intervention.json").write_text(json.dumps(res, indent=2))
-        base = res["baseline"]["toxic_propensity"]
-        print(f"toxic propensity (baseline={base:+.3f}; lower = less toxic):")
+        base = res["baseline"]["eliciting_propensity"]
+        print(f"{concept} propensity (baseline={base:+.3f}; lower = less '{concept}'):")
         for name, b in res.items():
             if name == "_meta":
                 continue
-            print(f"  {name:22s} toxic={b['toxic_propensity']:+.3f}  "
-                  f"neutral={b['neutral_propensity']:+.3f}  off-word-frac={b['toxic_toxic_frac']:.2f}")
+            print(f"  {name:22s} elic={b['eliciting_propensity']:+.3f}  "
+                  f"neutral={b['neutral_propensity']:+.3f}  word-frac={b['eliciting_word_frac']:.2f}")
         print(f"Saved intervention results to {out_dir}")
 
     elif args.command == "circuit-report":

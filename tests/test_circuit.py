@@ -22,10 +22,10 @@ def test_faithfulness_recovers_known_correlation():
     assert abs(scores["flat"]["pooled_r"]) < 1e-6
 
 
-def test_offensive_regex_matches_whole_words():
+def test_concept_regex_matches_whole_words():
     from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
-    pat = intervene._offensive_regex()
+    pat = intervene.concept_regex(CONCEPT_WORDS["offensive"])
     word = CONCEPT_WORDS["offensive"][0]
-    assert pat.findall(f"there was {word} reported")  # whole offensive word matches
-    assert not pat.findall("xqzv nonsense filler text")  # nothing offensive => no match
+    assert pat.findall(f"there was {word} reported")  # whole concept word matches
+    assert not pat.findall("xqzv nonsense filler text")  # nothing matches => empty

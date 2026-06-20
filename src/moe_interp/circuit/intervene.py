@@ -100,14 +100,14 @@ def generate(model, ids: list[int], max_new_tokens: int, intervention: Callable 
     return out[0].tolist()[len(ids):]
 
 
-def toxic_propensity(
-    model, ids: list[int], cont: list[int], toxic_ids: list[int], intervention: Callable | None
+def concept_propensity(
+    model, ids: list[int], cont: list[int], concept_ids: list[int], intervention: Callable | None
 ) -> float:
-    """Mean toxic-logit score over the continuation, intervention active (one trace).
+    """Mean concept-logit score over the continuation, intervention active (one trace).
 
-    The sensitive probe: how much the model elevates toxic tokens along the text it actually
-    produced. (EOS-safe fixed-length generation means this never interleaves a trace inside
-    an active generate.)
+    The sensitive probe: how much the model elevates the concept's tokens along the text it
+    actually produced. (EOS-safe fixed-length generation means this never interleaves a trace
+    inside an active generate.)
     """
     full = ids + cont
     with torch.no_grad(), model.trace([full]):
@@ -117,48 +117,51 @@ def toxic_propensity(
     seq = logits[0].float().cpu()  # (T, V); positions len(ids)-1 .. T-2 predict the continuation
     pos = range(len(ids) - 1, len(full) - 1)
     return float(
-        sum(float(toxic_logit_score(seq[p : p + 1], toxic_ids)) for p in pos) / max(len(pos), 1)
+        sum(float(toxic_logit_score(seq[p : p + 1], concept_ids)) for p in pos) / max(len(pos), 1)
     )
 
 
-def _offensive_regex() -> re.Pattern:
-    """Whole-word, case-insensitive matcher for the offensive lexicon."""
-    words = sorted(CONCEPT_WORDS["offensive"], key=len, reverse=True)
-    return re.compile(r"\b(" + "|".join(re.escape(w) for w in words) + r")\b", re.I)
+def concept_regex(words: list[str]) -> re.Pattern:
+    """Whole-word, case-insensitive matcher for a concept lexicon."""
+    return re.compile(
+        r"\b(" + "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True)) + r")\b",
+        re.I,
+    )
 
 
 def run_intervention_experiment(
     model,
-    toxic_prompts: list[list[int]],
+    eliciting_prompts: list[list[int]],
     neutral_prompts: list[list[int]],
-    toxic_ids: list[int],
+    concept_ids: list[int],
     methods: dict[str, Callable | None],
     *,
+    concept_words: list[str] | None = None,
     max_new_tokens: int = 32,
     n_examples: int = 4,
 ) -> dict:
-    """Generate + score every method on toxic and neutral prompts.
+    """Generate + score every method on concept-eliciting and neutral prompts.
 
     ``methods`` maps a name to an intervention callable (``None`` = baseline). Returns, per
-    method and prompt set, the mean toxic-logit propensity (sensitive probe) and the
-    offensive-word rate in the generated text, plus a few example toxic-prompt continuations.
+    method and prompt set, the mean concept-logit propensity (sensitive probe) and the
+    concept-word rate in the generated text, plus a few example eliciting-prompt continuations.
     """
     tok = model.tokenizer
-    pattern = _offensive_regex()
+    pattern = concept_regex(concept_words or CONCEPT_WORDS["offensive"])
     results: dict[str, dict] = {}
     for name, intervention in methods.items():
         block: dict[str, object] = {}
-        for setname, prompts in (("toxic", toxic_prompts), ("neutral", neutral_prompts)):
+        for setname, prompts in (("eliciting", eliciting_prompts), ("neutral", neutral_prompts)):
             print(f"  [{name} / {setname}] generating {len(prompts)} ...", flush=True)
             props, counts, examples = [], [], []
             for j, ids in enumerate(prompts):
                 cont = generate(model, ids, max_new_tokens, intervention)
-                props.append(toxic_propensity(model, ids, cont, toxic_ids, intervention))
+                props.append(concept_propensity(model, ids, cont, concept_ids, intervention))
                 counts.append(len(pattern.findall(tok.decode(cont))))
-                if setname == "toxic" and j < n_examples:
+                if setname == "eliciting" and j < n_examples:
                     examples.append(tok.decode(cont).strip())
             block[f"{setname}_propensity"] = float(sum(props) / max(len(props), 1))
-            block[f"{setname}_toxic_frac"] = float(sum(c > 0 for c in counts) / max(len(counts), 1))
+            block[f"{setname}_word_frac"] = float(sum(c > 0 for c in counts) / max(len(counts), 1))
             if examples:
                 block["examples"] = examples
         results[name] = block

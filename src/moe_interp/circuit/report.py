@@ -94,27 +94,27 @@ def build_report(model_name: str) -> Path:
         parts.append('<p class="note">gate-AtP (one backward pass) predicts the expensive '
                      "patching grid best; direction-based methods only track it at the final layer.</p>")
 
-    # 3. Causal intervention: suppress toxic generation
+    # 3. Causal intervention: suppress the concept during generation
     iv = load_json(cdir / "steer" / "intervention.json")
     if iv:
-        parts.append('<h2 id="steer">Suppressing toxic generation</h2>')
-        meta = iv.get("_meta", {})
+        concept = iv.get("_meta", {}).get("concept", "toxic")
+        parts.append(f'<h2 id="steer">Suppressing "{concept}" generation</h2>')
         rows, methods = [], [m for m in iv if m != "_meta"]
-        base = iv.get("baseline", {}).get("toxic_propensity", 0.0)
+        base = iv.get("baseline", {}).get("eliciting_propensity", 0.0)
         for m in methods:
             b = iv[m]
-            drop = base - b.get("toxic_propensity", 0.0)
-            rows.append([m, f"{b.get('toxic_propensity', 0):+.3f}",
+            drop = base - b.get("eliciting_propensity", 0.0)
+            rows.append([m, f"{b.get('eliciting_propensity', 0):+.3f}",
                          f"{drop:+.3f}", f"{b.get('neutral_propensity', 0):+.3f}",
-                         f"{b.get('toxic_toxic_frac', 0):.2f}"])
+                         f"{b.get('eliciting_word_frac', 0):.2f}"])
         parts.append(_table(
-            ["method", "toxic propensity", "Δ vs baseline", "neutral propensity", "off-word frac"], rows))
-        parts.append('<p class="note">Lower toxic propensity = less toxic; the neutral column '
+            ["method", "concept propensity", "Δ vs baseline", "neutral propensity", "word frac"], rows))
+        parts.append('<p class="note">Lower propensity = less of the concept; the neutral column '
                      "is the collateral check (should stay near baseline). Δ &gt; 0 means the "
-                     "intervention reduced toxicity.</p>")
-        # example generations: baseline vs the best knockout
-        kos = [m for m in methods if "knockout" in m]
-        best = min(kos, key=lambda m: iv[m].get("toxic_propensity", 0.0), default=None)
+                     "intervention suppressed the concept.</p>")
+        # example generations: baseline vs the best intervention
+        others = [m for m in methods if m != "baseline"]
+        best = min(others, key=lambda m: iv[m].get("eliciting_propensity", 0.0), default=None)
         for label in [m for m in ("baseline", best) if m]:
             ex = iv[label].get("examples", [])
             if ex:

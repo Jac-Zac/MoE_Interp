@@ -4,6 +4,7 @@ import argparse
 
 from moe_interp.config import get_default_model
 from moe_interp.io.data import DATASET_SPECS
+from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -185,10 +186,15 @@ def build_parser() -> argparse.ArgumentParser:
     steer_parser.add_argument("--model", type=str, default=None)
     steer_parser.add_argument("--batch_size", type=int, default=8)
     steer_parser.add_argument(
+        "--concept", type=str, default="offensive", choices=sorted(CONCEPT_WORDS),
+        help="Concept to suppress (default: offensive). Non-toxicity concepts use the "
+        "unembedding direction + project-out; the expert-knockout comparison runs only for "
+        "'offensive' (the seed prompts only elicit toxicity).",
+    )
+    steer_parser.add_argument(
         "--knockout_k", type=int, default=15, help="How many top gate-AtP experts to knock out"
     )
     steer_parser.add_argument("--steer_layer", type=int, default=12)
-    steer_parser.add_argument("--steer_alpha", type=float, default=8.0)
     steer_parser.add_argument("--max_new_tokens", type=int, default=24)
 
     # circuit-report: assemble all circuit artifacts into one HTML report (no model)
