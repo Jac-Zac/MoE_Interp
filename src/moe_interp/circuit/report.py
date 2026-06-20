@@ -62,6 +62,37 @@ def build_report(model_name: str) -> Path:
     def load_json(p: Path):
         return json.loads(p.read_text()) if p.exists() else None
 
+    # 0. Overview — the pipeline, techniques, and headline findings
+    parts.append('<h2 id="overview">Overview</h2>')
+    parts.append(
+        '<p>A causal study of <b>which experts make OLMoE generate toxic text, and how to '
+        "stop it</b>, in three stages: <b>classify</b> experts by toxicity association, "
+        "<b>localize</b> the causally responsible ones, and <b>intervene</b> during "
+        "generation to suppress toxicity. All run locally on Apple MPS.</p>"
+    )
+    parts.append(_table(
+        ["stage", "technique", "what it does", "causal?"],
+        [
+            ["classify", "SOMP / Expert Pursuit", "experts whose pursuit atoms are offensive words", "no"],
+            ["classify", "DLA (no model)", "experts that write toward toxic vocabulary, from stored activations", "no"],
+            ["localize", "activation patching", "ablate every expert's gate, measure Δ toxic-logit (ground truth)", "yes"],
+            ["localize", "gate-AtP", "one backward pass estimates the whole patching grid (gate·dL/dgate)", "yes"],
+            ["intervene", "knockout / down-weight", "zero or scale the gate of the top causal experts during generation", "yes"],
+            ["intervene", "project-out", "remove the toxic direction from the residual stream each step", "yes"],
+        ],
+    ))
+    parts.append(
+        '<p class="note"><b>Headline findings.</b> (1) Causally important experts span all '
+        "depths, including <i>suppressor</i> experts that <i>raise</i> toxicity when removed. "
+        "(2) gate-AtP faithfully predicts the expensive patching grid (Pearson r≈0.80) in one "
+        "backward pass. (3) Correlational classifiers (SOMP, DLA) flag toxicity-<i>associated</i> "
+        "experts, but knocking them out does nothing — only the causally-identified (AtP / "
+        "patching) experts suppress toxicity when removed. (4) <b>Project-out is the best "
+        "suppressor</b>: it lowers toxic propensity the most while keeping generation fluent, "
+        "where knockout is blunt and naive additive steering breaks the model. The intervention "
+        "generalizes to any concept via <code>circuit-steer --concept</code>.</p>"
+    )
+
     # 1. Expert identification (causal patching grid + DLA grid + top tables)
     parts.append('<h2 id="id">Identifying toxic experts</h2>')
     pg = cdir / "patching" / "patching_grid.npy"
@@ -121,8 +152,8 @@ def build_report(model_name: str) -> Path:
                 parts.append(f"<h3>{label} — example continuations</h3>")
                 parts.extend(f'<div class="ex">{e}</div>' for e in ex[:4])
 
-    nav = ('<nav><a href="#id">Identify</a> · <a href="#faith">Faithfulness</a> · '
-           '<a href="#steer">Intervene</a></nav>')
+    nav = ('<nav><a href="#overview">Overview</a> · <a href="#id">Identify</a> · '
+           '<a href="#faith">Faithfulness</a> · <a href="#steer">Intervene</a></nav>')
     body = nav + "".join(parts)
     html = (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
