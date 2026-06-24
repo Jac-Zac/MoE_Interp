@@ -23,6 +23,7 @@ from pathlib import Path
 import torch
 
 from moe_interp.analysis.common import iter_expert_activations, load_analysis_inputs
+from moe_interp.grids import top_experts
 from moe_interp.pursuit.concepts import build_toxic_token_ids
 
 
@@ -60,17 +61,10 @@ def dla_toxic_grid(
     ):
         grid[layer, expert] = float((A.double() @ tdir).mean())
 
-    flat = grid.flatten()
-    order = torch.argsort(torch.nan_to_num(flat, nan=-1e30), descending=True)
     top = [
-        {
-            "layer": int(i // n_experts),
-            "expert": int(i % n_experts),
-            "score": float(flat[i]),
-        }
-        for i in order.tolist()
-        if not torch.isnan(flat[i])
-    ][:25]
+        {"layer": layer, "expert": e, "score": v}
+        for layer, e, v in top_experts(grid, 25, by="signed")
+    ]
     return {
         "grid": grid,
         "top": top,

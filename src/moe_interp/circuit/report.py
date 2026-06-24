@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 
+from moe_interp.circuit.compare import faithfulness_bar
 from moe_interp.config import get_model_dir
 from moe_interp.io.plots import diverging_expert_heatmap
 
@@ -98,8 +99,8 @@ def build_report(model_name: str) -> Path:
                 ],
                 [
                     "intervene",
-                    "knockout / down-weight",
-                    "zero or scale the gate of the top causal experts during generation",
+                    "knockout",
+                    "zero the gate of the top causal experts during generation",
                     "yes",
                 ],
                 [
@@ -207,14 +208,15 @@ def build_report(model_name: str) -> Path:
     fa = load_json(cdir / "compare" / "faithfulness.json")
     if fa:
         parts.append("<h3>Which cheap method predicts the causal grid?</h3>")
-        names = list(fa)
-        bar = go.Figure(go.Bar(x=names, y=[fa[n]["pooled_r"] for n in names]))
-        bar.update_layout(
-            title="Attributor faithfulness vs causal patching",
-            yaxis_title="Pearson r",
-            height=380,
+        parts.append(
+            fig(
+                faithfulness_bar(
+                    fa,
+                    title="Attributor faithfulness vs causal patching",
+                    height=380,
+                )
+            )
         )
-        parts.append(fig(bar))
         parts.append(
             '<p class="note"><b>gate-AtP (one backward pass) faithfully predicts the '
             "expensive patching grid</b> (pooled r≈0.80, per-layer up to 0.98); the "

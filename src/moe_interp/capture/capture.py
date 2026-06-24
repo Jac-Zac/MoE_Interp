@@ -7,13 +7,7 @@ import h5py
 import torch
 import torch.nn.functional as F
 from datasets import Dataset
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeRemainingColumn,
-)
+from tqdm import tqdm
 
 from moe_interp.capture.cache import (
     append_to_file,
@@ -32,35 +26,6 @@ def token_real_mask(prompt_lengths, max_len: int) -> torch.Tensor:
     lengths = torch.as_tensor(prompt_lengths, dtype=torch.long)
     flat = torch.arange(len(lengths) * max_len)
     return (flat % max_len) < lengths[flat // max_len]
-
-
-def flush_pending_writes(
-    pending_writes: dict[
-        tuple[int, int],
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-    ],
-    layer_files: dict[int, h5py.File],
-    max_rows_per_expert: int | None = None,
-) -> None:
-    """Append each (layer, expert)'s staged tensors to its HDF5 file.
-
-    ``max_rows_per_expert`` caps the rows kept per expert (truncating once full) so
-    all-token captures stay bounded on disk."""
-    for (layer_idx, expert_id), (
-        acts,
-        tokens,
-        weights,
-        positions,
-    ) in pending_writes.items():
-        append_to_file(
-            layer_files[layer_idx],
-            expert_id,
-            acts,
-            tokens,
-            routing_weights=weights,
-            positions=positions,
-            max_rows=max_rows_per_expert,
-        )
 
 
 def prepare_prompts_dataset(prompts: Dataset | list[list[int]]) -> Dataset:
@@ -157,8 +122,18 @@ def _capture_batch(
             norm_weight=norm_weight,
             norm_eps=norm_eps,
         )
-        pending = {(layer_idx, e): rows for e, rows in contributions.items()}
-        flush_pending_writes(pending, layer_files, max_rows_per_expert)
+        # Append each expert's staged rows to its HDF5 file (max_rows_per_expert caps
+        # rows per expert so all-token captures stay bounded on disk).
+        for e, (acts, tokens, weights, positions) in contributions.items():
+            append_to_file(
+                layer_files[layer_idx],
+                e,
+                acts,
+                tokens,
+                routing_weights=weights,
+                positions=positions,
+                max_rows=max_rows_per_expert,
+            )
     return b_size
 
 
@@ -194,26 +169,18 @@ def capture_expert_activations(
     adapter = get_model_adapter(model)
     ds = prepare_prompts_dataset(prompts)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeRemainingColumn(),
-    ) as progress:
-        task = progress.add_task("Capturing prompts", total=len(ds))
+    layer_files: dict[int, h5py.File] = {}
+    if is_rank0():
+        layer_files = {
+            i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
+            for i in range(adapter.n_layers)
+        }
 
-        layer_files: dict[int, h5py.File] = {}
-        if is_rank0():
-            layer_files = {
-                i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
-                for i in range(adapter.n_layers)
-            }
-
-        # Right-pad so token positions are preserved (RoPE stays correct)
-        original_padding_side = model.tokenizer.padding_side
-        model.tokenizer.padding_side = "right"
-        try:
+    # Right-pad so token positions are preserved (RoPE stays correct)
+    original_padding_side = model.tokenizer.padding_side
+    model.tokenizer.padding_side = "right"
+    try:
+        with tqdm(total=len(ds), desc="Capturing prompts") as progress:
             for batch in ds.iter(batch_size=batch_size):
                 b_size = _capture_batch(
                     model=model,
@@ -225,11 +192,11 @@ def capture_expert_activations(
                     token_selection=token_selection,
                     max_rows_per_expert=max_rows_per_expert,
                 )
-                progress.advance(task, b_size)
-        finally:
-            model.tokenizer.padding_side = original_padding_side
-            for f in layer_files.values():
-                f.close()
+                progress.update(b_size)
+    finally:
+        model.tokenizer.padding_side = original_padding_side
+        for f in layer_files.values():
+            f.close()
 
     metadata = {
         "model_name": model_name,

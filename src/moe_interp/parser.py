@@ -214,38 +214,6 @@ def build_parser() -> argparse.ArgumentParser:
     steer_parser.add_argument("--steer_layer", type=int, default=12)
     steer_parser.add_argument("--max_new_tokens", type=int, default=24)
 
-    # circuit-edit: Boundary-B precision edits inside a gate-AtP-flagged expert
-    edit_parser = subparsers.add_parser(
-        "circuit-edit",
-        help="Edit inside one causal expert: zero its toxic neurons / project its output "
-        "off the toxic direction, vs baseline",
-    )
-    edit_parser.add_argument("--model", type=str, default=None)
-    edit_parser.add_argument("--batch_size", type=int, default=8)
-    edit_parser.add_argument(
-        "--concept",
-        type=str,
-        default="offensive",
-        choices=sorted(CONCEPT_WORDS),
-        help="Concept to suppress (default: offensive)",
-    )
-    edit_parser.add_argument(
-        "--layer",
-        type=int,
-        default=None,
-        help="Expert layer to edit (default: top gate-AtP promoter)",
-    )
-    edit_parser.add_argument(
-        "--expert",
-        type=int,
-        default=None,
-        help="Expert index to edit (default: top gate-AtP promoter)",
-    )
-    edit_parser.add_argument(
-        "--top_neurons", type=int, default=20, help="How many toxic neurons to zero"
-    )
-    edit_parser.add_argument("--max_new_tokens", type=int, default=24)
-
     # circuit-report: assemble all circuit artifacts into one HTML report (no model)
     report_parser = subparsers.add_parser(
         "circuit-report", help="Build the self-contained toxic-circuit HTML report"

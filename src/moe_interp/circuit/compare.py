@@ -35,13 +35,18 @@ def faithfulness(
     return out
 
 
-def plot_faithfulness(scores: dict[str, dict], output_path, *, title: str) -> None:
-    """Bar chart of pooled faithfulness r per method."""
+def faithfulness_bar(scores: dict[str, dict], *, title: str, height: int = 400):
+    """Bar chart figure of pooled faithfulness r per method (shared with the report)."""
     import plotly.graph_objects as go
 
     names = list(scores)
     fig = go.Figure(go.Bar(x=names, y=[scores[n]["pooled_r"] for n in names]))
     fig.update_layout(
-        title=title, yaxis_title="Pearson r vs causal patching", height=400
+        title=title, yaxis_title="Pearson r vs causal patching", height=height
     )
-    fig.write_html(str(output_path))
+    return fig
+
+
+def plot_faithfulness(scores: dict[str, dict], output_path, *, title: str) -> None:
+    """Write the pooled-faithfulness bar chart to ``output_path`` as standalone HTML."""
+    faithfulness_bar(scores, title=title).write_html(str(output_path))

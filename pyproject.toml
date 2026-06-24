@@ -1,7 +1,7 @@
 [project]
 name = "moe-interp"
 version = "0.1.0"
-description = "Expert Pursuit: Probing Expert Specialization in MoE Models"
+description = "MoE interpretability: Expert Pursuit + causal toxic-expert circuits"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

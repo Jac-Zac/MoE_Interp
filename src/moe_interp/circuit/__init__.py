@@ -9,8 +9,7 @@ we suppress toxicity by acting on them? Modules:
 - ``attribution`` — gate-AtP: gradient estimate of the whole grid in one backward pass.
 - ``compare``     — faithfulness of cheap attributors vs the causal patching grid.
 - ``direction``   — diff-of-means toxic direction (last-token residual readout).
-- ``intervene``   — generation-time knockout / down-weight / steer to suppress toxicity.
-- ``expert_edit`` — Boundary-B precision: local neuron-AtP + surgical in-expert edits.
+- ``intervene``   — generation-time knockout / project-out to suppress toxicity.
 - ``report``      — assembles the artifacts into one self-contained HTML report.
 
 The gradient-free expert *classifier* counterpart (no model) is

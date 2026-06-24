@@ -10,9 +10,6 @@ at the last prompt position and score it with a concept-logit probe.
 - ``relative_logit_score`` / ``Metric`` — the probe (see ``relative_logit_score``).
 - ``right_padded`` / ``scorer`` — shared trace plumbing, reused by ``patching`` (the
   per-expert grid) and ``attribution`` (gate-AtP).
-- ``run_set_ablation`` — ablate a *whole flagged set jointly* vs matched random control
-  sets, reporting a z-score: the significance test for an identified circuit (e.g. the
-  top-k gate-AtP experts), which the marginal per-expert patching grid cannot give.
 
 The boundary tap mirrors ``capture.py``: ``layer.mlp.experts.inputs[0]`` yields
 ``(hidden_states, top_k_index, top_k_weights)`` for the fused experts module, which is
@@ -24,7 +21,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 
 import torch
 
@@ -42,18 +38,6 @@ def right_padded(model) -> Iterator[None]:
         yield
     finally:
         model.tokenizer.padding_side = original
-
-
-@dataclass
-class SetAblationResult:
-    """Ablating a flagged expert set vs ``n`` matched random control sets."""
-
-    flagged_delta: float
-    control_deltas: list[float]
-    control_mean: float
-    control_std: float
-    zscore: float  # (flagged - control_mean) / control_std
-    percentile: float  # fraction of control sets the flagged set beats
 
 
 def relative_logit_score(
@@ -109,54 +93,3 @@ def scorer(
         )
 
     return score
-
-
-def run_set_ablation(
-    model,
-    prompts: list[list[int]],
-    flagged: list[tuple[int, int]],
-    toxic_ids: list[int],
-    n_controls: int = 30,
-    batch_size: int = 8,
-    metric: Metric = relative_logit_score,
-    seed: int = 1337,
-) -> SetAblationResult:
-    """Ablate the whole flagged set vs random control sets matched in size & layers.
-
-    Each control draws, for every flagged ``(layer, expert)``, a different random expert
-    in the *same layer* — so layer position and set size are held fixed and only the
-    identity of the experts varies. A large positive z-score means the flagged experts
-    drive the toxic probe well beyond what arbitrary same-layer experts do.
-    """
-    n_experts = model.config.num_local_experts
-    gen = torch.Generator().manual_seed(seed)
-    flagged_layers = [layer for layer, _ in flagged]
-    flagged_set = {(layer, e) for layer, e in flagged}
-
-    with right_padded(model):
-        score = scorer(model, prompts, toxic_ids, metric, batch_size)
-        base = score(None)
-
-        flagged_delta = float((base - score(flagged)).mean())
-
-        control_deltas: list[float] = []
-        for _ in range(n_controls):
-            ctrl: list[tuple[int, int]] = []
-            for layer in flagged_layers:
-                while True:
-                    e = int(torch.randint(n_experts, (1,), generator=gen).item())
-                    if (layer, e) not in flagged_set and (layer, e) not in ctrl:
-                        break
-                ctrl.append((layer, e))
-            control_deltas.append(float((base - score(ctrl)).mean()))
-
-        cd = torch.tensor(control_deltas)
-        std = float(cd.std(unbiased=False)) or 1e-9
-        return SetAblationResult(
-            flagged_delta=flagged_delta,
-            control_deltas=control_deltas,
-            control_mean=float(cd.mean()),
-            control_std=float(cd.std(unbiased=False)),
-            zscore=(flagged_delta - float(cd.mean())) / std,
-            percentile=float((cd < flagged_delta).float().mean()),
-        )

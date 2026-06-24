@@ -1,7 +1,12 @@
 # Interpretability of Mixture-of-Experts (MoE)
 
-**Expert Pursuit**: An adaptation of the [HeadPursuit](https://github.com/lorenzobasile/HeadPursuit) framework to MoE models.
-Projects expert activations onto the unembedding dictionary to identify which experts specialize in which semantic concepts.
+Two complementary studies of expert specialization in MoE models:
+
+1. **Expert Pursuit** — an adaptation of the [HeadPursuit](https://github.com/lorenzobasile/HeadPursuit)
+   framework to MoE: projects expert activations onto the unembedding dictionary to identify which
+   experts *associate* with which semantic concepts (descriptive / correlational).
+2. **Causal toxic-expert circuit** — which experts *causally* drive toxic generations (activation
+   patching + gate-AtP), and how to suppress them at generation time (knockout / project-out).
 
 Target model: `allenai/OLMoE-1B-7B-0924-Instruct` (16 layers, 64 experts/layer, top-8 routing)
 
@@ -28,6 +33,17 @@ python main.py analysis --dataset pile10k  # logit-lens baseline vs SOMP
 token-selection modes, concept restriction, and all flags are documented in
 [docs/](docs/README.md).
 
+The causal circuit study reuses the captured activations and adds a model-in-the-loop
+pipeline (see [docs/circuit.md](docs/circuit.md)):
+
+```bash
+python main.py circuit                      # causal activation-patching grid (ground truth)
+python main.py circuit-compare              # gate-AtP (1 backward pass) vs the patching grid
+python main.py toxic-dla                    # gradient-free DLA classifier (no model)
+python main.py circuit-steer                # suppress toxicity: knockout / project-out vs baseline
+python main.py circuit-report               # assemble all circuit artifacts into one HTML report
+```
+
 ## Project Structure
 
 ```
@@ -49,10 +65,22 @@ token-selection modes, concept restriction, and all flags are documented in
 │   │   └── dictionary.py              # Dictionary augmentation utilities
 │   ├── analysis/
 │   │   ├── common.py                  # Shared loaders for the post-hoc analyses
-│   │   └── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
+│   │   ├── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
+│   │   └── toxic_dla.py               # Gradient-free toxic-expert classifier (no model)
+│   ├── circuit/                       # Causal toxic-expert study (model in the loop)
+│   │   ├── prompts.py                 # Toxic-eliciting + matched neutral prompts
+│   │   ├── toxicity.py                # Toxic-logit probe + shared gate-ablation plumbing
+│   │   ├── patching.py                # Per-(layer,expert) causal effect grid
+│   │   ├── attribution.py             # gate-AtP: whole grid in one backward pass
+│   │   ├── compare.py                 # Faithfulness of attributors vs patching
+│   │   ├── direction.py               # Diff-of-means toxic direction
+│   │   ├── intervene.py               # Generation-time knockout / project-out
+│   │   ├── steer.py                   # circuit-steer orchestration
+│   │   └── report.py                  # Self-contained HTML circuit report
 │   ├── io/
 │   │   ├── data.py                    # Dataset loading + chat-template formatting
 │   │   └── plots.py                   # Plotly EVR/count heatmaps
+│   ├── grids.py                       # top-k helper for layer×expert score grids
 │   ├── config.py                      # Env loading, device selection, seeds
 │   └── parser.py                      # CLI argument parser
 ├── tests/

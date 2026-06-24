@@ -1,12 +1,12 @@
 """Orchestrates the generation-time intervention experiment (the ``circuit-steer`` CLI).
 
 Builds the set of methods to compare — baseline, the causal/correlational expert
-knockouts, a matched random control, an AtP down-weight, and the project-out direction
-edit — then runs them all through :func:`run_intervention_experiment`. For the
-``offensive`` concept the expert sets come from the artifacts produced by the other
-``circuit`` commands (gate-AtP, the patching grid, DLA) and the SOMP results; other
-concepts only get the generic project-out of the unembedding concept direction, because
-the seed prompts only reliably elicit toxicity.
+knockouts, a matched random control, and the project-out direction edit — then runs them
+all through :func:`run_intervention_experiment`. For the ``offensive`` concept the expert
+sets come from the artifacts produced by the other ``circuit`` commands (gate-AtP, the
+patching grid, DLA) and the SOMP results; other concepts only get the generic project-out
+of the unembedding concept direction, because the seed prompts only reliably elicit
+toxicity.
 """
 
 from __future__ import annotations
@@ -20,13 +20,13 @@ from moe_interp.capture.cache import load_unembedding
 from moe_interp.circuit.attribution import gate_attribution
 from moe_interp.circuit.direction import collect_last_token_residuals
 from moe_interp.circuit.intervene import (
-    downweight_intervention,
     knockout_intervention,
     projectout_intervention,
     run_intervention_experiment,
 )
 from moe_interp.circuit.prompts import default_prompts
 from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
+from moe_interp.grids import top_experts
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
 
 
@@ -45,16 +45,21 @@ def _offensive_expert_sets(
     md = get_model_dir(model_name)
 
     def topk_grid(grid: np.ndarray) -> list[tuple[int, int]]:
-        order = np.argsort(-grid.flatten())[:k]
-        return [(int(i // ne), int(i % ne)) for i in order]
+        return [(layer, e) for layer, e, _ in top_experts(grid, k, by="signed")]
 
-    sets: dict[str, list[tuple[int, int]]] = {
-        "AtP": topk_grid(
-            gate_attribution(
-                model, eliciting, concept_ids, batch_size=batch_size
-            ).numpy()
-        )
-    }
+    # gate-AtP over the seed prompts: cache the grid so reruns (e.g. a different
+    # --knockout_k) skip the backward pass. Keyed under the model dir, so it's the
+    # offensive/seeds grid this command always builds.
+    atp_path = md / "circuit" / "attribution" / "atp_grid.npy"
+    if atp_path.exists():
+        atp = np.load(atp_path)
+    else:
+        atp = gate_attribution(
+            model, eliciting, concept_ids, batch_size=batch_size
+        ).numpy()
+        atp_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(atp_path, atp)
+    sets: dict[str, list[tuple[int, int]]] = {"AtP": topk_grid(atp)}
     for name, rel in [
         ("patching", "patching/patching_grid.npy"),
         ("DLA", "dla/pile10k/dla_grid.npy"),
@@ -122,7 +127,6 @@ def run_steer(
         )
         for name, experts in sets.items():
             methods[f"{name}-knockout"] = knockout_intervention(experts)
-        methods["AtP-downweight0.5"] = downweight_intervention(sets["AtP"], 0.5)
         meta_sets = sets
         # diff-of-means direction (validated for toxicity)
         steer_dir = collect_last_token_residuals(model, eliciting, steer_layer).mean(

@@ -81,16 +81,11 @@ def expert_patching_grid(
 
 def top_grid_experts(grid: torch.Tensor, k: int = 20) -> list[dict]:
     """The ``k`` experts with the largest |effect|, as JSON-friendly records."""
-    flat = grid.flatten()
-    n_experts = grid.shape[1]
-    order = flat.abs().argsort(descending=True)[:k]
+    from moe_interp.grids import top_experts
+
     return [
-        {
-            "layer": int(i // n_experts),
-            "expert": int(i % n_experts),
-            "effect": float(flat[i]),
-        }
-        for i in order.tolist()
+        {"layer": layer, "expert": e, "effect": v}
+        for layer, e, v in top_experts(grid, k, by="abs")
     ]
 
 

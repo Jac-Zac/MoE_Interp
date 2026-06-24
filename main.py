@@ -297,44 +297,6 @@ def main():
             )
         print(f"Saved intervention results to {out_dir}")
 
-    elif args.command == "circuit-edit":
-        import json
-
-        from nnsight import LanguageModel
-
-        from moe_interp.circuit.expert_edit import run_expert_edit
-        from moe_interp.config import get_model_dir
-
-        model_name = args.model or get_default_model()
-        model = LanguageModel(
-            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
-        )
-        res = run_expert_edit(
-            model,
-            concept=args.concept,
-            layer=args.layer,
-            expert=args.expert,
-            top_neurons=args.top_neurons,
-            batch_size=args.batch_size,
-            max_new_tokens=args.max_new_tokens,
-        )
-
-        out_dir = get_model_dir(model_name) / "circuit" / "edit"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "expert_edit.json").write_text(json.dumps(res, indent=2))
-
-        m = res["meta"]
-        base = res["methods"]["baseline"]["eliciting_propensity"]
-        print(
-            f"L{m['layer']}E{m['expert']} ({m['concept']}); baseline propensity={base:+.3f}:"
-        )
-        for name, b in res["methods"].items():
-            print(
-                f"  {name:24s} elic={b['eliciting_propensity']:+.3f}  "
-                f"word-frac={b['eliciting_word_frac']:.2f}"
-            )
-        print(f"Saved expert-edit results to {out_dir}")
-
     elif args.command == "circuit-report":
         from moe_interp.circuit.report import build_report
 

@@ -2,8 +2,9 @@
 
 The patching grid + gate-AtP identify which experts *cause* toxic continuations. Here we
 act on that: during greedy generation we either **knock out** the top gate-AtP promoter
-experts (zero their router gate) or **steer** against the diff-of-means toxic direction,
-and measure the drop in toxic propensity versus the un-intervened baseline. Two controls
+experts (zero their router gate) or **project out** the diff-of-means toxic direction from
+the residual stream, and measure the drop in toxic propensity versus the un-intervened
+baseline. Two controls
 keep it honest: a **random** expert knockout (specificity — does it have to be *these*
 experts?) and a **neutral** prompt set (collateral — does the intervention break ordinary
 generation?).
@@ -38,35 +39,6 @@ def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
             _, idx, w = model.model.layers[layer].mlp.experts.inputs[0]
             for e in by_layer[layer]:
                 w[idx == e] = 0.0
-
-    return fn
-
-
-def downweight_intervention(experts: list[tuple[int, int]], factor: float) -> Callable:
-    """Less-drastic knockout: scale the router gate of each ``(layer, expert)`` by ``factor``."""
-    by_layer: dict[int, list[int]] = {}
-    for layer, e in experts:
-        by_layer.setdefault(layer, []).append(e)
-
-    def fn(model):
-        for layer in sorted(by_layer):
-            _, idx, w = model.model.layers[layer].mlp.experts.inputs[0]
-            for e in by_layer[layer]:
-                w[idx == e] = w[idx == e] * factor
-
-    return fn
-
-
-def steer_intervention(layer: int, v: torch.Tensor, alpha: float) -> Callable:
-    """Intervention that adds ``alpha * v`` to the residual stream at ``layer``.
-
-    A large fixed ``alpha`` over-steers and degrades all generation; prefer
-    :func:`projectout_intervention` for a non-destructive "remove toxicity" edit.
-    """
-
-    def fn(model):
-        h = model.model.layers[layer].output
-        h[:] = h + alpha * v.to(h.device, h.dtype)
 
     return fn
 

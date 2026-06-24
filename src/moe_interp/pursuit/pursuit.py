@@ -6,13 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeRemainingColumn,
-)
+from tqdm import tqdm
 
 from moe_interp.capture.cache import (
     load_layer_activations,
@@ -95,10 +89,16 @@ def _decode_atom(
     labels: list[str] | None,
     base_vocab_size: int | None,
 ) -> str:
-    if labels is not None and token_ids is None and base_vocab_size is None:
-        return labels[idx]
-    if labels is not None and base_vocab_size is not None and idx >= base_vocab_size:
-        return labels[idx - base_vocab_size]
+    """Resolve a chosen atom index to its label.
+
+    The dictionary is ``[base-vocab rows | appended label atoms]``; ``base_vocab_size``
+    is where the appended labels start (0 in concept mode, where every atom is a label).
+    Atoms at or past that boundary decode from ``labels``; earlier atoms are base-vocab
+    tokens decoded via ``token_ids`` (row→id remap) or the raw index.
+    """
+    base = base_vocab_size or 0
+    if labels is not None and idx >= base:
+        return labels[idx - base]
     token_id = idx if token_ids is None else token_ids[idx]
     return tokenizer.decode([token_id])
 
@@ -256,66 +256,48 @@ def run_pursuit(
 
     jsonl_path = output_dir / "results.jsonl" if output_dir is not None else None
     with open(jsonl_path, "w") if jsonl_path else nullcontext() as jsonl_file:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-        ) as progress:
-            layer_task = progress.add_task("Projection pursuit", total=n_layers)
+        for layer_idx in tqdm(range(n_layers), desc="Projection pursuit"):
+            expert_acts = load_layer_activations(
+                extractions_dir, layer_idx, n_experts, min_activations
+            )
 
-            for layer_idx in range(n_layers):
-                expert_acts = load_layer_activations(
-                    extractions_dir, layer_idx, n_experts, min_activations
+            for expert_idx, acts in expert_acts.items():
+                X = acts.float().to(device)
+                n_acts = X.shape[0]
+                tokens, evr = projection_pursuit(
+                    X,
+                    dictionary,
+                    tokenizer,
+                    device=device,
+                    k=k,
+                    token_ids=token_ids,
+                    labels=labels,
+                    base_vocab_size=base_vocab_size,
+                    dict_t=dict_t,
                 )
-                expert_task = progress.add_task(
-                    f"Layer {layer_idx}", total=len(expert_acts), parent=layer_task
-                )
+                # Free this expert's device tensors before the next expert
+                # allocates a differently-sized `cross` matrix. Without this,
+                # the caching allocator accumulates ~ one block per expert
+                del X
+                _empty_device_cache(device)
+                if not tokens:
+                    continue
 
-                for expert_idx, acts in expert_acts.items():
-                    X = acts.float().to(device)
-                    n_acts = X.shape[0]
-                    tokens, evr = projection_pursuit(
-                        X,
-                        dictionary,
-                        tokenizer,
-                        device=device,
-                        k=k,
-                        token_ids=token_ids,
-                        labels=labels,
-                        base_vocab_size=base_vocab_size,
-                        dict_t=dict_t,
-                    )
-                    # Free this expert's device tensors before the next expert
-                    # allocates a differently-sized `cross` matrix. Without this,
-                    # the caching allocator accumulates ~ one block per expert
-                    del X
-                    _empty_device_cache(device)
-                    if not tokens:
-                        progress.advance(expert_task)
-                        continue
+                record = {
+                    "layer": layer_idx,
+                    "expert": expert_idx,
+                    "n_activations": n_acts,
+                    "tokens": tokens,
+                    "evr": evr,
+                }
+                results.append(record)
 
-                    record = {
-                        "layer": layer_idx,
-                        "expert": expert_idx,
-                        "n_activations": n_acts,
-                        "tokens": tokens,
-                        "evr": evr,
-                    }
-                    results.append(record)
+                evr_matrix[layer_idx, expert_idx] = evr[-1]
+                count_matrix[layer_idx, expert_idx] = n_acts
 
-                    evr_matrix[layer_idx, expert_idx] = evr[-1]
-                    count_matrix[layer_idx, expert_idx] = n_acts
-
-                    if jsonl_file is not None:
-                        jsonl_file.write(json.dumps(record) + "\n")
-                        jsonl_file.flush()
-
-                    progress.advance(expert_task)
-
-                progress.remove_task(expert_task)
-                progress.advance(layer_task)
+                if jsonl_file is not None:
+                    jsonl_file.write(json.dumps(record) + "\n")
+                    jsonl_file.flush()
 
     print(f"Analyzed {len(results)} experts")
 
