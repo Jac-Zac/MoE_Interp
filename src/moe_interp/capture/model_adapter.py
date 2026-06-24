@@ -17,53 +17,10 @@ model's own expert math so the reconstruction is exact. Pick an adapter with
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn.functional as F
-
-
-@dataclass(frozen=True)
-class MoEConfig:
-    """MoE model config fields needed by capture, extracted from ``model.config``."""
-
-    model_name: str
-    model_type: str
-    n_layers: int
-    n_experts: int
-    d_model: int
-    experts_per_tok: int
-
-    @classmethod
-    def from_model(cls, model: Any) -> "MoEConfig":
-        cfg = model.config
-        # OLMoE/Mixtral/gpt-oss expose `num_local_experts`; some configs use `num_experts`.
-        n_experts = getattr(cfg, "num_local_experts", None)
-        if n_experts is None:
-            n_experts = cfg.num_experts
-        return cls(
-            model_name=cfg._name_or_path,
-            model_type=cfg.model_type,
-            n_layers=cfg.num_hidden_layers,
-            n_experts=n_experts,
-            d_model=cfg.hidden_size,
-            experts_per_tok=cfg.num_experts_per_tok,
-        )
-
-    def _rich_table(self):
-        from rich.table import Table
-
-        t = Table(title="MoE Config")
-        t.add_column("Property", style="cyan")
-        t.add_column("Value", style="magenta")
-        t.add_row("Model", self.model_name)
-        t.add_row("Model Type", self.model_type)
-        t.add_row("Layers", str(self.n_layers))
-        t.add_row("Hidden Size", str(self.d_model))
-        t.add_row("Experts", str(self.n_experts))
-        t.add_row("Experts per Token", str(self.experts_per_tok))
-        return t
 
 
 def apply_component_rmsnorm(
@@ -85,53 +42,35 @@ def apply_component_rmsnorm(
 
 
 class MoEAdapter(ABC):
-    """Abstract adapter: model config + model-specific expert reconstruction."""
+    """MoE config + model-specific expert reconstruction.
+
+    Reads the config fields capture needs straight off ``model.config``. Only
+    ``expert_forward`` differs per model; everything else is shared.
+    """
 
     def __init__(self, model: Any) -> None:
-        self.config = MoEConfig.from_model(model)
-
-    # --- config passthroughs -------------------------------------------------
-    @property
-    def model_name(self) -> str:
-        return self.config.model_name
-
-    @property
-    def model_type(self) -> str:
-        return self.config.model_type
-
-    @property
-    def n_layers(self) -> int:
-        return self.config.n_layers
-
-    @property
-    def n_experts(self) -> int:
-        return self.config.n_experts
-
-    @property
-    def d_model(self) -> int:
-        return self.config.d_model
-
-    @property
-    def experts_per_tok(self) -> int:
-        return self.config.experts_per_tok
+        cfg = model.config
+        self.model_name: str = cfg._name_or_path
+        self.model_type: str = cfg.model_type
+        self.n_layers: int = cfg.num_hidden_layers
+        self.d_model: int = cfg.hidden_size
+        self.experts_per_tok: int = cfg.num_experts_per_tok
+        # OLMoE/gpt-oss expose `num_local_experts`; some configs use `num_experts`.
+        self.n_experts: int = getattr(cfg, "num_local_experts", None) or cfg.num_experts
 
     def __repr__(self) -> str:
-        c = self.config
         return (
-            f"{self.__class__.__name__}(model_name={c.model_name!r}, "
-            f"model_type={c.model_type!r}, n_layers={c.n_layers}, "
-            f"n_experts={c.n_experts}, d_model={c.d_model}, "
-            f"experts_per_tok={c.experts_per_tok})"
+            f"{self.__class__.__name__}(model_name={self.model_name!r}, "
+            f"model_type={self.model_type!r}, n_layers={self.n_layers}, "
+            f"n_experts={self.n_experts}, d_model={self.d_model}, "
+            f"experts_per_tok={self.experts_per_tok})"
         )
-
-    def __rich_console__(self, console: Any, options: Any):
-        yield self.config._rich_table()
 
     # --- boundary tap (shared; override only if a model differs) -------------
     def tap_layer(self, layer: Any) -> Any:
         """Proxy to ``.save()`` inside the trace for one layer's MoE block.
 
-        Fused experts modules (gpt-oss / OLMoE / Mixtral) are all called as
+        Fused experts modules (gpt-oss / OLMoE) are all called as
         ``experts(hidden_states, top_k_index, top_k_weights)``.
         """
         return layer.mlp.experts.inputs
@@ -208,10 +147,10 @@ class MoEAdapter(ABC):
 
 
 class SwiGLUMoEAdapter(MoEAdapter):
-    """Adapter for fused SwiGLU experts (OLMoE, Mixtral).
+    """Adapter for fused SwiGLU experts (OLMoE).
 
-    Mirrors ``OlmoeExperts``/``MixtralExperts``: ``gate_up_proj`` is
-    ``(E, 2I, D)`` and gate/up are contiguous halves; no biases, no clamp::
+    Mirrors ``OlmoeExperts``: ``gate_up_proj`` is ``(E, 2I, D)`` and gate/up are
+    contiguous halves; no biases, no clamp::
 
         gate, up = F.linear(h, gate_up_proj[e]).chunk(2)
         out = F.linear(act_fn(gate) * up, down_proj[e])
@@ -253,41 +192,16 @@ class GptOssAdapter(MoEAdapter):
 MODEL_TYPE_TO_ADAPTER: dict[str, type[MoEAdapter]] = {
     "gpt_oss": GptOssAdapter,
     "olmoe": SwiGLUMoEAdapter,
-    "mixtral": SwiGLUMoEAdapter,
-}
-
-KNOWN_MODEL_NAME_TO_TYPE: dict[str, str] = {
-    "openai/gpt-oss-20b": "gpt_oss",
-    "allenai/OLMoE-1B-7B-0924-Instruct": "olmoe",
-    "mistralai/Mixtral-8x7B-Instruct-v0.1": "mixtral",
 }
 
 
-def get_model_adapter(
-    model: Any | None = None,
-    model_name: str | None = None,
-    model_type: str | None = None,
-) -> MoEAdapter:
-    """Return the correct adapter, resolving the model type in order:
-
-    1) ``model.config.model_type``  2) explicit ``model_type``
-    3) exact lookup from known ``model_name``.
-    """
-    resolved_type: str | None = None
-    if model is not None and getattr(
-        getattr(model, "config", None), "model_type", None
-    ):
-        resolved_type = model.config.model_type
-    elif model_type is not None:
-        resolved_type = model_type
-    elif model_name is not None:
-        resolved_type = KNOWN_MODEL_NAME_TO_TYPE.get(model_name)
-
-    if resolved_type in MODEL_TYPE_TO_ADAPTER:
-        return MODEL_TYPE_TO_ADAPTER[resolved_type](model)
-
-    raise ValueError(
-        "Could not resolve model adapter. Supported model_type values: "
-        f"{sorted(MODEL_TYPE_TO_ADAPTER)}. For model_name fallback, supported "
-        f"names: {sorted(KNOWN_MODEL_NAME_TO_TYPE)}."
-    )
+def get_model_adapter(model: Any) -> MoEAdapter:
+    """Return the adapter matching ``model.config.model_type``."""
+    model_type = getattr(getattr(model, "config", None), "model_type", None)
+    try:
+        return MODEL_TYPE_TO_ADAPTER[model_type](model)
+    except KeyError:
+        raise ValueError(
+            f"Unsupported model_type {model_type!r}. "
+            f"Supported: {sorted(MODEL_TYPE_TO_ADAPTER)}."
+        ) from None

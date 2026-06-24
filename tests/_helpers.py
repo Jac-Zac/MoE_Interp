@@ -15,7 +15,6 @@ D, I, E, K, N = 8, 12, 4, 2, 6
 _EXPERTS_MODULE = {
     "gpt_oss": "transformers.models.gpt_oss.modeling_gpt_oss:GptOssExperts",
     "olmoe": "transformers.models.olmoe.modeling_olmoe:OlmoeExperts",
-    "mixtral": "transformers.models.mixtral.modeling_mixtral:MixtralExperts",
 }
 
 

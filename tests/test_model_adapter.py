@@ -10,8 +10,6 @@ activations really are each expert's true contribution.
 
 from __future__ import annotations
 
-import io
-
 import pytest
 import torch
 from _helpers import (
@@ -24,11 +22,9 @@ from _helpers import (
     no_op_norm_kwargs,
     random_routing,
 )
-from rich.console import Console
 
 from moe_interp.capture.model_adapter import (
     GptOssAdapter,
-    MoEConfig,
     SwiGLUMoEAdapter,
     get_model_adapter,
 )
@@ -50,15 +46,16 @@ def _summed_reconstruction(adapter, experts, hidden, top_idx, weights) -> torch.
 # --- config / selection ------------------------------------------------------
 
 
-def test_from_model_reads_config_fields():
-    assert MoEConfig.from_model(fake_model("olmoe")) == MoEConfig(
-        model_name="dummy/olmoe",
-        model_type="olmoe",
-        n_layers=2,
-        n_experts=E,
-        d_model=D,
-        experts_per_tok=K,
-    )
+def test_adapter_reads_config_fields():
+    a = get_model_adapter(fake_model("olmoe"))
+    assert (
+        a.model_name,
+        a.model_type,
+        a.n_layers,
+        a.n_experts,
+        a.d_model,
+        a.experts_per_tok,
+    ) == ("dummy/olmoe", "olmoe", 2, E, D, K)
 
 
 @pytest.mark.parametrize(
@@ -66,7 +63,6 @@ def test_from_model_reads_config_fields():
     [
         ("gpt_oss", GptOssAdapter),
         ("olmoe", SwiGLUMoEAdapter),
-        ("mixtral", SwiGLUMoEAdapter),
     ],
 )
 def test_get_model_adapter_picks_class(model_type, cls):
@@ -74,24 +70,18 @@ def test_get_model_adapter_picks_class(model_type, cls):
 
 
 def test_get_model_adapter_rejects_unknown():
-    with pytest.raises(ValueError, match="Could not resolve"):
+    with pytest.raises(ValueError, match="Unsupported model_type"):
         get_model_adapter(fake_model("llama"))
 
 
-def test_rich_rendering_includes_table():
-    buf = io.StringIO()
-    Console(file=buf, force_terminal=True, color_system="standard").print(
-        get_model_adapter(fake_model("olmoe"))
-    )
-    out = buf.getvalue()
-    assert "MoE Config" in out
-    assert "dummy/olmoe" in out
+def test_repr_includes_model_info():
+    assert "dummy/olmoe" in repr(get_model_adapter(fake_model("olmoe")))
 
 
 # --- reconstruction correctness vs. the real modules -------------------------
 
 
-@pytest.mark.parametrize("model_type", ["gpt_oss", "olmoe", "mixtral"])
+@pytest.mark.parametrize("model_type", ["gpt_oss", "olmoe"])
 def test_reconstruction_matches_module_forward(model_type):
     """Sum of captured per-expert contributions == the experts module's fused output."""
     experts = build_experts(model_type)
