@@ -9,7 +9,6 @@ from moe_interp.config import (
     get_device,
     get_extractions_dir,
     get_pursuit_dir,
-    get_unembedding_dir,
     set_seed,
 )
 from moe_interp.io.data import load_dataset_prompts
@@ -59,29 +58,11 @@ def main():
         )
 
     elif args.command == "pursuit":
-        from transformers import AutoTokenizer
-
-        from moe_interp.capture.cache import load_metadata, load_unembedding
-        from moe_interp.pursuit.dictionary import build_word_dictionary
-
         model_name = args.model or get_default_model()
         dataset_name = args.dataset
 
         extractions_dir = get_extractions_dir(model_name, dataset_name)
-
-        word_dictionary = None
-        if args.word_top_k:
-            output_dir = get_pursuit_dir(model_name, dataset_name, "words")
-            metadata = load_metadata(extractions_dir / "metadata.json")
-            tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
-            base_dictionary = load_unembedding(
-                get_unembedding_dir(model_name) / "dictionary.h5"
-            ).float()
-            word_dictionary = build_word_dictionary(
-                tokenizer, base_dictionary, top_k=args.word_top_k
-            )
-        else:
-            output_dir = get_pursuit_dir(model_name, dataset_name, args.concept)
+        output_dir = get_pursuit_dir(model_name, dataset_name, args.concept)
 
         results, evr_matrix, count_matrix = run_pursuit(
             extractions_dir,
@@ -89,7 +70,6 @@ def main():
             k=args.k,
             output_dir=output_dir,
             concept=args.concept,
-            word_dictionary=word_dictionary,
         )
         plot_evr_heatmap(
             evr_matrix,

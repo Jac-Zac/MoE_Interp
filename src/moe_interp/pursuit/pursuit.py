@@ -16,7 +16,6 @@ from moe_interp.capture.cache import (
 from moe_interp.config import get_device, get_unembedding_dir
 from moe_interp.pursuit.concepts import CONCEPT_WORDS
 from moe_interp.pursuit.decomposition import SOMP
-from moe_interp.pursuit.dictionary import WordDictionary
 
 
 def _empty_device_cache(device: torch.device) -> None:
@@ -171,7 +170,6 @@ def run_pursuit(
     k: int = 50,
     output_dir: Path | None = None,
     concept: str | None = None,
-    word_dictionary: WordDictionary | None = None,
     tokenizer=None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray]:
     """Run projection pursuit on all experts.
@@ -216,31 +214,19 @@ def run_pursuit(
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
-    if word_dictionary is None:
-        dictionary = load_unembedding(
-            get_unembedding_dir(metadata["model_name"]) / "dictionary.h5",
-        ).float()
-        token_ids = None
-        if concept is not None:
-            dictionary, labels = _build_concept_dictionary(
-                concept, dictionary, tokenizer, device
-            )
-            base_vocab_size = 0
-        else:
-            labels = None
-            base_vocab_size = None
-            dictionary = dictionary.to(device)
+    dictionary = load_unembedding(
+        get_unembedding_dir(metadata["model_name"]) / "dictionary.h5",
+    ).float()
+    token_ids = None
+    if concept is not None:
+        dictionary, labels = _build_concept_dictionary(
+            concept, dictionary, tokenizer, device
+        )
+        base_vocab_size = 0
     else:
-        dictionary = word_dictionary.embeddings.float().to(device)
-        labels = word_dictionary.labels
-        base_vocab_size = word_dictionary.base_vocab_size
-        if base_vocab_size > dictionary.shape[0]:
-            raise ValueError("word_dictionary base_vocab_size exceeds embedding rows")
-        if len(labels) != dictionary.shape[0] - base_vocab_size:
-            raise ValueError(
-                "word_dictionary labels must match appended embedding rows"
-            )
-        token_ids = word_dictionary.kept_token_ids
+        labels = None
+        base_vocab_size = None
+        dictionary = dictionary.to(device)
 
     n_layers = metadata["n_layers"]
     n_experts = metadata["n_experts"]

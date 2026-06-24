@@ -83,22 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Minimum activations to analyze expert",
     )
-    concept_group = pursuit_parser.add_mutually_exclusive_group()
-    concept_group.add_argument(
+    pursuit_parser.add_argument(
         "--concept",
         type=str,
         default=None,
         help="Optional concept restriction: offensive, countries, numbers",
-    )
-    concept_group.add_argument(
-        "--word_top_k",
-        type=int,
-        default=None,
-        nargs="?",
-        const=10000,
-        help="Use augmented dictionary with top-k common words. "
-        "Pass no value for default (10000), or a number. "
-        "Mutually exclusive with --concept.",
     )
 
     # analysis: logit-lens baseline vs SOMP (no model needed)

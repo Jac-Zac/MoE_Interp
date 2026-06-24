@@ -6,18 +6,14 @@ import json
 from dotenv import load_dotenv
 from rich import print
 from rich.table import Table
-from transformers import AutoTokenizer
 
-from moe_interp.capture.cache import load_metadata, load_unembedding
 from moe_interp.config import (
     get_extractions_dir,
     get_pursuit_dir,
-    get_unembedding_dir,
     set_seed,
 )
 from moe_interp.io.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
 from moe_interp.pursuit import load_pursuit, run_pursuit
-from moe_interp.pursuit.dictionary import build_word_dictionary
 
 # %% Configuration
 seed = 1337
@@ -40,26 +36,10 @@ if not metadata_path.exists():
 # Specify a concept to restrict the unembedding dictionary ("offensive", "countries", "numbers")
 # Set to None to probe all tokens — useful as a general-purpose baseline
 CONCEPT = None
-USE_WORD_DICTIONARY = False
 FORCE = True
-
-word_top_k = 25000
 
 min_activations = 5
 pursuit_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME, CONCEPT)
-word_dictionary = None
-if USE_WORD_DICTIONARY:
-    metadata = load_metadata(metadata_path)
-    tokenizer = AutoTokenizer.from_pretrained(metadata["model_name"])
-    base_dictionary = load_unembedding(
-        get_unembedding_dir(MODEL_NAME) / "dictionary.h5"
-    ).float()
-    word_dictionary = build_word_dictionary(
-        tokenizer,
-        base_dictionary,
-        top_k=word_top_k,
-    )
-    pursuit_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME, "words")
 if (
     not FORCE
     and (pursuit_dir / "results.jsonl").exists()
@@ -75,7 +55,6 @@ else:
         k=50,
         output_dir=pursuit_dir,
         concept=CONCEPT,
-        word_dictionary=word_dictionary,
     )
 
 # %% Top experts for the current concept

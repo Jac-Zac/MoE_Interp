@@ -28,8 +28,6 @@ Two useful modes exist:
 - **Full dictionary**: search over all unembedding rows.
 - **Concept restriction**: search over a hand-built concept dictionary such as `offensive`, `countries`, or `numbers`.
 
-There is also an optional word dictionary mode that appends common words on top of the base vocabulary.
-
 Output is written as:
 
 - `results.jsonl` — one record per expert (top-k tokens with EVR scores)
