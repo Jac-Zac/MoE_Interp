@@ -175,7 +175,7 @@ class MoEAdapter(ABC):
         routing_weights, positions)}`` over real tokens only, CPU/float16 ready to
         write. Args mirror the flattened ``(b_size * max_len)`` token axis;
         ``real_mask``/``second_moment``/``token_ids`` are length N and are moved to
-        the experts' device here (TP/pipeline can place layers on different devices).
+        the experts' device here.
         """
         dev = hidden_states.device
         hidden_states = hidden_states.float()

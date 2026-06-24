@@ -26,21 +26,16 @@ def main():
     args = parser.parse_args()
 
     if args.command == "extract":
-        import torch.distributed as dist
         from nnsight import LanguageModel
 
-        model_kwargs = dict(dtype="auto", dispatch=True)
-        if dist.is_initialized() and dist.get_world_size() > 1:
-            model_kwargs["tp_plan"] = "auto"
-        else:
-            # Pin the whole model to the single best device. `device_map="auto"`
-            # probes free memory at load time and can flakily offload a sliver of an
-            # MoE model to disk (which then fails: MoE weights can't be re-saved
-            # without an offload_folder). Forcing the device avoids that when it fits.
-            model_kwargs["device_map"] = str(get_device())
-
+        # Pin the whole model to the single best device. `device_map="auto"` probes
+        # free memory at load time and can flakily offload a sliver of an MoE model to
+        # disk (which then fails: MoE weights can't be re-saved without an
+        # offload_folder). Forcing the device avoids that when it fits.
         model_name = args.model
-        model = LanguageModel(model_name, **model_kwargs)  # type: ignore
+        model = LanguageModel(
+            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+        )  # type: ignore
 
         max_length = args.max_length or model.config.max_position_embeddings
         prompts = load_dataset_prompts(

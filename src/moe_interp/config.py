@@ -4,12 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.distributed as dist
-
-
-def is_rank0() -> bool:
-    """Return True if we are on rank 0 or not in a distributed setup."""
-    return not dist.is_initialized() or dist.get_rank() == 0
 
 
 def get_data_dir() -> Path:

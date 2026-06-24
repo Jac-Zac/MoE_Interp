@@ -6,8 +6,6 @@ coordinates so the ``i // n_experts`` / ``i % n_experts`` arithmetic isn't re-de
 caller.
 """
 
-from __future__ import annotations
-
 import numpy as np
 
 

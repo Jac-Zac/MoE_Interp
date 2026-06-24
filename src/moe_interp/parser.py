@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--n_docs",
         type=int,
         default=None,
-        help="Number of TriviaQA documents (default: all docs)",
+        help="Number of documents (default: all docs)",
     )
     extract_parser.add_argument(
         "--dataset",

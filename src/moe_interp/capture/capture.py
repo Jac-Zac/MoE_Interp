@@ -16,7 +16,7 @@ from moe_interp.capture.cache import (
     save_unembedding,
 )
 from moe_interp.capture.model_adapter import MoEAdapter, get_model_adapter
-from moe_interp.config import get_unembedding_dir, is_rank0
+from moe_interp.config import get_unembedding_dir
 
 
 def token_real_mask(prompt_lengths, max_len: int) -> torch.Tensor:
@@ -43,8 +43,6 @@ def save_capture_artifacts(
     metadata: dict,
 ) -> None:
     """Save metadata and the normalized unembedding dictionary."""
-    if not is_rank0():
-        return
     save_metadata(output_dir, **metadata)
     unembedding_dir = get_unembedding_dir(model_name)
     dictionary = F.normalize(get_model_unembedding(model), dim=1)
@@ -91,9 +89,6 @@ def _capture_batch(
         for layer in model.model.layers:
             expert_inputs.append(adapter.tap_layer(layer).save())
         pre_norm_hidden = model.model.norm.input.save()
-
-    if not is_rank0():
-        return b_size
 
     # Real-token mask over the flattened (b_size * max_len) axis.
     lengths = torch.as_tensor(prompt_lengths, dtype=torch.long)
@@ -160,8 +155,7 @@ def capture_expert_activations(
         raise ValueError("token_selection must be 'last' or 'all'")
 
     output_dir = Path(output_dir)
-    if is_rank0():
-        output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     if model_name is None:
         model_name = model.config._name_or_path
@@ -169,12 +163,10 @@ def capture_expert_activations(
     adapter = get_model_adapter(model)
     ds = prepare_prompts_dataset(prompts)
 
-    layer_files: dict[int, h5py.File] = {}
-    if is_rank0():
-        layer_files = {
-            i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
-            for i in range(adapter.n_layers)
-        }
+    layer_files: dict[int, h5py.File] = {
+        i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
+        for i in range(adapter.n_layers)
+    }
 
     # Right-pad so token positions are preserved (RoPE stays correct)
     original_padding_side = model.tokenizer.padding_side
