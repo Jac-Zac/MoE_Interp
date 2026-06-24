@@ -173,7 +173,7 @@ def test_projection_pursuit_decodes_kept_token_ids():
 
 
 def test_projection_pursuit_decodes_concept_labels():
-    """Concept-mode WordDictionary (base_vocab_size=0) decodes purely via labels."""
+    """Concept mode (base_vocab_size=0) decodes purely via labels."""
     X = torch.eye(3)
     dictionary = torch.eye(3)
     tokenizer = _DummyTokenizer()

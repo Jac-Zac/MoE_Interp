@@ -4,7 +4,6 @@ import argparse
 
 from moe_interp.config import get_default_model
 from moe_interp.io.data import DATASET_SPECS
-from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -121,92 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the SOMP results dir (default: data/<model>/pursuit/<dataset>)",
     )
 
-    # toxic-dla: gradient-free toxic-expert classifier from stored activations (no model)
-    dla_parser = subparsers.add_parser(
-        "toxic-dla",
-        help="Direct Logit Attribution: which experts write toward toxic vocab (no model)",
-    )
-    dla_parser.add_argument("--model", type=str, default=None)
-    dla_parser.add_argument(
-        "--dataset",
-        type=str,
-        default="pile10k",
-        choices=sorted(DATASET_SPECS),
-        help="All-token extraction to score over (default: pile10k; rtp is too sparse)",
-    )
-    dla_parser.add_argument(
-        "--min_activations", type=int, default=50, help="Min rows to score an expert"
-    )
-    dla_parser.add_argument(
-        "--max_rows", type=int, default=2000, help="Per-expert row cap (subsample)"
-    )
-
-    # circuit: causal expert activation-patching grid (loads the model via nnsight)
-    circuit_parser = subparsers.add_parser(
-        "circuit",
-        help="Causal toxic-expert study: per-(layer,expert) ablation-patching effect grid",
-    )
-    circuit_parser.add_argument("--model", type=str, default=None)
-    circuit_parser.add_argument(
-        "--layers",
-        type=int,
-        nargs="+",
-        default=None,
-        help="Restrict the grid to these layers (default: all)",
-    )
-    circuit_parser.add_argument("--batch_size", type=int, default=6)
-    circuit_parser.add_argument(
-        "--prompts",
-        type=str,
-        default="rtp",
-        choices=("seeds", "rtp"),
-        help="Toxic prompt source: 'rtp' (high-toxicity RealToxicityPrompts, the "
-        "'challenging' subset) or 'seeds' (12 built-in hand-written seeds). Default: rtp.",
-    )
-    circuit_parser.add_argument(
-        "--n_prompts",
-        type=int,
-        default=None,
-        help="Cap the number of toxic prompts (default: all seeds / 16 for rtp)",
-    )
-
-    # circuit-compare: faithfulness of cheap attributors vs the causal patching grid
-    cmp_parser = subparsers.add_parser(
-        "circuit-compare",
-        help="Score gate-AtP (+ DLA) against the causal patching grid (needs `circuit` first)",
-    )
-    cmp_parser.add_argument("--model", type=str, default=None)
-    cmp_parser.add_argument("--batch_size", type=int, default=8)
-
-    # circuit-steer: generation-time interventions (knockout / steer) vs baseline
-    steer_parser = subparsers.add_parser(
-        "circuit-steer",
-        help="Suppress toxic generation by knocking out top gate-AtP experts / steering",
-    )
-    steer_parser.add_argument("--model", type=str, default=None)
-    steer_parser.add_argument("--batch_size", type=int, default=8)
-    steer_parser.add_argument(
-        "--concept",
-        type=str,
-        default="offensive",
-        choices=sorted(CONCEPT_WORDS),
-        help="Concept to suppress (default: offensive). Non-toxicity concepts use the "
-        "unembedding direction + project-out; the expert-knockout comparison runs only for "
-        "'offensive' (the seed prompts only elicit toxicity).",
-    )
-    steer_parser.add_argument(
-        "--knockout_k",
-        type=int,
-        default=15,
-        help="How many top gate-AtP experts to knock out",
-    )
-    steer_parser.add_argument("--steer_layer", type=int, default=12)
-    steer_parser.add_argument("--max_new_tokens", type=int, default=24)
-
-    # circuit-report: assemble all circuit artifacts into one HTML report (no model)
-    report_parser = subparsers.add_parser(
-        "circuit-report", help="Build the self-contained toxic-circuit HTML report"
-    )
-    report_parser.add_argument("--model", type=str, default=None)
+    # The causal toxic-expert circuit study (DLA classifier, activation patching, gate-AtP,
+    # faithfulness, generation-time knockout / project-out, and the HTML report) lives in the
+    # `# %%` walkthroughs under notebooks/circuits/, driving moe_interp.circuit directly.
 
     return parser

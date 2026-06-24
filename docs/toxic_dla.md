@@ -5,7 +5,7 @@ activations and the unembedding — no model forward, no gradients. Runs in seco
 existing extractions.
 
 ```bash
-python main.py toxic-dla [--dataset pile10k] [--min_activations N] [--max_rows N]
+python notebooks/circuits/dla.py   # DATASET / MIN_ACTS / MAX_ROWS are knobs at the top
 ```
 
 Writes `data/<model>/circuit/dla/<dataset>/`: `dla_grid.npy`, `dla_grid.html` (layer×expert
@@ -31,7 +31,7 @@ only a handful of rows per expert, too sparse to score.
 
 ## Relation to causal patching
 This is the cheap, activations-only **proxy**; the causal ground truth is gate-ablation
-patching (`circuit/patching.py`, on the `feat/expert-circuit` branch). DLA measures *writing
-toward* toxic tokens; ablation measures *causal effect of removal* — they agree on the
+patching (`circuit/patching.py`, run via `notebooks/circuits/patching.py`). DLA measures
+*writing toward* toxic tokens; ablation measures *causal effect of removal* — they agree on the
 strongest late-layer experts but ablation additionally reveals suppressor experts (negative
 effect) that DLA cannot see.

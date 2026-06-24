@@ -4,11 +4,15 @@ The full pipeline: **classify** experts by toxicity, find the **causally** respo
 and **suppress** toxic generation by acting on them. Loads OLMoE via nnsight and intervenes
 on the router gates. The gradient-free classifier counterpart is `analysis/toxic_dla.py`.
 
+This is the most experimental part of the project, so it is kept out of the `main.py` CLI:
+the three stages live as `# %%` walkthroughs under `notebooks/circuits/` that drive
+`moe_interp.circuit` directly.
+
 ## 1. Classify — which experts associate with toxicity (no model)
 
 ```bash
-python main.py toxic-dla --dataset pile10k     # DLA: writes-toward-toxic-vocab, from stored acts
-python main.py pursuit  --concept offensive    # SOMP: experts whose atoms are offensive words
+python notebooks/circuits/dla.py            # DLA: writes-toward-toxic-vocab, from stored acts
+python main.py pursuit --concept offensive  # SOMP: experts whose atoms are offensive words
 ```
 
 Both are correlational and model-free. DLA writes `data/<model>/circuit/dla/<dataset>/`.
@@ -16,14 +20,13 @@ Both are correlational and model-free. DLA writes `data/<model>/circuit/dla/<dat
 ## 2. Localize — which experts are *causally* responsible
 
 ```bash
-python main.py circuit          # causal ground truth: ablate every expert, one forward each
-python main.py circuit-compare  # is the cheap gradient method faithful to it?
+python notebooks/circuits/patching.py   # causal grid (one forward per expert) + gate-AtP faithfulness
 ```
 
-`circuit` sweeps every routed `(layer, expert)`, zeros its gate, and records the change in the
-toxic-logit metric → `data/<model>/circuit/patching/` (`patching_grid.npy`, heatmap, top
-experts). `circuit-compare` scores cheap attributors against that grid (pooled Pearson r over
-913 scored experts, pile10k):
+`patching.py` sweeps every routed `(layer, expert)`, zeros its gate, and records the change in
+the toxic-logit metric → `data/<model>/circuit/patching/` (`patching_grid.npy`, heatmap, top
+experts), then scores cheap attributors against that grid (pooled Pearson r over the scored
+experts):
 
 | method | cost | r vs patching |
 |---|---|---|
@@ -39,11 +42,10 @@ clean differentiable leaf so AtP isn't noisy here — and nnsight 0.7 won't prov
 ## 3. Intervene — suppress toxic generation
 
 ```bash
-python main.py circuit-steer    # knockout / project-out during generation, vs baseline
-python main.py circuit-report   # assemble everything into one self-contained HTML report
+python notebooks/circuits/steer.py   # knockout / project-out vs baseline, then assemble the HTML report
 ```
 
-`circuit-steer` ranks experts by each identification method (AtP, SOMP, DLA, patching, random)
+`steer.py` ranks experts by each identification method (AtP, SOMP, DLA, patching, random)
 and, during generation, knocks out those experts or projects the toxic direction out of the
 residual stream, scoring toxic-logit propensity and offensive-word rate vs baseline with a
 neutral-prompt collateral check (`data/<model>/circuit/steer/`). Finding: **AtP-knockout
@@ -51,7 +53,7 @@ reduces toxic propensity with minimal collateral; patching-knockout also works; 
 knockout do ~nothing** (token association ≠ causal responsibility). Knockout is blunt (can break
 fluency) and naive additive steering (a large fixed `-α·v`) tanks neutral generation, so
 **project-out is the best suppressor**: it removes only the toxic direction and keeps generation
-fluent. The intervention generalizes to any concept via `circuit-steer --concept`.
+fluent. The intervention generalizes to any concept via the `CONCEPT` variable in `steer.py`.
 
 > All interventions act at **the router gate** (`layer.mlp.experts.inputs[0]`), the only
 > per-expert node the fused kernel exposes — so they scale/zero an expert's *whole* contribution.
@@ -65,18 +67,21 @@ fluent. The intervention generalizes to any concept via `circuit-steer --concept
 - `patching.py` — the brute-force causal grid (one forward per routed expert).
 - `attribution.py` — gate-AtP gradient attribution (`gate · dL/dgate`, one backward pass).
 - `compare.py` — faithfulness (Pearson r) of cheap attributors vs the patching grid.
-- `direction.py` — diff-of-means toxic direction (last-token residual readout).
 - `intervene.py` — generation-time knockout / project-out + scoring.
+- `steer.py` — intervention orchestration + the diff-of-means toxic direction (last-token residuals).
 - `report.py` — self-contained HTML report.
+
+Driven by the `# %%` notebooks in `notebooks/circuits/` (`dla.py`, `patching.py`, `steer.py`).
 
 ## Running locally vs on Orfeo
 
 OLMoE-1B-7B loads on Apple MPS in ~30 s (~13 GB weights; ~16 GB free RAM) and one ablation
 forward is ~2 s, so the **full 16-layer grid (~15-20 min) runs on a Mac**. If RAM is tight,
-restrict with `--layers` / `--n_prompts`, or run on the GPU cluster:
+restrict the sweep with the `LAYERS` / `BATCH_SIZE` knobs at the top of `patching.py`, or run
+on the GPU cluster (`get_device()` picks CUDA there):
 
 ```bash
-DATA_DIR=$SCRATCH/data python main.py circuit --batch_size 16   # CUDA via get_device()
+DATA_DIR=$SCRATCH/data python notebooks/circuits/patching.py
 # then pull data/<model>/circuit/ back to inspect locally
 ```
 

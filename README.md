@@ -34,14 +34,13 @@ token-selection modes, concept restriction, and all flags are documented in
 [docs/](docs/README.md).
 
 The causal circuit study reuses the captured activations and adds a model-in-the-loop
-pipeline (see [docs/circuit.md](docs/circuit.md)):
+pipeline. It is kept out of the CLI as `# %%` walkthroughs under `notebooks/circuits/`
+(it was the most experimental part of the project; see [docs/circuit.md](docs/circuit.md)):
 
 ```bash
-python main.py circuit                      # causal activation-patching grid (ground truth)
-python main.py circuit-compare              # gate-AtP (1 backward pass) vs the patching grid
-python main.py toxic-dla                    # gradient-free DLA classifier (no model)
-python main.py circuit-steer                # suppress toxicity: knockout / project-out vs baseline
-python main.py circuit-report               # assemble all circuit artifacts into one HTML report
+python notebooks/circuits/dla.py        # classify: gradient-free DLA toxic score (no model)
+python notebooks/circuits/patching.py   # localize: causal patching grid + gate-AtP faithfulness
+python notebooks/circuits/steer.py      # intervene: knockout / project-out + assemble HTML report
 ```
 
 ## Project Structure
@@ -52,7 +51,11 @@ python main.py circuit-report               # assemble all circuit artifacts int
 ├── notebooks/
 │   ├── notebook_extract.py            # Standalone extraction walkthrough
 │   ├── notebook_pursuit.py            # Pursuit demo
-│   └── notebook_analysis.py           # Logit-lens vs SOMP walkthrough
+│   ├── notebook_analysis.py           # Logit-lens vs SOMP walkthrough
+│   └── circuits/                      # Causal toxic-expert study (# %% walkthroughs)
+│       ├── dla.py                     # classify: DLA toxic score (no model)
+│       ├── patching.py               # localize: patching grid + gate-AtP faithfulness
+│       └── steer.py                   # intervene: knockout / project-out + report
 ├── src/moe_interp/
 │   ├── capture/
 │   │   ├── capture.py                 # Expert activation extraction (nnsight)
@@ -61,8 +64,7 @@ python main.py circuit-report               # assemble all circuit artifacts int
 │   ├── pursuit/
 │   │   ├── pursuit.py                 # Projection pursuit orchestration
 │   │   ├── decomposition.py           # PCA, OMP, SOMP implementations
-│   │   ├── concepts.py                # Word lists (offensive, countries, numbers)
-│   │   └── dictionary.py              # Dictionary augmentation utilities
+│   │   └── concepts.py                # Word lists (offensive, countries, numbers)
 │   ├── analysis/
 │   │   ├── common.py                  # Shared loaders for the post-hoc analyses
 │   │   ├── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
@@ -73,9 +75,8 @@ python main.py circuit-report               # assemble all circuit artifacts int
 │   │   ├── patching.py                # Per-(layer,expert) causal effect grid
 │   │   ├── attribution.py             # gate-AtP: whole grid in one backward pass
 │   │   ├── compare.py                 # Faithfulness of attributors vs patching
-│   │   ├── direction.py               # Diff-of-means toxic direction
 │   │   ├── intervene.py               # Generation-time knockout / project-out
-│   │   ├── steer.py                   # circuit-steer orchestration
+│   │   ├── steer.py                   # Intervention orchestration + diff-of-means direction
 │   │   └── report.py                  # Self-contained HTML circuit report
 │   ├── io/
 │   │   ├── data.py                    # Dataset loading + chat-template formatting

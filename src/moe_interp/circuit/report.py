@@ -279,7 +279,7 @@ def build_report(model_name: str) -> Path:
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
         f"<title>Toxic-circuit report — {model_name}</title><style>{_css()}</style></head>"
         f"<body><h1>Causal toxic-expert circuit</h1>"
-        f'<p class="sub">{model_name} · OLMoE · pile10k/RTP toxic prompts</p>{body}</body></html>'
+        f'<p class="sub">{model_name} · OLMoE · seed toxic prompts</p>{body}</body></html>'
     )
     out = cdir / "report.html"
     out.write_text(html)

@@ -14,20 +14,43 @@ from __future__ import annotations
 import random
 
 import numpy as np
+import torch
 
 from moe_interp.analysis.common import load_somp_results
 from moe_interp.capture.cache import load_unembedding
 from moe_interp.circuit.attribution import gate_attribution
-from moe_interp.circuit.direction import collect_last_token_residuals
 from moe_interp.circuit.intervene import (
     knockout_intervention,
     projectout_intervention,
     run_intervention_experiment,
 )
 from moe_interp.circuit.prompts import default_prompts
+from moe_interp.circuit.toxicity import right_padded
 from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
 from moe_interp.grids import top_experts
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
+
+
+def collect_last_token_residuals(
+    model, prompts: list[list[int]], layer: int, batch_size: int = 8
+) -> torch.Tensor:
+    """Residual stream at ``layer`` output, gathered at each prompt's last real token.
+
+    Used for the diff-of-means toxic *direction*: ``v = mean(h | toxic) - mean(h |
+    neutral)`` (see :func:`run_steer`). Toxicity is thus isolated as a direction in the
+    residual stream rather than a single expert.
+    """
+    chunks: list[torch.Tensor] = []
+    with right_padded(model):
+        for i in range(0, len(prompts), batch_size):
+            batch = prompts[i : i + batch_size]
+            lengths = torch.tensor([len(t) for t in batch])
+            with torch.no_grad(), model.trace(batch):
+                # decoder layer .output is the bare hidden-states tensor (B, T, D)
+                hs = model.model.layers[layer].output.save()
+            rows = torch.arange(hs.shape[0])
+            chunks.append(hs[rows, lengths - 1].float().cpu())
+    return torch.cat(chunks)
 
 
 def _offensive_expert_sets(
