@@ -32,13 +32,22 @@ def main():
         choices=sorted(DATASET_SPECS),
         help="Dataset(s) to download (default: all)",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Download all models and datasets",
+    )
     args = parser.parse_args()
 
     load_dotenv()
     hf_token = os.environ.get("HF_TOKEN")
 
-    models_to_download = args.model if args.model else DEFAULT_MODELS
-    datasets_to_download = args.dataset if args.dataset else sorted(DATASET_SPECS)
+    if args.all:
+        models_to_download = DEFAULT_MODELS
+        datasets_to_download = sorted(DATASET_SPECS)
+    else:
+        models_to_download = args.model if args.model else DEFAULT_MODELS
+        datasets_to_download = args.dataset if args.dataset else sorted(DATASET_SPECS)
 
     for repo_id in models_to_download:
         print(f"Downloading model: {repo_id}")
