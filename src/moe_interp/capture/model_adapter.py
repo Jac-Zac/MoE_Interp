@@ -23,6 +23,16 @@ import torch
 import torch.nn.functional as F
 
 
+def model_num_experts(model: Any) -> int:
+    """Number of experts per layer, handling both config spellings.
+
+    OLMoE/gpt-oss expose ``num_local_experts``; some configs use ``num_experts``.
+    Shared by the circuit code so it stays in lockstep with :class:`MoEAdapter`.
+    """
+    cfg = model.config
+    return getattr(cfg, "num_local_experts", None) or cfg.num_experts
+
+
 def apply_component_rmsnorm(
     hidden_states: torch.Tensor,
     second_moment: torch.Tensor,
@@ -55,8 +65,7 @@ class MoEAdapter(ABC):
         self.n_layers: int = cfg.num_hidden_layers
         self.d_model: int = cfg.hidden_size
         self.experts_per_tok: int = cfg.num_experts_per_tok
-        # OLMoE/gpt-oss expose `num_local_experts`; some configs use `num_experts`.
-        self.n_experts: int = getattr(cfg, "num_local_experts", None) or cfg.num_experts
+        self.n_experts: int = model_num_experts(model)
 
     def __repr__(self) -> str:
         return (

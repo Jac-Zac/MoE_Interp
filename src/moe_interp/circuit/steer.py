@@ -18,8 +18,10 @@ import torch
 
 from moe_interp.analysis.common import load_somp_results
 from moe_interp.capture.cache import load_unembedding
+from moe_interp.capture.model_adapter import model_num_experts
 from moe_interp.circuit.attribution import gate_attribution
 from moe_interp.circuit.intervene import (
+    downweight_intervention,
     knockout_intervention,
     projectout_intervention,
     run_intervention_experiment,
@@ -64,7 +66,7 @@ def _offensive_expert_sets(
     batch_size: int,
 ) -> dict[str, list[tuple[int, int]]]:
     """Top-``k`` (layer, expert) sets from each identifier, plus a matched random control."""
-    ne = model.config.num_local_experts
+    ne = model_num_experts(model)
     md = get_model_dir(model_name)
 
     def topk_grid(grid: np.ndarray) -> list[tuple[int, int]]:
@@ -122,6 +124,7 @@ def run_steer(
     steer_layer: int,
     batch_size: int,
     max_new_tokens: int,
+    downweight_scale: float = 0.5,
     eliciting: list[list[int]] | None = None,
     neutral: list[list[int]] | None = None,
 ) -> dict:
@@ -129,8 +132,10 @@ def run_steer(
 
     ``eliciting`` / ``neutral`` are the concept-eliciting and matched prompt id-lists; if
     omitted they default to a real RealToxicityPrompts split (high- vs low-toxicity).
-    Returns ``{"methods": <per-method scores>, "meta": {...}}``; ``meta.sets`` records the
-    knocked-out expert sets (empty for non-``offensive`` concepts).
+    ``downweight_scale`` is the gate multiplier for the softer "down-weight" variant of the
+    AtP knockout (``0`` = full knockout, ``1`` = no-op). Returns ``{"methods": <per-method
+    scores>, "meta": {...}}``; ``meta.sets`` records the knocked-out expert sets (empty for
+    non-``offensive`` concepts).
     """
     if eliciting is None or neutral is None:
         eliciting, neutral = rtp_prompts(model.tokenizer)
@@ -151,6 +156,10 @@ def run_steer(
         )
         for name, experts in sets.items():
             methods[f"{name}-knockout"] = knockout_intervention(experts)
+        # Softer variant of the strongest causal set: scale (not zero) the AtP gates.
+        methods[f"AtP-downweight@{downweight_scale:g}"] = downweight_intervention(
+            sets["AtP"], downweight_scale
+        )
         meta_sets = sets
         # diff-of-means direction (validated for toxicity)
         steer_dir = collect_last_token_residuals(model, eliciting, steer_layer).mean(
@@ -180,6 +189,7 @@ def run_steer(
             "concept": concept,
             "k": knockout_k,
             "steer_layer": steer_layer,
+            "downweight_scale": downweight_scale,
             "sets": meta_sets,
         },
     }

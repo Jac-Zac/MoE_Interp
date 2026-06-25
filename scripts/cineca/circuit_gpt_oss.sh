@@ -21,4 +21,5 @@ python scripts/cineca/circuit_runner.py \
   --batch-size 4 \
   --knockout-k 15 \
   --steer-layer 12 \
-  --max-new-tokens 24
+  --max-new-tokens 24 \
+  --downweight-scale 0.5

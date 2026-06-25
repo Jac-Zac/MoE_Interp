@@ -82,9 +82,7 @@ print(t)
 
 # %% gate-AtP (one backward pass) + faithfulness vs the causal grid
 patching = torch.from_numpy(np.load(patch_dir / "patching_grid.npy")).float()
-grids = {
-    "gate-AtP": gate_attribution(model, toxic_prompts, toxic_ids, batch_size=8)
-}
+grids = {"gate-AtP": gate_attribution(model, toxic_prompts, toxic_ids, batch_size=8)}
 scores = faithfulness(grids, patching)
 cmp_dir = cdir / "compare"
 cmp_dir.mkdir(parents=True, exist_ok=True)

@@ -1,18 +1,12 @@
 #!/usr/bin/env python
 
 # %% Imports
-import json
-
 from dotenv import load_dotenv
 from rich import print
 from rich.table import Table
 
-from moe_interp.config import (
-    get_extractions_dir,
-    get_pursuit_dir,
-    set_seed,
-)
-from moe_interp.io.plots import plot_count_heatmap, plot_evr_heatmap, plot_label_grid
+from moe_interp.config import get_extractions_dir, get_pursuit_dir, set_seed
+from moe_interp.io.plots import plot_count_heatmap, plot_evr_heatmap
 from moe_interp.pursuit import load_pursuit, run_pursuit
 
 # %% Configuration
@@ -27,7 +21,6 @@ DATASET_NAME = "triviaqa"
 extractions_dir = get_extractions_dir(MODEL_NAME, DATASET_NAME)
 output_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME)
 metadata_path = extractions_dir / "metadata.json"
-# labeled_path = output_dir / "results_labeled.json"
 
 if not metadata_path.exists():
     raise Exception(f"You should get activation first, in this path {metadata_path}")
@@ -94,9 +87,3 @@ print(table)
 plot_evr_heatmap(evr_matrix).show()
 if count_matrix is not None:
     plot_count_heatmap(count_matrix).show()
-
-# %% Label grid — requires results_labeled.json (run scripts/label.py first)
-# TODO: Deal with this and perhaps have this in a separate file
-# if labeled_path.exists():
-#     labeled_results = json.loads(labeled_path.read_text())
-#     plot_label_grid(labeled_results).show()

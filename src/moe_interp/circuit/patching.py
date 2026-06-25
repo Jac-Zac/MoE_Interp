@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import torch
 
+from moe_interp.capture.model_adapter import model_num_experts
 from moe_interp.circuit.toxicity import (
     Metric,
     relative_logit_score,
@@ -64,7 +65,7 @@ def expert_patching_grid(
     Experts never routed in the batch are left at 0. Restrict ``layers`` for a faster run.
     """
     n_layers = model.config.num_hidden_layers
-    n_experts = model.config.num_local_experts
+    n_experts = model_num_experts(model)
     want = set(layers) if layers is not None else set(range(n_layers))
     grid = torch.zeros(n_layers, n_experts)
 

@@ -44,6 +44,12 @@ def main():
     parser.add_argument("--steer-layer", type=int, default=12)
     parser.add_argument("--max-new-tokens", type=int, default=24)
     parser.add_argument("--n-prompts", type=int, default=48)
+    parser.add_argument(
+        "--downweight-scale",
+        type=float,
+        default=0.5,
+        help="Gate multiplier for the soft AtP down-weight (0=knockout, 1=no-op)",
+    )
     args = parser.parse_args()
 
     model_name = args.model
@@ -85,9 +91,7 @@ def main():
     atp_path = cdir / "attribution" / "atp_grid.npy"
     if not atp_path.exists():
         print("[2/4] gate-AtP ...", flush=True)
-        atp = gate_attribution(
-            model, eliciting, toxic_ids, batch_size=args.batch_size
-        )
+        atp = gate_attribution(model, eliciting, toxic_ids, batch_size=args.batch_size)
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp.numpy())
     else:
@@ -122,6 +126,7 @@ def main():
             steer_layer=args.steer_layer,
             batch_size=args.batch_size,
             max_new_tokens=args.max_new_tokens,
+            downweight_scale=args.downweight_scale,
             eliciting=eliciting,
             neutral=neutral,
         )

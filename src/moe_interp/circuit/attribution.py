@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import torch
 
+from moe_interp.capture.model_adapter import model_num_experts
 from moe_interp.circuit.toxicity import relative_logit_score, right_padded
 
 
@@ -36,7 +37,7 @@ def gate_attribution(
     raises the toxic score, so ablating it would lower it).
     """
     n_layers = model.config.num_hidden_layers
-    n_experts = model.config.num_local_experts
+    n_experts = model_num_experts(model)
     attr = torch.zeros(n_layers, n_experts)
 
     with right_padded(model):
