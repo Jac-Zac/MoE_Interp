@@ -15,9 +15,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
     "transformers>=5.9.0",
-    "scikit-learn>=1.8.0",
-    "scipy>=1.17.1",
-    "dadapy>=0.3.1",
 ]
 
 [dependency-groups]
