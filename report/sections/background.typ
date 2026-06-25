@@ -2,7 +2,7 @@
 
 == Transformer Residual Stream
 
-A transformer builds a $d$-dimensional residual stream across $L$ layers
+A transformer @vaswani2017attention builds a $d$-dimensional residual stream across $L$ layers
 @elhage2021mathematical. At the final layer, this stream is projected through the
 unembedding matrix $bold(D) in RR^(v times d)$ to produce logits over the vocabulary.
 Each row of $bold(D)$ is a direction associated with a specific token.
@@ -27,7 +27,7 @@ residual stream.
 
 Recent work suggests several complementary views of MoE specialization. The domain/driver
 expert framework @wang2025whatgets separates experts that specialize in semantic domains
-from experts that exert strong causal influence on predictions. Semantic routing studies
+from experts that exert strong causal influence on predictions @ternovtsii2026geometric. Semantic routing studies
 @jin2025probing test whether input meaning influences routing patterns, while MoE editing
 methods @moeedit2025 ask how to change expert behavior without perturbing routing. Newer
 interpretability analyses such as MoE Lens @chaudhari2026moelens emphasize that a small set
@@ -41,7 +41,9 @@ somewhat *more* monosemantic than dense FFN neurons but still polysemantic; @mon
 show that an individual expert at one layer yields little interpretable structure and that
 semantics instead live in cross-layer routing *paths*; and @illusionspecialization2026 report
 a domain-invariant ``standing committee'' of experts active across domains, i.e. specialization
-is weaker than routing statistics suggest. Architectures such as Monet @park2024monet and
+is weaker than routing statistics suggest; @do2026domain likewise question whether
+domain-specific experts exist at all, and @wang2026myth argue that expert assignment reflects
+representation geometry rather than genuine semantic specialization. Architectures such as Monet @park2024monet and
 intrinsically-interpretable MoEs @he2025intrinsic are built specifically to *force* the
 monosemanticity that standard experts lack. The defensible reading is therefore not that
 per-expert decomposition is uninformative, but that any *single-expert, single-readout* summary
@@ -49,7 +51,8 @@ under-reads a polysemantic expert --- a claim we test directly in @sec:results.
 
 == SOMP
 
-Simultaneous Orthogonal Matching Pursuit @tropp2006algorithms @mallat1993matching is a
+Simultaneous Orthogonal Matching Pursuit @tropp2006algorithms @mallat1993matching --- the
+multi-sample generalization of Orthogonal Matching Pursuit @pati1993orthogonal --- is a
 greedy sparse coding algorithm. Given a data matrix $bold(H) in RR^(n times d)$ (here,
 aggregated expert activations across $n$ documents) and a dictionary
 $bold(D) in RR^(v times d)$ (here, the unembedding matrix), SOMP iteratively selects
@@ -63,10 +66,7 @@ least-squares. After $T$ steps, we obtain a sparse set of vocabulary tokens that
 characterize the expert's behavior. The explained variance ratio (EVR) at each step
 measures how much signal the selected atoms capture.
 
-In word-dictionary mode, multi-token words are appended as averaged atoms on top of the base
-vocabulary and then re-normalized, so merged words remain comparable to single-token atoms.
-
-This is a multi-sample generalization of the Logit Lens @nostalgebraist2020logitlens:
-projecting a single activation onto $bold(D)$ is equivalent to one step of Matching
-Pursuit on one sample. SOMP extends this by operating on many samples simultaneously and
+This is a multi-sample generalization of the Logit Lens @nostalgebraist2020logitlens (and its
+trained refinement, the Tuned Lens @belrose2023tunedlens): projecting a single activation onto
+$bold(D)$ is equivalent to one step of Matching Pursuit on one sample. SOMP extends this by operating on many samples simultaneously and
 selecting multiple atoms @basile2025headpursuit.

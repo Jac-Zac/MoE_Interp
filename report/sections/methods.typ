@@ -1,4 +1,4 @@
-= Methods
+= Methods <sec:methods>
 
 We adapt Head Pursuit @basile2025headpursuit from attention heads to MoE experts. Where
 Head Pursuit decomposes per-head residual stream contributions, we decompose per-expert gated
@@ -40,15 +40,12 @@ For each expert, we run SOMP with the L2-normalized unembedding matrix as dictio
 $T = 25$ iterations. This produces a ranked list of vocabulary tokens that best explain the
 expert's variance across questions, along with cumulative EVR scores.
 
-== Word-Dictionary Mode
+== Analysis Modes
 
-In addition to the base unembedding dictionary, the pipeline can augment the dictionary with
-averaged atoms for multi-token words. These merged atoms are re-normalized after averaging so
-their direction, rather than their smaller norm, determines their influence during SOMP.
-
-== Two Modes of Analysis
-
-The pipeline supports two complementary analysis modes.
+The pipeline supports two complementary analysis modes, and either can run over a
+word-augmented dictionary in which multi-token words are appended as averaged atoms on top of
+the base vocabulary and re-normalized, so their direction --- not their smaller norm ---
+determines their influence during SOMP.
 
 *Full-dictionary mode.* SOMP searches the entire vocabulary ($v approx 50{,}000$ tokens). The
 output is an unrestricted ranked list of tokens that summarize the expert's aggregate
@@ -71,11 +68,11 @@ steering.
 
 Expert Pursuit is _correlational_: it reports which vocabulary directions an expert's output
 aligns with, not whether that expert _causes_ a behavior. To test causation we build a small
-circuit pipeline around a concrete target behavior --- toxic text generation --- in three
-stages: (i) _classify_ experts by toxicity association (no causal test), (ii) _localize_ the
-experts that are causally responsible, and (iii) _intervene_ during generation to suppress the
-behavior. The same machinery is concept-agnostic: only the target token set and prompts are
-toxicity-specific. All experiments run locally on Apple MPS.
+circuit pipeline around a concrete target behavior --- toxic text generation --- in two stages:
+we _localize_ the experts that are causally responsible, then _intervene_ during generation to
+suppress the behavior, using the correlational pursuit (SOMP) ranking from above as the
+association-only baseline to beat. The same machinery is concept-agnostic: only the target token
+set and prompts are toxicity-specific. All experiments run locally on Apple MPS.
 
 The fused-experts kernel in OLMoE does not expose per-expert hidden neurons during a forward
 pass, so the only differentiable, interventionable per-expert node is the *router gate*: tapping
@@ -87,19 +84,11 @@ states, selected expert indices, and gate weights. Every causal operation below 
 We score toxicity with a *toxic-logit* probe: for a logit vector $bold(z)$ at the prediction
 position, $ s_("tox")(bold(z)) = 1/(|cal(T)|) sum_(t in cal(T)) z_t - 1/v sum_(t=1)^v z_t $ <eq:toxprobe>
 where $cal(T)$ is a set of single-token offensive words (from the `offensive` concept list) and
-$v$ is the vocabulary size --- the mean toxic-token logit relative to the row mean. We use 12
-toxic-eliciting prompts (_"Please complete the text, but don't say anything nice: ..."_) and 12
-matched neutral prompts (_"Please complete the text: ..."_).
-
-=== Direct Logit Attribution (gradient-free classifier)
-
-Following the expert-level direct-logit-attribution idea @expertstrikesback2026, we score each
-expert by how much its stored output writes toward toxic vocabulary, with no model forward pass.
-With $bold(U)$ the unembedding and $bold(d)_("tox") = macron(bold(U))_(cal(T)) - macron(bold(U))$
-the toxic-logit direction, expert $e$ at layer $l$ scores
-$ "DLA"(l,e) = 1/n sum_(i=1)^n bold(c)_(l,e)^i dot bold(d)_("tox") $ <eq:dla>
-averaged over the expert's stored gated contributions $bold(c)_(l,e)^i$. The router gate is
-already folded into $bold(c)$, so this is exactly the expert's additive push on the toxic logits.
+$v$ is the vocabulary size --- the mean toxic-token logit relative to the row mean. For prompts
+we draw a split from RealToxicityPrompts @gehman2020realtoxicityprompts, partitioning by each
+prompt's own toxicity score into a high-toxicity _eliciting_ set and a matched low-toxicity
+_neutral_ set. The eliciting set drives the patching, attribution, and intervention experiments;
+a diff-of-means between the two sets isolates the toxic direction used for project-out.
 
 === Activation Patching (causal ground truth)
 
@@ -125,7 +114,7 @@ correlation of the two per-expert grids.
 To suppress toxicity at generation time we compare three families of intervention, applied at
 every decoded step:
 - *Knockout* --- zero the gates of the top-$k$ identified experts (we vary which identifier
-  supplies the set: AtP, patching, DLA, SOMP, or a random control).
+  supplies the set: AtP, patching, SOMP, or a random control).
 - *Down-weight* --- scale those gates by a factor (a softer knockout).
 - *Project-out* --- remove the toxic direction's component from the residual stream at a layer,
   $bold(h) <- bold(h) - (bold(h) dot hat(bold(v))) hat(bold(v))$, leaving every

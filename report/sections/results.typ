@@ -60,6 +60,9 @@ the early and middle layers.
 
 == All-Token Capture on the Pile <sec:alltoken>
 
+#text(fill: red)[_Template — figures below pending re-run: all-token capture is not in the
+current `capture.py` (last-token only); numbers to be refilled after re-extraction._]
+
 The last-token run above samples one activation per routed document, which leaves most experts
 under-sampled --- only 393 of 1,024 cleared the 5-document threshold. Capturing *every* token
 position instead routes far more activations to each expert: on the 10,000-document Pile sample
@@ -144,22 +147,6 @@ The 18 most frequent rank-1 (highest-ranked) atoms across all 1,024 experts. `am
 British/formal-register feature being encoded redundantly across many experts.
   ],
 ) <fig:atoms>
-
-=== Topic Families
-
-To check whether the hand-picked families of @tab:alltoken reflect global structure, we cluster
-all experts directly. Each expert is encoded as a TF-IDF bag of its readable atom tokens
-(rank-weighted, function words removed) and grouped by agglomerative clustering with cosine
-distance into 16 families (`scripts/analyze_pursuit.py`). The result reinforces both findings.
-The single highest-EVR family (24 experts, mean EVR $0.172$, $approx 3 times$ the global mean)
-is exactly the British/formal-register cluster --- recovered automatically rather than by
-inspection. At the other extreme, two large generic families (379 and 204 experts) absorb more
-than half of all experts at near-baseline EVR: most experts do *not* fall into a sharp topic,
-the population-level signature of polysemanticity. The remaining $approx 13$ families are small
-and loosely topical (e.g. science/nature: `sec, trans, elephant, water, chief`; web/data:
-`international, data, series, group, countries`). An interactive `expert_explorer.html` (filter
-by layer, topic family, or token; click an expert for its full atom basis and EVR curve) ships
-alongside the results for browsing these groupings.
 
 == Concept-Restricted Pursuit: Numbers
 
@@ -252,13 +239,13 @@ over all 16 layers on the toxic-eliciting prompt set, covering 913 routed expert
 === Causal Localization: Experts Span All Depths, Including Suppressors
 
 The activation-patching grid (@eq:patch) shows that the causally important experts are *not*
-confined to the late layers where the pursuit and DLA specialists live. @tab:patch lists the ten
+confined to the late layers where the pursuit specialists live. @tab:patch lists the ten
 experts with the largest absolute effect: they range from layer~0 to layer~15, and roughly half
 are *suppressors* (negative effect --- ablating them _raises_ toxicity). The single most causal
-expert, L09~E12, is a strong suppressor. This is structure that a vocabulary-aligned classifier
-cannot see: DLA (@eq:dla) concentrates almost entirely in the final two layers (its top experts
-are L14~E38, L14~E56, L15~E07), because projecting _early_-layer activations onto the unembedding
-is ill-posed --- the early residual basis is positional and syntactic, not yet semantic.
+expert, L09~E12, is a strong suppressor. This is structure that a vocabulary-aligned readout
+cannot see: pursuit's high-EVR specialists concentrate in the later layers, because projecting
+_early_-layer activations onto the unembedding is ill-posed --- the early residual basis is
+positional and syntactic, not yet semantic.
 
 #figure(
   table(
@@ -278,19 +265,18 @@ is ill-posed --- the early residual basis is positional and syntactic, not yet s
   caption: [
 Experts with the largest absolute causal effect (@eq:patch) on the toxic-logit probe. Positive =
 the expert promotes toxicity (ablation lowers the score); negative = suppressor. The effects span
-all depths, unlike the late-layer DLA/pursuit specialists.
+all depths, unlike the late-layer pursuit specialists.
   ],
 ) <tab:patch>
 
 === Faithfulness: gate-AtP Recovers the Causal Grid Cheaply
 
-@tab:faith compares the two _cheap_ expert scores against the patching grid by Pearson
+@tab:faith compares the cheap expert scores against the patching grid by Pearson
 correlation over all 913 scored experts. Gate attribution patching (@eq:atp) --- a single
 backward pass --- predicts the expensive grid closely (pooled $r approx 0.80$, and $0.83$--$0.98$
-within individual layers), whereas the gradient-free activation-DLA score is essentially
-_uncorrelated_ with causal effect. The lesson is sharp: token association (DLA, and by extension
-SOMP) is not causation, but a first-order gradient on the gate _is_ a faithful, one-pass proxy
-for the full ablation sweep.
+within individual layers), whereas the correlational SOMP/pursuit ranking is essentially
+_uncorrelated_ with causal effect. The lesson is sharp: token association is not causation, but a
+first-order gradient on the gate _is_ a faithful, one-pass proxy for the full ablation sweep.
 
 #figure(
   table(
@@ -303,12 +289,12 @@ for the full ablation sweep.
       table.hline(stroke: 0.5pt),
     ),
     [gate-AtP (gradient)],       [1 backward pass], [$+0.80$],
-    [DLA (activations only)],    [no model],        [$+0.005$],
+    [SOMP (token association)],  [no model],        [#text(fill: red)[_fill_]],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
 Faithfulness of the cheap attributors to the causal patching grid, pooled over 913 experts. The
-gradient method is faithful; the activation-only classifier is not.
+gradient method is faithful; the correlational token-association ranking is not.
   ],
 ) <tab:faith>
 
@@ -318,7 +304,7 @@ gradient method is faithful; the activation-only classifier is not.
 intervention (knockout of the top-15 experts from each identifier, plus down-weight and
 project-out), relative to an unintervened baseline of $+2.48$. Two results stand out. First,
 _only the causally-identified experts matter_: knocking out the AtP or patching set lowers
-toxicity (by $0.48$ and $0.34$), while knocking out the SOMP-, DLA-, or random-identified sets
+toxicity (by $0.48$ and $0.34$), while knocking out the SOMP- or random-identified sets
 does essentially nothing --- a direct demonstration that correlational expert identification is
 causally inert. Second, *project-out is the best suppressor*: removing the toxic direction from
 the residual stream gives the largest drop ($-0.58$, a $approx 24%$ reduction) while keeping
@@ -341,7 +327,6 @@ is the recipe we recommend.
     [AtP-knockout (top 15)],    [$+2.00$], [$-0.48$], [$+1.00$],
     [patching-knockout],        [$+2.14$], [$-0.34$], [$+0.83$],
     [AtP-downweight ($times 0.5$)], [$+2.20$], [$-0.28$], [$+0.90$],
-    [DLA-knockout],             [$+2.50$], [$+0.02$], [$+0.94$],
     [SOMP-knockout],            [$+2.50$], [$+0.02$], [$+0.87$],
     [random-knockout],          [$+2.58$], [$+0.10$], [$+0.85$],
     [*project-out* (\@L12)],    [$bold(+1.90)$], [$bold(-0.58)$], [$+1.26$],
@@ -350,8 +335,8 @@ is the recipe we recommend.
   caption: [
 Toxic-logit propensity over generated continuations under each intervention (lower = less toxic).
 $Delta$ is the reduction from baseline; the neutral column is the collateral check. Causal
-identifiers (AtP, patching) and project-out suppress toxicity; correlational identifiers (DLA,
-SOMP, random) do not.
+identifiers (AtP, patching) and project-out suppress toxicity; correlational identifiers (SOMP,
+random) do not.
   ],
 ) <tab:intervene>
 
