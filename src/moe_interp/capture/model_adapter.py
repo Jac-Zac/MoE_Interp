@@ -102,17 +102,16 @@ class MoEAdapter(ABC):
         real_mask: torch.Tensor,
         second_moment: torch.Tensor,
         token_ids: torch.Tensor,
-        max_len: int,
         norm_weight: torch.Tensor,
         norm_eps: float,
-    ) -> dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Recompute each expert's per-token contribution from one MoE block's inputs.
 
         Loops only over experts that fired; for each, batches all its (token, slot)
         pairs through ``expert_forward``, scales by the routing weight, then applies
         component RMSNorm. Returns ``{expert_id: (activations, token_ids,
-        routing_weights, positions)}`` over real tokens only, CPU/float16 ready to
-        write. Args mirror the flattened ``(b_size * max_len)`` token axis;
+        routing_weights)}`` over kept tokens only, CPU/float16 ready to write. Args
+        mirror the flattened ``(b_size * max_len)`` token axis;
         ``real_mask``/``second_moment``/``token_ids`` are length N and are moved to
         the experts' device here.
         """
@@ -141,7 +140,6 @@ class MoEAdapter(ABC):
                 contrib.half().cpu(),
                 token_ids[t_idx].cpu(),
                 top_k_weights[t_idx, k_idx].cpu(),
-                (t_idx % max_len).cpu(),
             )
         return out
 

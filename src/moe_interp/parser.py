@@ -35,25 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch_size", type=int, default=8, help="Batch size for capture"
     )
     extract_parser.add_argument(
-        "--token_selection",
-        type=str,
-        default="last",
-        choices=["last", "all"],
-        help="Tokens to store per prompt: last real token or all real tokens",
-    )
-    extract_parser.add_argument(
-        "--max_rows_per_expert",
-        type=int,
-        default=None,
-        help="Cap rows kept per (layer, expert); extra rows are dropped once full "
-        "(recommended with --token_selection all to bound disk; default: unbounded)",
-    )
-    extract_parser.add_argument(
         "--max_length",
         type=int,
         default=None,
         help="Max prompt token length (default: model max_position_embeddings). "
-        "Lower values (e.g. 256) fit far more documents per GB for all-token capture.",
+        "Lower values (e.g. 256) fit far more documents per batch.",
     )
 
     pursuit_parser = subparsers.add_parser(

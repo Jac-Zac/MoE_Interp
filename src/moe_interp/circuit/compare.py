@@ -4,8 +4,7 @@ The patching grid (single-expert gate ablation, one forward per expert) is the c
 ground truth for "which experts drive the toxic continuation". This scores how well a
 cheap method predicts it, by Pearson correlation over the experts the grid actually scored.
 Empirically gate-AtP (one backward pass) tracks it closely (pooled r≈0.80, per-layer up to
-0.98) while the gradient-free activation-DLA score is ~uncorrelated (r≈0.005) — causal
-attribution, not token association, is what predicts causal effect.
+0.98) — causal attribution, not token association, is what predicts causal effect.
 """
 
 from __future__ import annotations

@@ -38,9 +38,9 @@ pipeline. It is kept out of the CLI as `# %%` walkthroughs under `notebooks/circ
 (it was the most experimental part of the project; see [docs/circuit.md](docs/circuit.md)):
 
 ```bash
-python notebooks/circuits/dla.py        # classify: gradient-free DLA toxic score (no model)
-python notebooks/circuits/patching.py   # localize: causal patching grid + gate-AtP faithfulness
-python notebooks/circuits/steer.py      # intervene: knockout / project-out + assemble HTML report
+python main.py pursuit --concept offensive  # classify: SOMP experts whose atoms are offensive
+python notebooks/circuits/patching.py        # localize: causal patching grid + gate-AtP faithfulness
+python notebooks/circuits/steer.py           # intervene: knockout / project-out + assemble HTML report
 ```
 
 ## Project Structure
@@ -53,7 +53,6 @@ python notebooks/circuits/steer.py      # intervene: knockout / project-out + as
 │   ├── notebook_pursuit.py            # Pursuit demo
 │   ├── notebook_analysis.py           # Logit-lens vs SOMP walkthrough
 │   └── circuits/                      # Causal toxic-expert study (# %% walkthroughs)
-│       ├── dla.py                     # classify: DLA toxic score (no model)
 │       ├── patching.py               # localize: patching grid + gate-AtP faithfulness
 │       └── steer.py                   # intervene: knockout / project-out + report
 ├── src/moe_interp/
@@ -67,10 +66,9 @@ python notebooks/circuits/steer.py      # intervene: knockout / project-out + as
 │   │   └── concepts.py                # Word lists (offensive, countries, numbers)
 │   ├── analysis/
 │   │   ├── common.py                  # Shared loaders for the post-hoc analyses
-│   │   ├── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
-│   │   └── toxic_dla.py               # Gradient-free toxic-expert classifier (no model)
+│   │   └── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
 │   ├── circuit/                       # Causal toxic-expert study (model in the loop)
-│   │   ├── prompts.py                 # Toxic-eliciting + matched neutral prompts
+│   │   ├── prompts.py                 # RealToxicityPrompts eliciting/neutral split
 │   │   ├── toxicity.py                # Toxic-logit probe + shared gate-ablation plumbing
 │   │   ├── patching.py                # Per-(layer,expert) causal effect grid
 │   │   ├── attribution.py             # gate-AtP: whole grid in one backward pass

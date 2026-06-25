@@ -1,8 +1,8 @@
 """Assemble the toxic-circuit results into one self-contained HTML report.
 
 Reads the artifacts written by the `circuit*` commands under ``data/<model>/circuit/``:
-patching grid, DLA grid, the faithfulness comparison, and the intervention experiment.
-Missing pieces are skipped, so the report renders whatever has been produced so far.
+patching grid, the faithfulness comparison, and the intervention experiment. Missing
+pieces are skipped, so the report renders whatever has been produced so far.
 """
 
 from __future__ import annotations
@@ -80,12 +80,6 @@ def build_report(model_name: str) -> Path:
                     "no",
                 ],
                 [
-                    "classify",
-                    "DLA (no model)",
-                    "experts that write toward toxic vocabulary, from stored activations",
-                    "no",
-                ],
-                [
                     "localize",
                     "activation patching",
                     "ablate every expert's gate, measure Δ toxic-logit (ground truth)",
@@ -116,7 +110,7 @@ def build_report(model_name: str) -> Path:
         '<p class="note"><b>Headline findings.</b> (1) Causally important experts span all '
         "depths, including <i>suppressor</i> experts that <i>raise</i> toxicity when removed. "
         "(2) gate-AtP faithfully predicts the expensive patching grid (Pearson r≈0.80) in one "
-        "backward pass. (3) Correlational classifiers (SOMP, DLA) flag toxicity-<i>associated</i> "
+        "backward pass. (3) The correlational SOMP classifier flags toxicity-<i>associated</i> "
         "experts, but knocking them out does nothing — only the causally-identified (AtP / "
         "patching) experts suppress toxicity when removed. (4) <b>Project-out is the best "
         "suppressor</b>: it lowers toxic propensity the most while keeping generation fluent, "
@@ -130,8 +124,9 @@ def build_report(model_name: str) -> Path:
         "<h3>Setup</h3><p>OLMoE-1B-7B (16 layers, 64 experts, top-8 routing) run locally on "
         "Apple MPS. The probe is the <b>toxic-logit score</b>: the mean logit over a set of "
         "single-token offensive words minus the row-mean logit, read at the prediction "
-        "position. We use 12 toxic-eliciting prompts (<i>“Please complete the text, but don’t "
-        "say anything nice: …”</i>) and 12 matched neutral prompts. The fused-experts kernel "
+        "position. Prompts are a <b>RealToxicityPrompts split</b>: high-toxicity prompts to "
+        "elicit toxic continuations and matched low-toxicity prompts as the neutral control "
+        "(partitioned by the dataset's own per-prompt toxicity score). The fused-experts kernel "
         "exposes only the router gate (<code>layer.mlp.experts.inputs[0]</code> → "
         "<code>hidden, top_k_index, top_k_weights</code>) as a per-expert node, so all "
         "expert-level interventions and gradients act on the gate.</p>"
@@ -141,11 +136,7 @@ def build_report(model_name: str) -> Path:
         "<ul>"
         "<li><b>SOMP / Expert Pursuit.</b> Decompose each expert’s stored activations against the "
         "unembedding dictionary (Simultaneous Orthogonal Matching Pursuit); experts whose top atoms "
-        "are offensive words are flagged. Adapts HeadPursuit (attention heads) to MoE experts.</li>"
-        "<li><b>DLA (Direct Logit Attribution).</b> Gradient-free, from stored activations only: "
-        "<code>score(l,e) = mean_tokens(contribution · toxic_dir)</code> with "
-        "<code>toxic_dir = mean(U[toxic]) − mean(U)</code> — how much an expert writes toward toxic "
-        "vocabulary.</li></ul>"
+        "are offensive words are flagged. Adapts HeadPursuit (attention heads) to MoE experts.</li></ul>"
     )
     parts.append(
         "<h3>Localization — which experts are <i>causally</i> responsible</h3><ul>"
@@ -193,18 +184,6 @@ def build_report(model_name: str) -> Path:
             "blue = suppresses). Causally important experts span <b>all depths</b> and include "
             "<b>suppressors</b> (negative) — neither of which the classifiers below capture.</p>"
         )
-    dg = cdir / "dla" / "pile10k" / "dla_grid.npy"
-    if dg.exists():
-        parts.append(
-            fig(_heatmap(np.load(dg), "DLA toxic-write score per expert", "DLA"))
-        )
-        parts.append(
-            '<p class="note">The gradient-free DLA classifier concentrates in the <b>final '
-            "two layers</b> (where experts write to vocabulary) — it misses the early/mid "
-            "causal experts above, because projecting early activations onto the unembedding "
-            "is ill-posed.</p>"
-        )
-
     fa = load_json(cdir / "compare" / "faithfulness.json")
     if fa:
         parts.append("<h3>Which cheap method predicts the causal grid?</h3>")
@@ -219,8 +198,8 @@ def build_report(model_name: str) -> Path:
         )
         parts.append(
             '<p class="note"><b>gate-AtP (one backward pass) faithfully predicts the '
-            "expensive patching grid</b> (pooled r≈0.80, per-layer up to 0.98); the "
-            "activation-only DLA score is ~uncorrelated with causal effect.</p>"
+            "expensive patching grid</b> (pooled r≈0.80, per-layer up to 0.98) — causal "
+            "attribution, not token association, is what predicts causal effect.</p>"
         )
 
     iv = load_json(cdir / "steer" / "intervention.json")
@@ -257,7 +236,7 @@ def build_report(model_name: str) -> Path:
         parts.append(
             '<p class="note">Lower propensity = less of the concept; neutral is the '
             "collateral check (should stay near baseline). <b>Causally-identified knockout "
-            "(AtP / patching) suppresses toxicity; correlational (SOMP / DLA / random) does "
+            "(AtP / patching) suppresses toxicity; correlational (SOMP / random) does "
             "nothing. Project-out gives the largest drop while keeping generation fluent.</b></p>"
         )
         others = [m for m in methods if m != "baseline"]
@@ -279,7 +258,7 @@ def build_report(model_name: str) -> Path:
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
         f"<title>Toxic-circuit report — {model_name}</title><style>{_css()}</style></head>"
         f"<body><h1>Causal toxic-expert circuit</h1>"
-        f'<p class="sub">{model_name} · OLMoE · seed toxic prompts</p>{body}</body></html>'
+        f'<p class="sub">{model_name} · OLMoE · RealToxicityPrompts split</p>{body}</body></html>'
     )
     out = cdir / "report.html"
     out.write_text(html)

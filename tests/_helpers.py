@@ -66,7 +66,6 @@ def no_op_norm_kwargs(n_tokens: int) -> dict:
         real_mask=torch.ones(n_tokens, dtype=torch.bool),
         second_moment=torch.ones(n_tokens),
         token_ids=torch.arange(n_tokens),
-        max_len=n_tokens,
         norm_weight=torch.ones(D),
         norm_eps=0.0,
     )

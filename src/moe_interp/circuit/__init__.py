@@ -3,7 +3,7 @@
 The question: which experts are *causally* responsible for toxic continuations — and can
 we suppress toxicity by acting on them? Modules:
 
-- ``prompts``     — toxic-eliciting and matched neutral seed prompts.
+- ``prompts``     — RealToxicityPrompts eliciting/neutral split (high- vs low-toxicity).
 - ``toxicity``    — toxic-logit metric, shared ablation plumbing, whole-set significance test.
 - ``patching``    — the per-(layer, expert) causal effect grid (one forward per expert).
 - ``attribution`` — gate-AtP: gradient estimate of the whole grid in one backward pass.
@@ -13,6 +13,6 @@ we suppress toxicity by acting on them? Modules:
   toxic direction from last-token residuals).
 - ``report``      — assembles the artifacts into one self-contained HTML report.
 
-The gradient-free expert *classifier* counterpart (no model) is
-``moe_interp.analysis.toxic_dla``.
+The correlational expert *classifier* counterpart (no model) is SOMP / Expert Pursuit
+(``moe_interp.pursuit``), scored on the offensive concept word list.
 """

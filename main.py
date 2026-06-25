@@ -53,8 +53,6 @@ def main():
             model_name=model_name,
             dataset_name=args.dataset,
             batch_size=args.batch_size,
-            token_selection=args.token_selection,
-            max_rows_per_expert=args.max_rows_per_expert,
         )
 
     elif args.command == "pursuit":

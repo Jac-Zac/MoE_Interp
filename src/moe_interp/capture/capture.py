@@ -1,7 +1,7 @@
 """Expert activation capture for Expert Pursuit."""
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import h5py
 import torch
@@ -17,15 +17,6 @@ from moe_interp.capture.cache import (
 )
 from moe_interp.capture.model_adapter import MoEAdapter, get_model_adapter
 from moe_interp.config import get_unembedding_dir
-
-
-def token_real_mask(prompt_lengths, max_len: int) -> torch.Tensor:
-    """Boolean mask over the flattened (b_size * max_len) token axis, True for real
-    (non-padding) tokens. Right-padding means token t is real iff (t % max_len) is below
-    that row's prompt length."""
-    lengths = torch.as_tensor(prompt_lengths, dtype=torch.long)
-    flat = torch.arange(len(lengths) * max_len)
-    return (flat % max_len) < lengths[flat // max_len]
 
 
 def prepare_prompts_dataset(prompts: Dataset | list[list[int]]) -> Dataset:
@@ -58,10 +49,10 @@ def _capture_batch(
     batch: dict,
     norm_weight: torch.Tensor,
     norm_eps: float,
-    token_selection: Literal["last", "all"],
-    max_rows_per_expert: int | None = None,
 ) -> int:
-    """Trace one batch, reconstruct every expert's contribution, flush. Returns batch size.
+    """Trace one batch, reconstruct every expert's last-token contribution, flush.
+
+    Returns the batch size.
 
     Pass 1 (one trace): tap each MoE block's boundary inputs (hidden_states,
     top_k_index, top_k_weights) plus the final-norm input. nnsight 0.7's ``tracer.iter``
@@ -69,10 +60,8 @@ def _capture_batch(
     never materialise per-expert tensors, so we do NOT trace inside the experts.
     Pass 2 (outside the trace): ``adapter.reconstruct_expert_contributions`` re-derives
     each expert's per-token output from the block inputs and weight params, using the
-    model-specific expert math.
-
-    ``max_rows_per_expert`` caps the rows kept per expert (truncating once full) to keep
-    all-token captures bounded on disk."""
+    model-specific expert math. We keep only each prompt's last real token (one row per
+    prompt per routed expert), which is plenty for SOMP over a large document set."""
     batch_tokens = batch["input_ids"]
     prompt_lengths = batch["length"]
     b_size = len(batch_tokens)
@@ -85,18 +74,15 @@ def _capture_batch(
     # comprehension's scope doesn't bind saved proxies back after the trace on nnsight 0.7.
     expert_inputs: list = []
     with torch.no_grad(), model.trace(batch_tokens):
-        input_ids = model.inputs[1]["input_ids"].save()
         for layer in model.model.layers:
             expert_inputs.append(adapter.tap_layer(layer).save())
         pre_norm_hidden = model.model.norm.input.save()
 
-    # Real-token mask over the flattened (b_size * max_len) axis.
+    # Keep only the last real token of each prompt, over the flattened (b_size * max_len)
+    # axis (right-padding: prompt row r's last token sits at r*max_len + length_r - 1).
     lengths = torch.as_tensor(prompt_lengths, dtype=torch.long)
-    if token_selection == "last":
-        flat = torch.arange(b_size * max_len)
-        keep_mask = flat == ((flat // max_len) * max_len + lengths[flat // max_len] - 1)
-    else:
-        keep_mask = token_real_mask(prompt_lengths, max_len)
+    flat = torch.arange(b_size * max_len)
+    keep_mask = flat == ((flat // max_len) * max_len + lengths[flat // max_len] - 1)
     token_ids = padded_token_ids.reshape(-1)
     second_moment = pre_norm_hidden.float().pow(2).mean(-1).reshape(-1)
 
@@ -113,21 +99,12 @@ def _capture_batch(
             real_mask=keep_mask,
             second_moment=second_moment,
             token_ids=token_ids,
-            max_len=max_len,
             norm_weight=norm_weight,
             norm_eps=norm_eps,
         )
-        # Append each expert's staged rows to its HDF5 file (max_rows_per_expert caps
-        # rows per expert so all-token captures stay bounded on disk).
-        for e, (acts, tokens, weights, positions) in contributions.items():
+        for e, (acts, tokens, weights) in contributions.items():
             append_to_file(
-                layer_files[layer_idx],
-                e,
-                acts,
-                tokens,
-                routing_weights=weights,
-                positions=positions,
-                max_rows=max_rows_per_expert,
+                layer_files[layer_idx], e, acts, tokens, routing_weights=weights
             )
     return b_size
 
@@ -139,21 +116,14 @@ def capture_expert_activations(
     model_name: str | None = None,
     dataset_name: str | None = None,
     batch_size: int = 8,
-    token_selection: Literal["last", "all"] = "last",
-    max_rows_per_expert: int | None = None,
 ) -> dict:
-    """Capture expert activations for all prompts using nnsight tracing.
+    """Capture each prompt's last-token expert contributions using nnsight tracing.
 
     Processes prompts in batches with right-padding so each prompt's tokens stay
-    at their true positions, preserving RoPE positional encodings.
-
-    ``max_rows_per_expert`` caps the rows kept per expert (recommended for
-    ``token_selection="all"`` to bound disk); once an expert is full, extra rows are
-    dropped.
+    at their true positions, preserving RoPE positional encodings. Stores one row per
+    prompt per routed expert (the prompt's last real token); over a large document set
+    this gives each expert plenty of rows for SOMP.
     """
-    if token_selection not in {"last", "all"}:
-        raise ValueError("token_selection must be 'last' or 'all'")
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -181,8 +151,6 @@ def capture_expert_activations(
                     batch=batch,
                     norm_weight=model.model.norm.weight,
                     norm_eps=model.model.norm.variance_epsilon,
-                    token_selection=token_selection,
-                    max_rows_per_expert=max_rows_per_expert,
                 )
                 progress.update(b_size)
     finally:
@@ -197,10 +165,8 @@ def capture_expert_activations(
         "n_layers": adapter.n_layers,
         "n_experts": adapter.n_experts,
         "d_model": adapter.d_model,
-        "token_selection": token_selection,
+        "token_selection": "last",
         "stores_routing_weights": True,
-        "stores_positions": True,
-        "max_rows_per_expert": max_rows_per_expert,
     }
     save_capture_artifacts(model, model_name, output_dir, metadata)
     return metadata

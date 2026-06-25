@@ -7,7 +7,7 @@ from typing import Any, cast
 import h5py
 import torch
 
-_OPTIONAL_EXPERT_FIELDS = ("routing_weights", "positions")
+_OPTIONAL_EXPERT_FIELDS = ("routing_weights",)
 
 
 def _metadata_path(path: Path) -> Path:
@@ -46,28 +46,14 @@ def append_to_file(
     activations: torch.Tensor,
     tokens: torch.Tensor,
     routing_weights: torch.Tensor | None = None,
-    positions: torch.Tensor | None = None,
-    max_rows: int | None = None,
 ) -> None:
     group_name = _expert_group_name(expert_id)
     acts = activations.detach().cpu()
     toks = tokens.detach().cpu()
     weights = routing_weights.detach().cpu() if routing_weights is not None else None
-    pos = positions.detach().cpu() if positions is not None else None
     if acts.numel() == 0:
         return
     group = f.require_group(group_name)
-    if max_rows is not None:
-        # Cap rows per expert: keep at most max_rows, truncating the incoming batch to
-        # whatever space is left (keeps disk bounded for all-token captures).
-        existing = group["activations"].shape[0] if "activations" in group else 0
-        room = max_rows - existing
-        if room <= 0:
-            return
-        if acts.shape[0] > room:
-            acts, toks = acts[:room], toks[:room]
-            weights = weights[:room] if weights is not None else None
-            pos = pos[:room] if pos is not None else None
     if "activations" not in group:
         group.create_dataset(
             "activations",
@@ -91,14 +77,6 @@ def append_to_file(
                 chunks=(max(weights.shape[0], 1),),
                 dtype=weights.numpy().dtype,
             )
-        if pos is not None:
-            group.create_dataset(
-                "positions",
-                data=pos,
-                maxshape=(None,),
-                chunks=(max(pos.shape[0], 1),),
-                dtype=pos.numpy().dtype,
-            )
         return
     act_ds = cast(h5py.Dataset, group["activations"])
     tok_ds = cast(h5py.Dataset, group["tokens"])
@@ -119,18 +97,6 @@ def append_to_file(
         weight_ds = cast(h5py.Dataset, group["routing_weights"])
         weight_ds.resize((new_size,))
         weight_ds[-weights.shape[0] :] = weights
-    if pos is not None:
-        if "positions" not in group:
-            group.create_dataset(
-                "positions",
-                data=torch.full((old_size,), -1, dtype=pos.dtype).numpy(),
-                maxshape=(None,),
-                chunks=(max(old_size, 1),),
-                dtype=pos.numpy().dtype,
-            )
-        pos_ds = cast(h5py.Dataset, group["positions"])
-        pos_ds.resize((new_size,))
-        pos_ds[-pos.shape[0] :] = pos
 
 
 def save_unembedding(path: Path, tensor: torch.Tensor) -> None:
@@ -163,7 +129,7 @@ def load_layer_h5(
     n_experts: int,
     min_activations: int = 0,
 ) -> dict[int, dict[str, torch.Tensor]]:
-    """Return {expert_id: {activations, tokens, [routing_weights], [positions]}}.
+    """Return {expert_id: {activations, tokens, [routing_weights]}}.
 
     Experts with fewer than min_activations rows are excluded.
     Returns an empty dict if the layer file does not exist.

@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from moe_interp.capture import prepare_prompts_dataset, save_capture_artifacts
 from moe_interp.capture.cache import append_to_file
-from moe_interp.capture.capture import token_real_mask
 from moe_interp.capture.model_adapter import get_model_adapter
 from moe_interp.config import get_data_dir, get_extractions_dir, set_seed
 from moe_interp.io.data import load_dataset_prompts
@@ -100,9 +99,13 @@ for batch in tqdm(
 
         pre_norm_hidden = model.model.norm.input.save()
 
-    # --- Pass 2: reconstruct & write every (token, expert) contribution, per layer ---
+    # --- Pass 2: reconstruct & write each expert's last-token contribution, per layer ---
     max_len = input_ids.shape[1]
-    real_mask = token_real_mask(prompt_lengths, max_len)  # (b*max_len,) drop padding
+    # Keep only each prompt's last real token (right-padding: row r's last token is at
+    # r*max_len + length_r - 1).
+    lengths = torch.as_tensor(prompt_lengths, dtype=torch.long)
+    flat = torch.arange(b_size * max_len)
+    keep_mask = flat == ((flat // max_len) * max_len + lengths[flat // max_len] - 1)
     second_moment = pre_norm_hidden.float().pow(2).mean(-1).reshape(-1)  # for RMSNorm
 
     for layer_idx, layer in enumerate(model.model.layers):
@@ -114,10 +117,9 @@ for batch in tqdm(
             hidden_states,
             top_k_index,
             top_k_weights,
-            real_mask=real_mask,
+            real_mask=keep_mask,
             second_moment=second_moment,
             token_ids=input_ids.reshape(-1),
-            max_len=max_len,
             norm_weight=norm_weight,
             norm_eps=norm_eps,
         ).items():
@@ -126,7 +128,6 @@ for batch in tqdm(
                 expert_id,
                 *rows[:2],
                 routing_weights=rows[2],
-                positions=rows[3],
             )
 
 # Set back tokenizer to pad to the left

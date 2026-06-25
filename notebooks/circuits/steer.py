@@ -5,12 +5,12 @@ The causal capstone. During greedy generation we either knock out the top identi
 promoter experts (zero their router gate) or project the diff-of-means toxic direction out
 of the residual stream, and measure the drop in toxic propensity vs the un-intervened
 baseline. The expert sets come from the artifacts the other circuit notebooks wrote
-(gate-AtP, the patching grid, DLA, SOMP) plus a matched random control, so this is also
-where "causal knockout suppresses toxicity, correlational knockout does nothing" shows up.
+(gate-AtP, the patching grid, SOMP) plus a matched random control, so this is also where
+"causal knockout suppresses toxicity, correlational knockout does nothing" shows up.
+Prompts default to a RealToxicityPrompts split (high- vs low-toxicity).
 
 The last cell assembles every circuit artifact under data/<model>/circuit/ into one
-self-contained HTML report. Mirrors the old `main.py circuit-steer` + `circuit-report`.
-Run `patching.py` (and optionally `dla.py`) first so the comparison sets exist.
+self-contained HTML report. Run `patching.py` first so the comparison sets exist.
 
   DATA_DIR=./data HF_HUB_OFFLINE=1 .venv/bin/python notebooks/circuits/steer.py
 """

@@ -4,9 +4,9 @@ Builds the set of methods to compare — baseline, the causal/correlational expe
 knockouts, a matched random control, and the project-out direction edit — then runs them
 all through :func:`run_intervention_experiment`. For the ``offensive`` concept the expert
 sets come from the artifacts produced by the other ``circuit`` commands (gate-AtP, the
-patching grid, DLA) and the SOMP results; other concepts only get the generic project-out
-of the unembedding concept direction, because the seed prompts only reliably elicit
-toxicity.
+patching grid) and the SOMP results; other concepts only get the generic project-out of
+the unembedding concept direction, because the eliciting prompts only reliably elicit
+toxicity. Prompts default to a real RealToxicityPrompts split (high- vs low-toxicity).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from moe_interp.circuit.intervene import (
     projectout_intervention,
     run_intervention_experiment,
 )
-from moe_interp.circuit.prompts import default_prompts
+from moe_interp.circuit.prompts import rtp_prompts
 from moe_interp.circuit.toxicity import right_padded
 from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
 from moe_interp.grids import top_experts
@@ -83,13 +83,9 @@ def _offensive_expert_sets(
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp)
     sets: dict[str, list[tuple[int, int]]] = {"AtP": topk_grid(atp)}
-    for name, rel in [
-        ("patching", "patching/patching_grid.npy"),
-        ("DLA", "dla/pile10k/dla_grid.npy"),
-    ]:
-        p = md / "circuit" / rel
-        if p.exists():
-            sets[name] = topk_grid(np.nan_to_num(np.load(p)))
+    patch_path = md / "circuit" / "patching" / "patching_grid.npy"
+    if patch_path.exists():
+        sets["patching"] = topk_grid(np.nan_to_num(np.load(patch_path)))
 
     pursuit_dir = get_pursuit_dir(model_name, "pile10k")
     if (pursuit_dir / "results.jsonl").exists():
@@ -126,13 +122,18 @@ def run_steer(
     steer_layer: int,
     batch_size: int,
     max_new_tokens: int,
+    eliciting: list[list[int]] | None = None,
+    neutral: list[list[int]] | None = None,
 ) -> dict:
     """Build the intervention methods and run the generation experiment.
 
+    ``eliciting`` / ``neutral`` are the concept-eliciting and matched prompt id-lists; if
+    omitted they default to a real RealToxicityPrompts split (high- vs low-toxicity).
     Returns ``{"methods": <per-method scores>, "meta": {...}}``; ``meta.sets`` records the
     knocked-out expert sets (empty for non-``offensive`` concepts).
     """
-    eliciting, neutral = default_prompts(model.tokenizer)
+    if eliciting is None or neutral is None:
+        eliciting, neutral = rtp_prompts(model.tokenizer)
     concept_words = CONCEPT_WORDS[concept]
     concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
 

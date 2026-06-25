@@ -41,9 +41,9 @@ layer_01.h5
 
 Each expert inside the file gets a group like `expert_012/`:
 
-- `activations` — the selected gated outputs (always)
-- `tokens` — token ids for those activations (always)
-- `routing_weights`, `positions` — only when capturing with `--token_selection all`
+- `activations` — the selected (last-token) gated expert outputs
+- `tokens` — token ids for those activations
+- `routing_weights` — the router gate weight for each stored expert/token row
 
 ## Unembedding cache
 

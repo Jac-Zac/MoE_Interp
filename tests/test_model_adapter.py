@@ -38,7 +38,7 @@ def _summed_reconstruction(adapter, experts, hidden, top_idx, weights) -> torch.
         experts, hidden, top_idx, weights, **no_op_norm_kwargs(N)
     )
     recon = torch.zeros(N, D)
-    for acts, ids, _, _ in out.values():
+    for acts, ids, _ in out.values():
         recon.index_add_(0, ids.long(), acts.float())
     return recon
 
