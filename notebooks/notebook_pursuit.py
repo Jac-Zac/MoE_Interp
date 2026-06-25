@@ -17,7 +17,7 @@ load_dotenv()
 set_seed(seed)
 
 # %% Setup
-DATASET_NAME = "triviaqa"
+DATASET_NAME = "pile10k"
 extractions_dir = get_extractions_dir(MODEL_NAME, DATASET_NAME)
 output_dir = get_pursuit_dir(MODEL_NAME, DATASET_NAME)
 metadata_path = extractions_dir / "metadata.json"

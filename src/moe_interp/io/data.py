@@ -23,8 +23,10 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
     # "Answer the following question in 1-3 words only. Do not provide any additional
     # explanation for your answer. Question: {question} Answer:"
     "triviaqa": DatasetSpec(
+        # NOTE: use the `rc.nocontext` config — we only read the `question` field, so
+        # the full `rc` config's bundled evidence documents (~17 GB) are pure waste.
         hf_id="mandarjoshi/trivia_qa",
-        config="rc",
+        config="rc.nocontext",
         text_field="question",
         # TriviaQA uses the model's chat template because OLMoE-Instruct expects
         # conversational prompts rather than raw completion text.

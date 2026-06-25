@@ -22,8 +22,8 @@ from moe_interp.config import get_default_model, get_model_dir, set_seed
 load_dotenv()
 set_seed(1337)
 MODEL_NAME = get_default_model()
-# DATASET = "pile10k"  # dense all-token capture; the regime where polysemanticity shows
-DATASET = "triviaqa"
+# pile10k: dense all-token capture; the regime where polysemanticity shows
+DATASET = "pile10k"
 MIN_ACTS = 50
 MAX_ROWS = 1500
 out_dir = get_model_dir(MODEL_NAME) / "analysis" / DATASET

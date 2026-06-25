@@ -26,10 +26,10 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument(
         "--dataset",
         type=str,
-        default="triviaqa",
+        default="pile10k",
         choices=sorted(DATASET_SPECS),
         required=False,
-        help="Dataset to extract from (default: triviaqa)",
+        help="Dataset to extract from (default: pile10k)",
     )
     extract_parser.add_argument(
         "--batch_size", type=int, default=8, help="Batch size for capture"
@@ -54,10 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     pursuit_parser.add_argument(
         "--dataset",
         type=str,
-        default="triviaqa",
+        default="pile10k",
         choices=sorted(DATASET_SPECS),
         required=False,
-        help="Dataset used for the extractions (default: triviaqa)",
+        help="Dataset used for the extractions (default: pile10k)",
     )
     pursuit_parser.add_argument(
         "--k", type=int, default=50, help="Top-k tokens per expert"
