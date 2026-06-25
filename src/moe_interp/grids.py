@@ -1,6 +1,6 @@
 """Shared helpers for ``(n_layers, n_experts)`` score grids.
 
-Patching, gate-AtP, and DLA all produce a layer×expert grid and then need its top
+Patching and gate-AtP both produce a layer×expert grid and then need its top
 cells. ``top_experts`` is the one place that turns a flat argmax into ``(layer, expert)``
 coordinates so the ``i // n_experts`` / ``i % n_experts`` arithmetic isn't re-derived per
 caller.

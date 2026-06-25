@@ -25,7 +25,7 @@ def diverging_expert_heatmap(
     """Layer×expert diverging heatmap: RdBu_r, centred at 0, layer 0 at the top.
 
     ``grid`` is an ``(n_layers, n_experts)`` array or tensor (NaNs allowed; they render as
-    gaps). Shared by the causal patching, DLA, and report figures.
+    gaps). Shared by the causal patching and report figures.
     """
     z = grid.cpu().numpy() if hasattr(grid, "cpu") else np.asarray(grid)
     vmax = float(np.nanmax(np.abs(z))) or 1.0

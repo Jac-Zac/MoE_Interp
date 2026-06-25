@@ -26,7 +26,7 @@ from moe_interp.circuit.intervene import (
     projectout_intervention,
     run_intervention_experiment,
 )
-from moe_interp.circuit.prompts import rtp_prompts
+from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.toxicity import right_padded
 from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
 from moe_interp.grids import top_experts
@@ -125,20 +125,25 @@ def run_steer(
     batch_size: int,
     max_new_tokens: int,
     downweight_scale: float = 0.5,
-    eliciting: list[list[int]] | None = None,
-    neutral: list[list[int]] | None = None,
+    train: tuple[list[list[int]], list[list[int]]] | None = None,
+    test: tuple[list[list[int]], list[list[int]]] | None = None,
 ) -> dict:
     """Build the intervention methods and run the generation experiment.
 
-    ``eliciting`` / ``neutral`` are the concept-eliciting and matched prompt id-lists; if
-    omitted they default to a real RealToxicityPrompts split (high- vs low-toxicity).
+    Experts and the diff-of-means direction are identified on the *train* eliciting/neutral
+    prompts; every method is then scored on the held-out *test* prompts, so the comparison is
+    out-of-sample. ``train`` / ``test`` are ``(eliciting, neutral)`` id-list pairs; if omitted
+    they default to a disjoint RealToxicityPrompts split (high- vs low-toxicity).
     ``downweight_scale`` is the gate multiplier for the softer "down-weight" variant of the
     AtP knockout (``0`` = full knockout, ``1`` = no-op). Returns ``{"methods": <per-method
     scores>, "meta": {...}}``; ``meta.sets`` records the knocked-out expert sets (empty for
     non-``offensive`` concepts).
     """
-    if eliciting is None or neutral is None:
-        eliciting, neutral = rtp_prompts(model.tokenizer)
+    if train is None or test is None:
+        elic_tr, elic_te, neut_tr, neut_te = rtp_split(model.tokenizer)
+        train, test = (elic_tr, neut_tr), (elic_te, neut_te)
+    eliciting, neutral = train
+    eliciting_eval, neutral_eval = test
     concept_words = CONCEPT_WORDS[concept]
     concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
 
@@ -176,8 +181,8 @@ def run_steer(
 
     results = run_intervention_experiment(
         model,
-        eliciting,
-        neutral,
+        eliciting_eval,
+        neutral_eval,
         concept_ids,
         methods,
         concept_words=concept_words,
@@ -190,6 +195,8 @@ def run_steer(
             "k": knockout_k,
             "steer_layer": steer_layer,
             "downweight_scale": downweight_scale,
+            "n_train": len(eliciting),
+            "n_test": len(eliciting_eval),
             "sets": meta_sets,
         },
     }

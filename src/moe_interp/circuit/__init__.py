@@ -3,7 +3,8 @@
 The question: which experts are *causally* responsible for toxic continuations — and can
 we suppress toxicity by acting on them? Modules:
 
-- ``prompts``     — RealToxicityPrompts eliciting/neutral split (high- vs low-toxicity).
+- ``prompts``     — RealToxicityPrompts split: ``rtp_split`` gives disjoint train (identify)
+  / test (evaluate) eliciting+neutral sets so the intervention is scored out-of-sample.
 - ``toxicity``    — toxic-logit metric, shared ablation plumbing, whole-set significance test.
 - ``patching``    — the per-(layer, expert) causal effect grid (one forward per expert).
 - ``attribution`` — gate-AtP: gradient estimate of the whole grid in one backward pass.

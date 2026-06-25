@@ -49,3 +49,28 @@ def rtp_prompts(
             "neutral prompts; loosen hi/lo or check the dataset is available."
         )
     return eliciting, neutral
+
+
+def rtp_split(
+    tokenizer,
+    *,
+    n_train: int = 24,
+    n_test: int = 24,
+    hi: float = 0.5,
+    lo: float = 0.1,
+    seed: int = 0,
+) -> tuple[list[list[int]], list[list[int]], list[list[int]], list[list[int]]]:
+    """Disjoint ``(elic_train, elic_test, neut_train, neut_test)`` RTP partitions.
+
+    Experts and the diff-of-means direction are identified on the *train* split; the
+    intervention is then scored on the held-out *test* split, so "causal knockout suppresses
+    toxicity, correlational knockout does not" is measured out-of-sample. The two halves are
+    a deterministic slice of one shuffled stream, so they never overlap.
+    """
+    elic, neut = rtp_prompts(tokenizer, n=n_train + n_test, hi=hi, lo=lo, seed=seed)
+    return (
+        elic[:n_train],
+        elic[n_train:],
+        neut[:n_train],
+        neut[n_train:],
+    )
