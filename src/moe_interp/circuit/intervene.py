@@ -43,30 +43,6 @@ def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
     return fn
 
 
-def downweight_intervention(
-    experts: list[tuple[int, int]], scale: float = 0.5
-) -> Callable:
-    """Intervention that *scales* the router gate of each ``(layer, expert)`` by ``scale``.
-
-    A softer knockout: instead of removing the expert's contribution entirely it shrinks
-    it toward zero. ``scale=0`` recovers :func:`knockout_intervention`, ``scale=1`` is a
-    no-op; ``0.5`` halves each expert's additive contribution to the residual stream.
-    """
-    by_layer: dict[int, list[int]] = {}
-    for layer, e in experts:
-        by_layer.setdefault(layer, []).append(e)
-
-    def fn(model):
-        for layer in sorted(
-            by_layer
-        ):  # nnsight 0.7 needs envoys touched in forward order
-            _, idx, w = model.model.layers[layer].mlp.experts.inputs[0]
-            for e in by_layer[layer]:
-                w[idx == e] *= scale
-
-    return fn
-
-
 def projectout_intervention(layer: int, v: torch.Tensor) -> Callable:
     """Remove the ``v`` component from the residual stream at ``layer`` (ablate the direction).
 

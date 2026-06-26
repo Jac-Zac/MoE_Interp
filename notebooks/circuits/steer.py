@@ -34,7 +34,7 @@ from moe_interp.config import get_default_model, get_device, get_model_dir, set_
 load_dotenv()
 set_seed(1337)
 MODEL_NAME = get_default_model()
-CONCEPT = "offensive"  # non-toxic concepts only get the generic project-out edit
+CONCEPT = "offensive"
 KNOCKOUT_K = int(os.environ.get("KNOCKOUT_K", 15))
 STEER_LAYER = int(os.environ.get("STEER_LAYER", 12))
 BATCH_SIZE = int(os.environ.get("STEER_BATCH_SIZE", 8))

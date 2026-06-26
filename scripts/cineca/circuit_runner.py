@@ -56,12 +56,6 @@ def main():
                         help="Train-set size (used for grid identification and steer training).")
     parser.add_argument("--n-test", type=int, default=24,
                         help="Held-out test set size (scored by steer experiment).")
-    parser.add_argument(
-        "--downweight-scale",
-        type=float,
-        default=0.5,
-        help="Gate multiplier for the soft AtP down-weight (0=knockout, 1=no-op)",
-    )
     args = parser.parse_args()
     atp_batch = args.atp_batch_size if args.atp_batch_size is not None else args.batch_size
 
@@ -151,7 +145,6 @@ def main():
             steer_layer=args.steer_layer,
             batch_size=args.batch_size,
             max_new_tokens=args.max_new_tokens,
-            downweight_scale=args.downweight_scale,
             train=(elic_tr, neut_tr),
             test=(elic_te, neut_te),
         )

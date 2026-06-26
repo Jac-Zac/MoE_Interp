@@ -310,7 +310,7 @@ evaluated in @tab:intervene.
 
 @tab:intervene reports the mean toxic-logit propensity over continuations generated on the
 *held-out test* prompts under each intervention (knockout of the top-15 experts from each
-identifier, plus down-weight, project-out, and additive steering), relative to an unintervened
+identifier, plus project-out and additive steering), relative to an unintervened
 baseline of $+1.97$. The held-out evaluation changes the picture sharply from what in-sample
 scoring would suggest, and the result is more interesting for it.
 
@@ -349,7 +349,6 @@ small set of experts.*
     [patching-knockout],            [$+1.90$], [$-0.07$], [$12%$], [$+1.38$],
     [SOMP-knockout],                [$+1.92$], [$-0.05$], [$16%$], [$+1.49$],
     [random-knockout],              [$+1.95$], [$-0.02$], [$12%$], [$+1.48$],
-    [AtP-downweight ($times 0.5$)], [$+1.96$], [$-0.01$], [$14%$], [$+1.49$],
     [*project-out* (\@L12)],        [$bold(+1.86)$], [$bold(-0.11)$], [$14%$], [$+1.48$],
     [steer (\@L12, $alpha = -1$)],  [$+1.19$], [$-0.78$], [$10%$], [$+0.69$],
     table.hline(stroke: 0.8pt),

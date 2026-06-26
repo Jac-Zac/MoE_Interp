@@ -2,11 +2,9 @@
 
 Builds the set of methods to compare — baseline, the causal/correlational expert
 knockouts, a matched random control, and the project-out direction edit — then runs them
-all through :func:`run_intervention_experiment`. For the ``offensive`` concept the expert
-sets come from the artifacts produced by the other ``circuit`` commands (gate-AtP, the
-patching grid) and the SOMP results; other concepts only get the generic project-out of
-the unembedding concept direction, because the eliciting prompts only reliably elicit
-toxicity. Prompts default to a real RealToxicityPrompts split (high- vs low-toxicity).
+all through :func:`run_intervention_experiment`. The expert sets come from the artifacts
+produced by the other ``circuit`` commands (gate-AtP, the patching grid) and the SOMP
+results. Prompts default to a real RealToxicityPrompts split (high- vs low-toxicity).
 """
 
 from __future__ import annotations
@@ -17,11 +15,9 @@ import numpy as np
 import torch
 
 from moe_interp.analysis.common import load_somp_results
-from moe_interp.capture.cache import load_unembedding
 from moe_interp.capture.model_adapter import model_num_experts
 from moe_interp.circuit.attribution import gate_attribution
 from moe_interp.circuit.intervene import (
-    downweight_intervention,
     knockout_intervention,
     projectout_intervention,
     run_intervention_experiment,
@@ -29,7 +25,7 @@ from moe_interp.circuit.intervene import (
 )
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.toxicity import right_padded
-from moe_interp.config import get_model_dir, get_pursuit_dir, get_unembedding_dir
+from moe_interp.config import get_model_dir, get_pursuit_dir
 from moe_interp.grids import top_experts
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
 
@@ -128,7 +124,6 @@ def run_steer(
     steer_layer: int,
     batch_size: int,
     max_new_tokens: int,
-    downweight_scale: float = 0.5,
     train: tuple[list[list[int]], list[list[int]]] | None = None,
     test: tuple[list[list[int]], list[list[int]]] | None = None,
 ) -> dict:
@@ -137,11 +132,9 @@ def run_steer(
     Experts and the diff-of-means direction are identified on the *train* eliciting/neutral
     prompts; every method is then scored on the held-out *test* prompts, so the comparison is
     out-of-sample. ``train`` / ``test`` are ``(eliciting, neutral)`` id-list pairs; if omitted
-    they default to a disjoint RealToxicityPrompts split (high- vs low-toxicity).
-    ``downweight_scale`` is the gate multiplier for the softer "down-weight" variant of the
-    AtP knockout (``0`` = full knockout, ``1`` = no-op). Returns ``{"methods": <per-method
-    scores>, "meta": {...}}``; ``meta.sets`` records the knocked-out expert sets (empty for
-    non-``offensive`` concepts).
+    they default to a disjoint RealToxicityPrompts split (high- vs low-toxicity). Returns
+    ``{"methods": <per-method scores>, "meta": {...}}``; ``meta.sets`` records the
+    knocked-out expert sets.
     """
     if train is None or test is None:
         elic_tr, elic_te, neut_tr, neut_te = rtp_split(model.tokenizer)
@@ -152,32 +145,21 @@ def run_steer(
     concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
 
     methods: dict = {"baseline": None}
-    meta_sets: dict = {}
-    if concept == "offensive":
-        sets = _offensive_expert_sets(
-            model,
-            model_name,
-            eliciting,
-            concept_ids,
-            concept_words,
-            k=knockout_k,
-            batch_size=batch_size,
-        )
-        for name, experts in sets.items():
-            methods[f"{name}-knockout"] = knockout_intervention(experts)
-        # Softer variant of the strongest causal set: scale (not zero) the AtP gates.
-        methods[f"AtP-downweight@{downweight_scale:g}"] = downweight_intervention(
-            sets["AtP"], downweight_scale
-        )
-        meta_sets = sets
-        # diff-of-means direction (validated for toxicity)
-        steer_dir = collect_last_token_residuals(model, eliciting, steer_layer).mean(
-            0
-        ) - (collect_last_token_residuals(model, neutral, steer_layer).mean(0))
-    else:
-        # Generic concepts: project out the unembedding concept direction.
-        U = load_unembedding(get_unembedding_dir(model_name) / "dictionary.h5").float()
-        steer_dir = U[concept_ids].mean(0) - U.mean(0)
+    sets = _offensive_expert_sets(
+        model,
+        model_name,
+        eliciting,
+        concept_ids,
+        concept_words,
+        k=knockout_k,
+        batch_size=batch_size,
+    )
+    for name, experts in sets.items():
+        methods[f"{name}-knockout"] = knockout_intervention(experts)
+    # diff-of-means direction (validated for toxicity)
+    steer_dir = collect_last_token_residuals(model, eliciting, steer_layer).mean(0) - (
+        collect_last_token_residuals(model, neutral, steer_layer).mean(0)
+    )
 
     methods[f"projectout@L{steer_layer}"] = projectout_intervention(
         steer_layer, steer_dir
@@ -201,9 +183,8 @@ def run_steer(
             "concept": concept,
             "k": knockout_k,
             "steer_layer": steer_layer,
-            "downweight_scale": downweight_scale,
             "n_train": len(eliciting),
             "n_test": len(eliciting_eval),
-            "sets": meta_sets,
+            "sets": sets,
         },
     }

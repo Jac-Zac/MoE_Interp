@@ -114,8 +114,7 @@ def build_report(model_name: str) -> Path:
         "experts, but knocking them out does nothing — only the causally-identified (AtP / "
         "patching) experts suppress toxicity when removed. (4) <b>Project-out is the best "
         "suppressor</b>: it lowers toxic propensity the most while keeping generation fluent, "
-        "where knockout is blunt and naive additive steering breaks the model. The intervention "
-        "generalizes to any concept via <code>circuit-steer --concept</code>.</p>"
+        "where knockout is blunt and naive additive steering breaks the model.</p>"
     )
 
     # 1. METHODS (text)
@@ -151,13 +150,11 @@ def build_report(model_name: str) -> Path:
     parts.append(
         "<h3>Intervention — suppress the behaviour during generation</h3><ul>"
         "<li><b>Knockout</b> — zero the gates of the top-k identified experts at every decoded step.</li>"
-        "<li><b>Down-weight</b> — scale those gates by a factor (a softer knockout).</li>"
         "<li><b>Project-out</b> — remove the toxic direction’s component from the residual stream each "
         "step (non-destructive: orthogonal features are untouched).</li></ul>"
         "<p>Each is scored by greedy generation under the intervention: <b>toxic propensity</b> (mean "
         "toxic-logit over the continuation) and offensive-word rate, with the neutral set as a "
-        "collateral check. The whole intervention generalizes to any concept via "
-        "<code>circuit-steer --concept</code> using the unembedding concept direction.</p>"
+        "collateral check.</p>"
     )
 
     # 2. RESULTS (figures + tables + findings)

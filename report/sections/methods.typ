@@ -117,18 +117,15 @@ correlation of the two per-expert grids.
 
 === Interventions
 
-To suppress toxicity at generation time we compare three families of intervention, applied at
+To suppress toxicity at generation time we compare two families of intervention, applied at
 every decoded step:
 - *Knockout* --- zero the gates of the top-$k$ identified experts (we vary which identifier
   supplies the set: AtP, patching, SOMP, or a random control).
-- *Down-weight* --- scale those gates by a factor (a softer knockout).
 - *Project-out* --- remove the toxic direction's component from the residual stream at a layer,
   $bold(h) <- bold(h) - (bold(h) dot hat(bold(v))) hat(bold(v))$, leaving every
   orthogonal feature untouched. This is a non-destructive variant of activation steering
-  @turner2023activation. The direction $bold(v)$ is chosen per concept: for toxicity it is the
-  activation-derived diff-of-means of the eliciting and neutral residuals (used for all toxicity
-  numbers below), while the unembedding concept direction $bold(d)_("tox")$ is the generic
-  fallback for arbitrary `--concept` queries.
+  @turner2023activation. The direction $bold(v)$ is the activation-derived diff-of-means of the
+  eliciting and neutral residuals.
 Each method is scored by greedy generation under the intervention: the mean probe value over the
 continuation (lower is less toxic) plus an offensive-word rate, with the neutral prompts as a
 collateral check. Because the direction and probe can be built from any concept's token set, the

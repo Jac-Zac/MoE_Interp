@@ -25,5 +25,4 @@ python scripts/cineca/circuit_runner.py \
   --steer-layer 12 \
   --max-new-tokens 24 \
   --n-prompts 48 \
-  --n-test 24 \
-  --downweight-scale 0.5
+  --n-test 24
