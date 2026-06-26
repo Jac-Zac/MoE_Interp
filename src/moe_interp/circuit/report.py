@@ -109,8 +109,9 @@ def build_report(model_name: str) -> Path:
     parts.append(
         '<p class="note"><b>Headline findings.</b> (1) Causally important experts span all '
         "depths, including <i>suppressor</i> experts that <i>raise</i> toxicity when removed. "
-        "(2) gate-AtP faithfully predicts the expensive patching grid (Pearson r≈0.80) in one "
-        "backward pass. (3) The correlational SOMP classifier flags toxicity-<i>associated</i> "
+        "(2) gate-AtP predicts the expensive patching grid in one backward pass (Pearson "
+        "r≈0.69 pooled, up to ≈0.96 in the late layers). (3) The correlational SOMP classifier "
+        "flags toxicity-<i>associated</i> "
         "experts, but knocking them out does nothing — only the causally-identified (AtP / "
         "patching) experts suppress toxicity when removed. (4) <b>Project-out is the best "
         "suppressor</b>: it lowers toxic propensity the most while keeping generation fluent, "
@@ -195,7 +196,7 @@ def build_report(model_name: str) -> Path:
         )
         parts.append(
             '<p class="note"><b>gate-AtP (one backward pass) faithfully predicts the '
-            "expensive patching grid</b> (pooled r≈0.80, per-layer up to 0.98) — causal "
+            "expensive patching grid</b> (pooled r≈0.69, per-layer up to 0.96) — causal "
             "attribution, not token association, is what predicts causal effect.</p>"
         )
 
