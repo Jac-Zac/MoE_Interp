@@ -27,13 +27,15 @@ def main():
     if args.command == "extract":
         from nnsight import LanguageModel
 
-        # Pin the whole model to the single best device. `device_map="auto"` probes
-        # free memory at load time and can flakily offload a sliver of an MoE model to
-        # disk (which then fails: MoE weights can't be re-saved without an
-        # offload_folder). Forcing the device avoids that when it fits.
+        # Default: pin the whole model to the single best device. Pass --device_map auto
+        # for pipeline parallelism across multiple GPUs (accelerate handles inter-device
+        # transfers). Avoid "auto" on a single-GPU node: it can flakily offload a sliver
+        # of an MoE model to disk when VRAM is tight, and MoE weights can't be re-saved
+        # without an offload_folder.
         model_name = args.model
+        device_map = args.device_map or str(get_device())
         model = LanguageModel(
-            model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+            model_name, device_map=device_map, dtype="auto", dispatch=True
         )  # type: ignore
 
         max_length = args.max_length or model.config.max_position_embeddings

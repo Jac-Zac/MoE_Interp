@@ -1,18 +1,20 @@
 #!/usr/bin/env python
 """Run the full causal circuit pipeline: patching, gate-AtP, comparison, steer, report.
 
-Builds one RealToxicityPrompts split (high- vs low-toxicity) and threads it through every
-model-dependent step so the patching grid, the gate-AtP grid, and the knockout experiment
-all score the same prompts. All artifacts land under ``data/<model>/circuit/``.
+Builds a disjoint RealToxicityPrompts train/test split and threads it through every
+model-dependent step so all methods share the same identification prompts and are scored
+on the same held-out test set. All artifacts land under ``data/<model>/circuit/``.
 
 Usage:
     python scripts/cineca/circuit_runner.py [--model MODEL] [--batch-size N]
-                                            [--knockout-k N] [--steer-layer L]
-                                            [--max-new-tokens N] [--n-prompts N]
+                                            [--atp-batch-size N] [--knockout-k N]
+                                            [--steer-layer L] [--max-new-tokens N]
+                                            [--n-prompts N] [--n-test N]
 """
 
 import argparse
 import json
+import os
 
 import numpy as np
 import torch
@@ -26,7 +28,7 @@ from moe_interp.circuit.patching import (
     plot_expert_effect_grid,
     top_grid_experts,
 )
-from moe_interp.circuit.prompts import rtp_prompts
+from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
 from moe_interp.circuit.steer import run_steer
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
@@ -40,10 +42,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default=get_default_model())
     parser.add_argument("--batch-size", type=int, default=6)
+    parser.add_argument(
+        "--atp-batch-size",
+        type=int,
+        default=None,
+        help="Batch size for the AtP backward pass. Defaults to --batch-size. "
+        "Use a smaller value (e.g. 2) if the backward pass OOMs after the grid sweep.",
+    )
     parser.add_argument("--knockout-k", type=int, default=15)
     parser.add_argument("--steer-layer", type=int, default=12)
     parser.add_argument("--max-new-tokens", type=int, default=24)
-    parser.add_argument("--n-prompts", type=int, default=48)
+    parser.add_argument("--n-prompts", type=int, default=48,
+                        help="Train-set size (used for grid identification and steer training).")
+    parser.add_argument("--n-test", type=int, default=24,
+                        help="Held-out test set size (scored by steer experiment).")
     parser.add_argument(
         "--downweight-scale",
         type=float,
@@ -51,31 +63,39 @@ def main():
         help="Gate multiplier for the soft AtP down-weight (0=knockout, 1=no-op)",
     )
     args = parser.parse_args()
+    atp_batch = args.atp_batch_size if args.atp_batch_size is not None else args.batch_size
 
     model_name = args.model
     cdir = get_model_dir(model_name) / "circuit"
     cdir.mkdir(parents=True, exist_ok=True)
     print(f"Circuit artifacts -> {cdir}")
 
+    device_map = os.environ.get("DEVICE_MAP", str(get_device()))
     model = LanguageModel(
-        model_name, device_map=str(get_device()), dtype="auto", dispatch=True
+        model_name, device_map=device_map, dtype="auto", dispatch=True
     )
-    eliciting, neutral = rtp_prompts(model.tokenizer, n=args.n_prompts)
+
+    # Disjoint train/test split — all methods share elic_tr for identification,
+    # all are scored on the disjoint elic_te so comparisons are out-of-sample.
+    elic_tr, elic_te, neut_tr, neut_te = rtp_split(
+        model.tokenizer, n_train=args.n_prompts, n_test=args.n_test
+    )
     toxic_ids = build_toxic_token_ids(model.tokenizer)
     print(
-        f"Model loaded: {len(eliciting)} eliciting + {len(neutral)} neutral RTP prompts",
+        f"Model loaded: {len(elic_tr)} train + {len(elic_te)} test eliciting prompts",
         flush=True,
     )
 
     # 1. Causal patching grid (one forward per routed expert) — the ground truth.
     patch_dir = cdir / "patching"
-    if not (patch_dir / "patching_grid.npy").exists():
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    grid_path = patch_dir / "patching_grid.npy"
+    if not grid_path.exists():
         print("[1/4] Causal patching grid (this will take a while) ...", flush=True)
         grid = expert_patching_grid(
-            model, eliciting, toxic_ids, batch_size=args.batch_size
+            model, elic_tr, toxic_ids, batch_size=args.batch_size
         )
-        patch_dir.mkdir(parents=True, exist_ok=True)
-        np.save(patch_dir / "patching_grid.npy", grid.numpy())
+        np.save(grid_path, grid.numpy())
         top = top_grid_experts(grid)
         (patch_dir / "top_experts.json").write_text(json.dumps(top, indent=2))
         plot_expert_effect_grid(
@@ -88,10 +108,13 @@ def main():
         print("[1/4] Patching grid already exists, skipping", flush=True)
 
     # 2. gate-AtP (one backward pass) — the cheap estimate of the patching grid.
+    # Flush VRAM fragmentation from the patching sweep before the backward pass.
     atp_path = cdir / "attribution" / "atp_grid.npy"
     if not atp_path.exists():
         print("[2/4] gate-AtP ...", flush=True)
-        atp = gate_attribution(model, eliciting, toxic_ids, batch_size=args.batch_size)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=atp_batch)
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp.numpy())
     else:
@@ -101,7 +124,7 @@ def main():
     cmp_dir = cdir / "compare"
     if not (cmp_dir / "faithfulness.json").exists():
         print("[3/4] Faithfulness ...", flush=True)
-        patching = torch.from_numpy(np.load(patch_dir / "patching_grid.npy")).float()
+        patching = torch.from_numpy(np.load(grid_path)).float()
         grids = {"gate-AtP": torch.from_numpy(np.load(atp_path)).float()}
         scores = faithfulness(grids, patching)
         cmp_dir.mkdir(parents=True, exist_ok=True)
@@ -114,8 +137,8 @@ def main():
     else:
         print("[3/4] Faithfulness already exists, skipping", flush=True)
 
-    # 4. Knockout / project-out intervention experiment (needs the model).
-    steer_out = cdir / "steer"
+    # 4. Knockout / project-out / steer intervention experiment.
+    steer_out = cdir / "steer" / "offensive"
     if not (steer_out / "intervention.json").exists():
         print("[4/4] Intervention experiment ...", flush=True)
         res = run_steer(
@@ -127,8 +150,8 @@ def main():
             batch_size=args.batch_size,
             max_new_tokens=args.max_new_tokens,
             downweight_scale=args.downweight_scale,
-            eliciting=eliciting,
-            neutral=neutral,
+            train=(elic_tr, neut_tr),
+            test=(elic_te, neut_te),
         )
         steer_out.mkdir(parents=True, exist_ok=True)
         (steer_out / "intervention.json").write_text(json.dumps(res, indent=2))

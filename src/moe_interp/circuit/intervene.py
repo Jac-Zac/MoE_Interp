@@ -82,6 +82,22 @@ def projectout_intervention(layer: int, v: torch.Tensor) -> Callable:
     return fn
 
 
+def steer_intervention(layer: int, v: torch.Tensor, alpha: float = -1.0) -> Callable:
+    """Add ``alpha * unit(v)`` to every token position in the residual stream at ``layer``.
+
+    Additive steering (CAA-style): alpha < 0 steers away from the direction, alpha > 0
+    amplifies it. Unlike project-out this shifts the whole residual rather than only
+    removing its projection, so the effect is stronger but less surgical.
+    """
+
+    def fn(model):
+        h = model.model.layers[layer].output
+        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
+        h[:] = h + alpha * vhat
+
+    return fn
+
+
 def generate(
     model, ids: list[int], max_new_tokens: int, intervention: Callable | None
 ) -> list[int]:

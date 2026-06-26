@@ -41,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max prompt token length (default: model max_position_embeddings). "
         "Lower values (e.g. 256) fit far more documents per batch.",
     )
+    extract_parser.add_argument(
+        "--device_map",
+        type=str,
+        default=None,
+        help="HuggingFace device_map for model loading. Default: single best device. "
+        "Use 'auto' for pipeline parallelism across all available GPUs.",
+    )
 
     pursuit_parser = subparsers.add_parser(
         "pursuit", help="Run projection pursuit analysis"

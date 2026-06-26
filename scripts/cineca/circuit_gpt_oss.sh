@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --partition=boost_usr_prod
-#SBATCH -A uTS25_Tornator
+#SBATCH -A uTS26_Tornator
 #SBATCH -t 06:00:00
 ##SBATCH --exclusive
 #SBATCH --job-name=circuit_gpt_oss
@@ -14,12 +14,17 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
 # gpt-oss-20b: 24 layers, 32 experts (top-4). The patching grid is more forwards than
-# OLMoE, hence the longer walltime; steer-layer 12 is mid-stack.
+# OLMoE, hence the longer walltime; steer-layer 18 is ~75% depth (same relative position
+# as layer 12/16 for OLMoE). atp-batch-size is smaller than batch-size to avoid OOM on
+# the backward pass after the patching sweep has fragmented VRAM.
 source scripts/setup_env.sh
 python scripts/cineca/circuit_runner.py \
   --model openai/gpt-oss-20b \
   --batch-size 4 \
-  --knockout-k 15 \
-  --steer-layer 12 \
+  --atp-batch-size 2 \
+  --knockout-k 8 \
+  --steer-layer 18 \
   --max-new-tokens 24 \
+  --n-prompts 50 \
+  --n-test 30 \
   --downweight-scale 0.5

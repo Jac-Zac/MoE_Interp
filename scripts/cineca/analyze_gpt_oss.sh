@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --partition=boost_usr_prod
-#SBATCH -A uTS25_Tornator
+#SBATCH -A uTS26_Tornator
 #SBATCH -t 01:00:00
 ##SBATCH --exclusive
 #SBATCH --job-name=pursuit_gpt_oss

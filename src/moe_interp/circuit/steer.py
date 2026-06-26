@@ -25,6 +25,7 @@ from moe_interp.circuit.intervene import (
     knockout_intervention,
     projectout_intervention,
     run_intervention_experiment,
+    steer_intervention,
 )
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.toxicity import right_padded
@@ -73,9 +74,12 @@ def _offensive_expert_sets(
         return [(layer, e) for layer, e, _ in top_experts(grid, k, by="signed")]
 
     # gate-AtP over the seed prompts: cache the grid so reruns (e.g. a different
-    # --knockout_k) skip the backward pass. Keyed under the model dir, so it's the
-    # offensive/seeds grid this command always builds.
-    atp_path = md / "circuit" / "attribution" / "atp_grid.npy"
+    # --knockout_k) skip the backward pass. Keyed by train-set size — a different
+    # N_PROMPTS identifies the grid on a different prompt prefix, so it must never reuse
+    # a stale cache (the patching grid it is compared against is on the same prefix).
+    atp_path = (
+        md / "circuit" / "attribution" / f"atp_grid_n{len(eliciting)}.npy"
+    )
     if atp_path.exists():
         atp = np.load(atp_path)
     else:
@@ -177,6 +181,9 @@ def run_steer(
 
     methods[f"projectout@L{steer_layer}"] = projectout_intervention(
         steer_layer, steer_dir
+    )
+    methods[f"steer@L{steer_layer}(α=-1)"] = steer_intervention(
+        steer_layer, steer_dir, alpha=-1.0
     )
 
     results = run_intervention_experiment(

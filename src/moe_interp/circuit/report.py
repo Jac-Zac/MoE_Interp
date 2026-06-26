@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 
-from moe_interp.circuit.compare import faithfulness_bar
+from moe_interp.circuit.compare import faithfulness_bar, intervention_bar
 from moe_interp.config import get_model_dir
 from moe_interp.io.plots import diverging_expert_heatmap
 
@@ -202,7 +202,7 @@ def build_report(model_name: str) -> Path:
             "attribution, not token association, is what predicts causal effect.</p>"
         )
 
-    iv = load_json(cdir / "steer" / "intervention.json")
+    iv = load_json(cdir / "steer" / "offensive" / "intervention.json")
     if iv:
         mm = iv.get("methods", {})
         concept = iv.get("meta", {}).get("concept", "toxic")
@@ -221,6 +221,15 @@ def build_report(model_name: str) -> Path:
                     f"{b.get('eliciting_word_frac', 0):.2f}",
                 ]
             )
+        parts.append(
+            fig(
+                intervention_bar(
+                    mm,
+                    title=f"Intervention propensity — {concept}",
+                    height=420,
+                )
+            )
+        )
         parts.append(
             _table(
                 [

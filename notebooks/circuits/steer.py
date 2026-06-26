@@ -17,12 +17,15 @@ self-contained HTML report. Run `patching.py` first so the comparison sets exist
 
 # %% Imports
 import json
+import os
 
 from dotenv import load_dotenv
 from nnsight import LanguageModel
 from rich import print
 from rich.table import Table
 
+from moe_interp.circuit.compare import plot_intervention
+from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
 from moe_interp.circuit.steer import run_steer
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
@@ -32,15 +35,26 @@ load_dotenv()
 set_seed(1337)
 MODEL_NAME = get_default_model()
 CONCEPT = "offensive"  # non-toxic concepts only get the generic project-out edit
-KNOCKOUT_K = 15
-STEER_LAYER = 12
-BATCH_SIZE = 8
+KNOCKOUT_K = int(os.environ.get("KNOCKOUT_K", 15))
+STEER_LAYER = int(os.environ.get("STEER_LAYER", 12))
+BATCH_SIZE = int(os.environ.get("STEER_BATCH_SIZE", 8))
+# Identification (train) prompts MUST match patching.py's N_PROMPTS so every method —
+# AtP, the patching grid, SOMP, diff-of-means — is identified on the same elic[:N_PROMPTS]
+# prefix and then scored on the disjoint held-out slice elic[N_PROMPTS:N_PROMPTS+N_TEST].
+N_PROMPTS = int(os.environ.get("N_PROMPTS", 100))
+N_TEST = int(os.environ.get("N_TEST", 50))
 MAX_NEW_TOKENS = 24
-out_dir = get_model_dir(MODEL_NAME) / "circuit" / "steer"
+out_dir = get_model_dir(MODEL_NAME) / "circuit" / "steer" / CONCEPT
 
 # %% Load the model
+device_map = os.environ.get("DEVICE_MAP", str(get_device()))
 model = LanguageModel(
-    MODEL_NAME, device_map=str(get_device()), dtype="auto", dispatch=True
+    MODEL_NAME, device_map=device_map, dtype="auto", dispatch=True
+)
+
+# %% Disjoint identify/evaluate split (held out — see note above)
+elic_tr, elic_te, neut_tr, neut_te = rtp_split(
+    model.tokenizer, n_train=N_PROMPTS, n_test=N_TEST
 )
 
 # %% Run the intervention experiment (knockout sets + project-out vs baseline)
@@ -52,9 +66,16 @@ res = run_steer(
     steer_layer=STEER_LAYER,
     batch_size=BATCH_SIZE,
     max_new_tokens=MAX_NEW_TOKENS,
+    train=(elic_tr, neut_tr),
+    test=(elic_te, neut_te),
 )
 out_dir.mkdir(parents=True, exist_ok=True)
 (out_dir / "intervention.json").write_text(json.dumps(res, indent=2))
+plot_intervention(
+    res["methods"],
+    out_dir / "intervention.html",
+    title=f"Intervention propensity — {MODEL_NAME} · concept={CONCEPT}",
+)
 print(f"intervention results -> {out_dir}")
 
 # %% Propensity per method (lower = less of the concept)
