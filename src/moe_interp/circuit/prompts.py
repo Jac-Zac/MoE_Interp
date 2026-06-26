@@ -51,55 +51,6 @@ def rtp_prompts(
     return eliciting, neutral
 
 
-# Minimal pairs for counterfactual editing: same template + length, the answer differs by one
-# number. Used to test whether splicing the number experts' activity from the cf run into the
-# factual run flips the predicted number (see circuit/editing.py). Each tuple is
-# (factual_text, factual_answer, counterfactual_text, counterfactual_answer).
-_NUMBER_PAIRS: list[tuple[str, str, str, str]] = [
-    ("The sum of 2 and 3 is", "5", "The sum of 2 and 4 is", "6"),
-    ("The sum of 1 and 4 is", "5", "The sum of 1 and 5 is", "6"),
-    ("The sum of 3 and 4 is", "7", "The sum of 3 and 5 is", "8"),
-    ("The sum of 2 and 2 is", "4", "The sum of 2 and 5 is", "7"),
-    ("The sum of 4 and 4 is", "8", "The sum of 4 and 3 is", "7"),
-    ("Counting up: 1, 2, 3, 4,", "5", "Counting up: 2, 3, 4, 5,", "6"),
-    ("Counting up: 3, 4, 5, 6,", "7", "Counting up: 4, 5, 6, 7,", "8"),
-    ("The number right after 6 is", "7", "The number right after 7 is", "8"),
-    ("The number right after 4 is", "5", "The number right after 8 is", "9"),
-    ("She had 2 apples and ate 1, leaving", "1", "She had 5 apples and ate 1, leaving", "4"),
-]
-
-
-def numbers_counterfactual_pairs(tokenizer) -> list[dict]:
-    """Tokenised, validated minimal pairs for the numbers editing experiment.
-
-    Keeps only pairs where (i) the factual and counterfactual prompts tokenise to the **same
-    length** (so residual positions align 1:1 for the interchange) and (ii) both answers are a
-    **single** token with a leading space (single-token log-prob eval). Each kept item is
-    ``{"fact": ids, "cf": ids, "fact_ans": id, "cf_ans": id, "text": (fact_text, cf_text)}``.
-    Extend ``_NUMBER_PAIRS`` (or write a sibling for another concept) to try other capabilities.
-    """
-    out: list[dict] = []
-    for fact_text, fact_ans, cf_text, cf_ans in _NUMBER_PAIRS:
-        fact = tokenizer(fact_text).input_ids
-        cf = tokenizer(cf_text).input_ids
-        a = tokenizer(" " + fact_ans, add_special_tokens=False).input_ids
-        b = tokenizer(" " + cf_ans, add_special_tokens=False).input_ids
-        if len(fact) != len(cf) or len(a) != 1 or len(b) != 1:
-            continue
-        out.append(
-            {
-                "fact": fact,
-                "cf": cf,
-                "fact_ans": a[0],
-                "cf_ans": b[0],
-                "text": (fact_text, cf_text),
-            }
-        )
-    if not out:
-        raise RuntimeError("no valid numbers minimal pairs survived tokenisation")
-    return out
-
-
 def rtp_split(
     tokenizer,
     *,
