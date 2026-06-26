@@ -21,6 +21,7 @@ from moe_interp.circuit.intervene import (
     compose_interventions,
     knockout_intervention,
     localized_projectout_intervention,
+    localized_steer_intervention,
     projectout_intervention,
     run_intervention_experiment,
     steer_intervention,
@@ -30,6 +31,14 @@ from moe_interp.circuit.toxicity import right_padded
 from moe_interp.config import get_model_dir, get_pursuit_dir
 from moe_interp.grids import top_experts
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
+
+
+def _group_by_layer(experts: list[tuple[int, int]]) -> dict[int, list[int]]:
+    """Regroup a ``[(layer, expert), ...]`` list into ``{layer: [experts]}``."""
+    by_layer: dict[int, list[int]] = {}
+    for layer, e in experts:
+        by_layer.setdefault(layer, []).append(e)
+    return by_layer
 
 
 def collect_last_token_residuals(
@@ -203,8 +212,9 @@ def run_localized_steer(
     batch_size: int,
     max_new_tokens: int,
     selectors: tuple[str, ...] = ("AtP", "patching", "SOMP", "random"),
+    steer_alpha: float | None = None,
 ) -> dict:
-    """Localized project-out: scrub the toxic direction only where the selected experts fired.
+    """Localized project-out (and optional localized steering) at the selected experts.
 
     The question this answers: is the distributed toxic direction *carried at* the positions
     routed to the causally-identified experts? For each selector we project the diff-of-means
@@ -221,7 +231,15 @@ def run_localized_steer(
     Directions are identified on the *train* residuals; every method (and the **neutral
     collateral check**) is scored on the held-out *test* prompts. A real drop must suppress the
     eliciting prompts *more* than the neutral ones — compare ``eliciting`` vs ``neutral``
-    propensity, not the eliciting drop alone. Returns ``{"methods": ..., "meta": {...}}``.
+    propensity, not the eliciting drop alone.
+
+    If ``steer_alpha`` is set (e.g. ``-1.0``), also add additive **steering** arms — a global
+    ``global-steer`` control plus one ``routed-steer-<selector>`` per selector — that *add*
+    ``alpha·unit(v)`` at the routed positions instead of projecting it out. This is the direct
+    Head-Pursuit comparison: zeroing/knockout is near-inert (redundancy), so the question is
+    whether ``alpha=-1`` steering *localized to the causal experts* suppresses toxicity while
+    staying specific (neutral preserved), unlike the blunt whole-residual steer.
+    Returns ``{"methods": ..., "meta": {...}}``.
     """
     eliciting, neutral = train
     eliciting_eval, neutral_eval = test
@@ -243,16 +261,30 @@ def run_localized_steer(
             steer_layer, dirs[steer_layer]
         ),
     }
-    for name, experts in routed.items():
-        by_layer: dict[int, list[int]] = {}
-        for layer, e in experts:
-            by_layer.setdefault(layer, []).append(e)
+    routed_by_layer = {
+        name: _group_by_layer(experts) for name, experts in routed.items()
+    }
+    for name, by_layer in routed_by_layer.items():
         methods[f"routed-{name}"] = compose_interventions(
             [
                 localized_projectout_intervention(layer, dirs[layer], elist)
                 for layer, elist in sorted(by_layer.items())
             ]
         )
+
+    if steer_alpha is not None:
+        methods[f"global-steer@L{steer_layer}(α={steer_alpha:g})"] = steer_intervention(
+            steer_layer, dirs[steer_layer], alpha=steer_alpha
+        )
+        for name, by_layer in routed_by_layer.items():
+            methods[f"routed-steer-{name}(α={steer_alpha:g})"] = compose_interventions(
+                [
+                    localized_steer_intervention(
+                        layer, dirs[layer], elist, alpha=steer_alpha
+                    )
+                    for layer, elist in sorted(by_layer.items())
+                ]
+            )
 
     results = run_intervention_experiment(
         model,
@@ -271,6 +303,7 @@ def run_localized_steer(
             "n_train": len(eliciting),
             "n_test": len(eliciting_eval),
             "max_new_tokens": max_new_tokens,
+            "steer_alpha": steer_alpha,
             "routed_sets": routed,
         },
     }

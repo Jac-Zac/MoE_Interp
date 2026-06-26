@@ -170,6 +170,7 @@ def main():
             steer_layer=args.steer_layer,
             batch_size=args.batch_size,
             max_new_tokens=args.max_new_tokens,
+            steer_alpha=-1.0,  # also add the localized additive-steering (Head-Pursuit) arms
         )
         loc_path.write_text(json.dumps(loc, indent=2))
     else:

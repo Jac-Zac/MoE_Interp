@@ -47,6 +47,8 @@ N_TRAIN = int(os.environ.get("N_PROMPTS", 8))  # prompts to build the directions
 N_TEST = int(os.environ.get("N_TEST", 6))  # held-out prompts to score on
 MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", 12))
 BATCH_SIZE = int(os.environ.get("STEER_BATCH_SIZE", 8))
+# alpha for the extra localized additive-steering arms (Head-Pursuit comparison); "" disables
+STEER_ALPHA = float(os.environ["STEER_ALPHA"]) if os.environ.get("STEER_ALPHA") else -1.0
 out_dir = get_model_dir(MODEL_NAME) / "circuit" / "steer" / CONCEPT
 
 # Reuse the already-computed expert sets from the main intervention run (incl. AtP).
@@ -72,6 +74,7 @@ out = run_localized_steer(
     steer_layer=STEER_LAYER,
     batch_size=BATCH_SIZE,
     max_new_tokens=MAX_NEW_TOKENS,
+    steer_alpha=STEER_ALPHA,
 )
 res = out["methods"]
 out_path = out_dir / "localized_intervention.json"

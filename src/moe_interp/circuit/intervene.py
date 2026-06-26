@@ -114,6 +114,36 @@ def steer_intervention(layer: int, v: torch.Tensor, alpha: float = -1.0) -> Call
     return fn
 
 
+def localized_steer_intervention(
+    layer: int, v: torch.Tensor, experts: list[int], alpha: float = -1.0
+) -> Callable:
+    """Add ``alpha * unit(v)`` to the residual at ``layer`` *only at positions routed to ``experts``*.
+
+    The additive (CAA / Head-Pursuit-style) analogue of
+    :func:`localized_projectout_intervention`, and the expert-group version of
+    :func:`steer_intervention`: it shifts the residual along the diff-of-means direction only
+    where the named experts fired, rather than scrubbing the existing projection. This is the
+    direct test of whether *steering the identified experts* (not the whole residual) reproduces
+    the Head-Pursuit effect — where zeroing a component is near-inert but ``alpha = -1`` steering
+    suppresses the target behaviour. ``experts`` are the expert ids at this layer (empty -> no-op).
+    """
+
+    def fn(model):
+        if not experts:
+            return
+        L = model.model.layers[layer]
+        _, idx, _ = L.mlp.experts.inputs[0]
+        h = L.output
+        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
+        fired = torch.zeros(idx.shape[0], dtype=torch.bool, device=idx.device)
+        for e in experts:
+            fired |= (idx == e).any(dim=-1)
+        mask = fired.to(h.dtype).reshape(h.shape[:-1]).unsqueeze(-1)
+        h[:] = h + mask * alpha * vhat
+
+    return fn
+
+
 def generate(
     model, ids: list[int], max_new_tokens: int, intervention: Callable | None
 ) -> list[int]:
