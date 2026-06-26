@@ -30,7 +30,7 @@ from moe_interp.circuit.patching import (
 )
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
-from moe_interp.circuit.steer import run_steer
+from moe_interp.circuit.steer import run_localized_steer, run_steer
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import build_toxic_token_ids
 
@@ -135,8 +135,9 @@ def main():
 
     # 4. Knockout / project-out / steer intervention experiment.
     steer_out = cdir / "steer" / "offensive"
-    if not (steer_out / "intervention.json").exists():
-        print("[4/4] Intervention experiment ...", flush=True)
+    iv_path = steer_out / "intervention.json"
+    if not iv_path.exists():
+        print("[4/5] Intervention experiment ...", flush=True)
         res = run_steer(
             model,
             model_name,
@@ -149,9 +150,30 @@ def main():
             test=(elic_te, neut_te),
         )
         steer_out.mkdir(parents=True, exist_ok=True)
-        (steer_out / "intervention.json").write_text(json.dumps(res, indent=2))
+        iv_path.write_text(json.dumps(res, indent=2))
     else:
-        print("[4/4] Intervention already exists, skipping", flush=True)
+        print("[4/5] Intervention already exists, skipping", flush=True)
+        res = json.loads(iv_path.read_text())
+
+    # 5. Localized project-out: scrub the toxic direction only at positions routed to each
+    # selector's experts (AtP / patching / SOMP / random), reusing the sets from step 4. The
+    # key check is specificity — does the eliciting drop exceed the neutral drop?
+    loc_path = steer_out / "localized_intervention.json"
+    if not loc_path.exists():
+        print("[5/5] Localized project-out ...", flush=True)
+        loc = run_localized_steer(
+            model,
+            concept="offensive",
+            sets=res["meta"]["sets"],
+            train=(elic_tr, neut_tr),
+            test=(elic_te, neut_te),
+            steer_layer=args.steer_layer,
+            batch_size=args.batch_size,
+            max_new_tokens=args.max_new_tokens,
+        )
+        loc_path.write_text(json.dumps(loc, indent=2))
+    else:
+        print("[5/5] Localized project-out already exists, skipping", flush=True)
 
     del model
     if torch.cuda.is_available():

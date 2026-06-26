@@ -264,6 +264,56 @@ def build_report(model_name: str) -> Path:
                 parts.append(f"<h4>{label} — example continuations</h4>")
                 parts.extend(f'<div class="ex">{e}</div>' for e in ex[:4])
 
+    # Localized project-out: project the toxic direction out only at positions routed to each
+    # selector's experts. Reported with a specificity column (Δelic - Δneut): a drop only
+    # counts as toxicity-removal if it suppresses eliciting prompts MORE than neutral ones.
+    loc = next(
+        (
+            load_json(p)
+            for p in (
+                steer_dir / "offensive" / "localized_intervention.json",
+                *sorted(steer_dir.glob("*/localized_intervention.json")),
+            )
+            if p.exists()
+        ),
+        None,
+    )
+    if loc:
+        lm = loc.get("methods", {})
+        base = lm.get("baseline", {}).get("eliciting_propensity", 0.0)
+        base_neu = lm.get("baseline", {}).get("neutral_propensity", 0.0)
+        rows = []
+        for m, b in lm.items():
+            de = base - b.get("eliciting_propensity", 0.0)
+            dn = base_neu - b.get("neutral_propensity", 0.0)
+            rows.append(
+                [
+                    m,
+                    f"{b.get('eliciting_propensity', 0):+.3f}",
+                    f"{de:+.3f}",
+                    f"{b.get('neutral_propensity', 0):+.3f}",
+                    f"{dn:+.3f}",
+                    f"{de - dn:+.3f}",
+                ]
+            )
+        nt = loc.get("meta", {}).get("n_test", "?")
+        parts.append("<h3>Localized project-out — is the direction carried at the causal experts?</h3>")
+        parts.append(
+            _table(
+                ["method", "elic prop.", "Δelic", "neutral prop.", "Δneut", "specificity"],
+                rows,
+            )
+        )
+        parts.append(
+            '<p class="note">Project-out applied <b>only at positions routed to each selector’s '
+            "experts</b> (vs a global single-layer control). The decisive comparison is between "
+            "<i>routed</i> variants (patching / AtP vs SOMP / random): same edit, different selector. "
+            "<b>Specificity = Δelic − Δneut</b>; a result is toxicity-specific only if it is "
+            f"positive (suppresses toxic prompts more than neutral ones). Held out on n={nt} test "
+            "prompts — read specificity, not the raw eliciting drop, and treat small samples as "
+            "noisy.</p>"
+        )
+
     nav = (
         '<nav><a href="#overview">Overview</a> · <a href="#methods">Methods</a> · '
         '<a href="#results">Results</a></nav>'

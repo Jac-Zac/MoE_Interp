@@ -18,7 +18,9 @@ from moe_interp.analysis.common import load_somp_results
 from moe_interp.capture.model_adapter import model_num_experts
 from moe_interp.circuit.attribution import gate_attribution
 from moe_interp.circuit.intervene import (
+    compose_interventions,
     knockout_intervention,
+    localized_projectout_intervention,
     projectout_intervention,
     run_intervention_experiment,
     steer_intervention,
@@ -186,5 +188,89 @@ def run_steer(
             "n_train": len(eliciting),
             "n_test": len(eliciting_eval),
             "sets": sets,
+        },
+    }
+
+
+def run_localized_steer(
+    model,
+    *,
+    concept: str,
+    sets: dict[str, list[tuple[int, int]]],
+    train: tuple[list[list[int]], list[list[int]]],
+    test: tuple[list[list[int]], list[list[int]]],
+    steer_layer: int,
+    batch_size: int,
+    max_new_tokens: int,
+    selectors: tuple[str, ...] = ("AtP", "patching", "SOMP", "random"),
+) -> dict:
+    """Localized project-out: scrub the toxic direction only where the selected experts fired.
+
+    The question this answers: is the distributed toxic direction *carried at* the positions
+    routed to the causally-identified experts? For each selector we project the diff-of-means
+    direction out of the residual only at positions routed to that selector's experts (see
+    :func:`~moe_interp.circuit.intervene.localized_projectout_intervention`), versus a global
+    single-layer project-out control. The decisive comparison is *between routed variants*
+    (``routed-patching`` / ``routed-AtP`` vs ``routed-SOMP`` / ``routed-random``): same
+    machinery, different selector, so it isolates the value of causal vs correlational
+    localization. The single-layer global edit is only a rough reference (it touches one layer
+    while routed variants span every layer in their set).
+
+    ``sets`` is the per-selector ``{name: [(layer, expert), ...]}`` mapping from
+    :func:`run_steer`'s ``meta.sets``; a routed variant is built for each selector present.
+    Directions are identified on the *train* residuals; every method (and the **neutral
+    collateral check**) is scored on the held-out *test* prompts. A real drop must suppress the
+    eliciting prompts *more* than the neutral ones — compare ``eliciting`` vs ``neutral``
+    propensity, not the eliciting drop alone. Returns ``{"methods": ..., "meta": {...}}``.
+    """
+    eliciting, neutral = train
+    eliciting_eval, neutral_eval = test
+    concept_words = CONCEPT_WORDS[concept]
+    concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
+
+    routed = {k: sets[k] for k in selectors if k in sets}
+    # Per-layer diff-of-means toxic direction for the control layer + every routed layer.
+    needed = {steer_layer} | {layer for s in routed.values() for layer, _ in s}
+    dirs = {
+        layer: collect_last_token_residuals(model, eliciting, layer, batch_size).mean(0)
+        - collect_last_token_residuals(model, neutral, layer, batch_size).mean(0)
+        for layer in sorted(needed)
+    }
+
+    methods: dict = {
+        "baseline": None,
+        f"global-projectout@L{steer_layer}": projectout_intervention(
+            steer_layer, dirs[steer_layer]
+        ),
+    }
+    for name, experts in routed.items():
+        by_layer: dict[int, list[int]] = {}
+        for layer, e in experts:
+            by_layer.setdefault(layer, []).append(e)
+        methods[f"routed-{name}"] = compose_interventions(
+            [
+                localized_projectout_intervention(layer, dirs[layer], elist)
+                for layer, elist in sorted(by_layer.items())
+            ]
+        )
+
+    results = run_intervention_experiment(
+        model,
+        eliciting_eval,
+        neutral_eval,
+        concept_ids,
+        methods,
+        concept_words=concept_words,
+        max_new_tokens=max_new_tokens,
+    )
+    return {
+        "methods": results,
+        "meta": {
+            "concept": concept,
+            "steer_layer": steer_layer,
+            "n_train": len(eliciting),
+            "n_test": len(eliciting_eval),
+            "max_new_tokens": max_new_tokens,
+            "routed_sets": routed,
         },
     }
