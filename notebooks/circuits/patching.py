@@ -101,7 +101,7 @@ print(t)
 # Flush fragmented VRAM from the patching sweep before the backward pass.
 if torch.cuda.is_available():
     torch.cuda.empty_cache()
-patching = torch.from_numpy(np.load(patch_dir / "patching_grid.npy")).float()
+patching = grid.float()  # already in memory from the cell above
 grids = {"gate-AtP": gate_attribution(model, toxic_prompts, toxic_ids, batch_size=ATP_BATCH_SIZE)}
 scores = faithfulness(grids, patching)
 cmp_dir = cdir / "compare"

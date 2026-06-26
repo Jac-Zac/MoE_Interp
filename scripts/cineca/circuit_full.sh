@@ -13,11 +13,17 @@
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
+# OLMoE-1B-7B: 16 layers, 64 experts (top-8). steer-layer 12 is ~75% depth. The model is
+# small enough that the AtP backward pass fits at the full batch size, so atp-batch-size
+# matches batch-size here (gpt-oss needs a smaller one). n-test sizes the held-out split.
 source scripts/setup_env.sh
 python scripts/cineca/circuit_runner.py \
   --model allenai/OLMoE-1B-7B-0924-Instruct \
   --batch-size 6 \
+  --atp-batch-size 6 \
   --knockout-k 15 \
   --steer-layer 12 \
   --max-new-tokens 24 \
+  --n-prompts 48 \
+  --n-test 24 \
   --downweight-scale 0.5

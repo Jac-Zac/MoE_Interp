@@ -108,10 +108,12 @@ def main():
         print("[1/4] Patching grid already exists, skipping", flush=True)
 
     # 2. gate-AtP (one backward pass) — the cheap estimate of the patching grid.
-    # Flush VRAM fragmentation from the patching sweep before the backward pass.
-    atp_path = cdir / "attribution" / "atp_grid.npy"
+    # Keyed by train-set size so step 4's offensive knockout reuses this exact grid
+    # (same prompts, same toxic ids) instead of paying for a second backward pass.
+    atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}.npy"
     if not atp_path.exists():
         print("[2/4] gate-AtP ...", flush=True)
+        # Flush VRAM fragmentation from the patching sweep before the backward pass.
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=atp_batch)

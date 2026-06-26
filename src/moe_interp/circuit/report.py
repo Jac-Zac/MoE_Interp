@@ -202,7 +202,16 @@ def build_report(model_name: str) -> Path:
             "attribution, not token association, is what predicts causal effect.</p>"
         )
 
-    iv = load_json(cdir / "steer" / "offensive" / "intervention.json")
+    # Steer artifacts live under steer/<concept>/; report whichever concept was run
+    # (prefer offensive, else the first concept found), with the legacy flat layout
+    # (steer/intervention.json) as a final fallback. The concept label is read from meta.
+    steer_dir = cdir / "steer"
+    iv_paths = [
+        steer_dir / "offensive" / "intervention.json",
+        *sorted(steer_dir.glob("*/intervention.json")),
+        steer_dir / "intervention.json",
+    ]
+    iv = next((load_json(p) for p in iv_paths if p.exists()), None)
     if iv:
         mm = iv.get("methods", {})
         concept = iv.get("meta", {}).get("concept", "toxic")
