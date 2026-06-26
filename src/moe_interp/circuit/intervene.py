@@ -82,6 +82,46 @@ def projectout_intervention(layer: int, v: torch.Tensor) -> Callable:
     return fn
 
 
+def localized_projectout_intervention(
+    layer: int, v: torch.Tensor, experts: list[int]
+) -> Callable:
+    """Project ``v`` out of the residual at ``layer`` *only at positions routed to ``experts``*.
+
+    Per-expert localized variant of :func:`projectout_intervention`: instead of scrubbing the
+    toxic direction from every position, it scrubs it only where the named (toxic) experts
+    actually fired, using the router's ``top_k_index`` to build the position mask. If the
+    localized edit recovers the global project-out effect, toxicity is carried by a few experts;
+    if it does not, the direction is genuinely distributed. ``experts`` are the expert ids *at
+    this layer* (empty -> no-op).
+    """
+
+    def fn(model):
+        if not experts:
+            return
+        L = model.model.layers[layer]
+        _, idx, _ = L.mlp.experts.inputs[0]  # idx: (n_tokens, top_k) router assignments
+        h = L.output  # (B, T, D) residual stream at this layer
+        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
+        fired = torch.zeros(idx.shape[0], dtype=torch.bool, device=idx.device)
+        for e in experts:
+            fired |= (idx == e).any(dim=-1)
+        # align the (n_tokens,) routing mask to the (B, T) residual positions
+        mask = fired.to(h.dtype).reshape(h.shape[:-1]).unsqueeze(-1)
+        h[:] = h - mask * (h @ vhat).unsqueeze(-1) * vhat
+
+    return fn
+
+
+def compose_interventions(fns: list[Callable]) -> Callable:
+    """Chain several interventions into one callable (applied in forward-layer order)."""
+
+    def fn(model):
+        for f in fns:
+            f(model)
+
+    return fn
+
+
 def steer_intervention(layer: int, v: torch.Tensor, alpha: float = -1.0) -> Callable:
     """Add ``alpha * unit(v)`` to every token position in the residual stream at ``layer``.
 
