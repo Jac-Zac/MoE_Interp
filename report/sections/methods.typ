@@ -87,8 +87,14 @@ where $cal(T)$ is a set of single-token offensive words (from the `offensive` co
 $v$ is the vocabulary size --- the mean toxic-token logit relative to the row mean. For prompts
 we draw a split from RealToxicityPrompts @gehman2020realtoxicityprompts, partitioning by each
 prompt's own toxicity score into a high-toxicity _eliciting_ set and a matched low-toxicity
-_neutral_ set. The eliciting set drives the patching, attribution, and intervention experiments;
-a diff-of-means between the two sets isolates the toxic direction used for project-out.
+_neutral_ set. A diff-of-means between the two sets isolates the toxic direction used for
+project-out.
+
+Crucially, every identifier (patching grid, gate-AtP, SOMP ranking, diff-of-means direction) is
+fit on a _train_ split of the eliciting/neutral prompts and every intervention is then scored on a
+_disjoint held-out test_ split ($n_"train" = 100$, $n_"test" = 50$). This avoids the
+identify-and-score-on-the-same-prompts circularity that would otherwise inflate any
+causally-selected method against the correlational baseline.
 
 === Activation Patching (causal ground truth)
 
@@ -119,8 +125,10 @@ every decoded step:
 - *Project-out* --- remove the toxic direction's component from the residual stream at a layer,
   $bold(h) <- bold(h) - (bold(h) dot hat(bold(v))) hat(bold(v))$, leaving every
   orthogonal feature untouched. This is a non-destructive variant of activation steering
-  @turner2023activation; $bold(v)$ is either the diff-of-means toxic direction or the unembedding
-  concept direction $bold(d)_("tox")$.
+  @turner2023activation. The direction $bold(v)$ is chosen per concept: for toxicity it is the
+  activation-derived diff-of-means of the eliciting and neutral residuals (used for all toxicity
+  numbers below), while the unembedding concept direction $bold(d)_("tox")$ is the generic
+  fallback for arbitrary `--concept` queries.
 Each method is scored by greedy generation under the intervention: the mean probe value over the
 continuation (lower is less toxic) plus an offensive-word rate, with the neutral prompts as a
 collateral check. Because the direction and probe can be built from any concept's token set, the

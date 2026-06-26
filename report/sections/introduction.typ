@@ -21,3 +21,7 @@ Our contributions:
 - Application of SOMP with the unembedding dictionary to obtain sparse, token-level
   expert summaries.
 - A TriviaQA-based pipeline for analyzing expert specialization in OLMoE.
+- A held-out causal circuit study (activation patching, gate-AtP, project-out) showing that
+  toxic behavior is spread redundantly across the active top-$k$ experts: single-expert knockout
+  is near-inert, and control is recovered at the level of the shared residual direction rather
+  than by editing individual experts.
