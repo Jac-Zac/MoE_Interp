@@ -41,6 +41,35 @@ def _group_by_layer(experts: list[tuple[int, int]]) -> dict[int, list[int]]:
     return by_layer
 
 
+def somp_concept_experts(
+    model_name: str,
+    concept_words: list[str],
+    k: int,
+    *,
+    source: str = "pile10k",
+) -> list[tuple[int, int]]:
+    """Top-``k`` ``(layer, expert)`` whose SOMP atoms most overlap the concept lexicon.
+
+    The correlational (no-model) selector: ranks experts by how many of their pursuit atoms are
+    concept words. Concept-general — pass any ``concept_words`` list (offensive, numbers,
+    countries …). Returns ``[]`` if the pursuit results are missing. Shared by the toxicity
+    intervention pipeline (:func:`_offensive_expert_sets`) and counterfactual editing.
+    """
+    pursuit_dir = get_pursuit_dir(model_name, source)
+    if not (pursuit_dir / "results.jsonl").exists():
+        return []
+    lex = {w.lower() for w in concept_words}
+    somp = load_somp_results(pursuit_dir)
+    scored = sorted(
+        (
+            (sum(t.strip().lower() in lex for t in r.get("tokens", [])), le)
+            for le, r in somp.items()
+        ),
+        reverse=True,
+    )
+    return [le for s, le in scored[:k] if s > 0]
+
+
 def collect_last_token_residuals(
     model, prompts: list[list[int]], layer: int, batch_size: int = 8
 ) -> torch.Tensor:
@@ -100,18 +129,9 @@ def _offensive_expert_sets(
     if patch_path.exists():
         sets["patching"] = topk_grid(np.nan_to_num(np.load(patch_path)))
 
-    pursuit_dir = get_pursuit_dir(model_name, "pile10k")
-    if (pursuit_dir / "results.jsonl").exists():
-        lex = {w.lower() for w in concept_words}
-        somp = load_somp_results(pursuit_dir)
-        scored = sorted(
-            (
-                (sum(t.strip().lower() in lex for t in r.get("tokens", [])), le)
-                for le, r in somp.items()
-            ),
-            reverse=True,
-        )
-        sets["SOMP"] = [le for s, le in scored[:k] if s > 0]
+    somp_set = somp_concept_experts(model_name, concept_words, k)
+    if somp_set:
+        sets["SOMP"] = somp_set
 
     # Specificity control: same layers as AtP, but random (distinct) experts.
     rng = random.Random(0)
