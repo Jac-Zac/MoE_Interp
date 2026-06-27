@@ -21,23 +21,22 @@ interpretability ranker used in the knockout comparison below).
 ## 2. Localize — which experts are *causally* responsible
 
 ```bash
-python notebooks/circuits/patching.py   # causal grid (one forward per expert) + gate-AtP faithfulness
+python notebooks/circuits/localize.py   # gate-AtP causal grid (one backward pass) + heatmap
 ```
 
-`patching.py` sweeps every routed `(layer, expert)`, zeros its gate, and records the change in
-the toxic-logit metric → `data/<model>/circuit/patching/` (`patching_grid.npy`, heatmap, top
-experts), then scores cheap attributors against that grid (pooled Pearson r over the scored
-experts):
+`localize.py` runs **gate-AtP** over the eliciting prompts: a single backward pass scores every
+routed `(layer, expert)` by `gate · dL/dgate`, the first-order effect of zeroing its gate on the
+toxic-logit metric → `data/<model>/circuit/attribution/atp_grid_n<N>.npy` (+ heatmap, top
+experts). Positive = the expert promotes toxicity, negative = suppresses it.
 
-| method | cost | r vs patching |
-|---|---|---|
-| **gate-AtP** (`attribution.py`) | 1 backward pass | **+0.80** (per-layer up to +0.98) |
-
-**Gate gradient attribution is cheap and faithful** — one backward pass recovers the expensive
-causal grid (causal attribution, not token association, is what predicts causal effect).
-(A neuron-basis RelP variant was tried and removed: it underperformed AtP — OLMoE's gate is a
-clean differentiable leaf so AtP isn't noisy here — and nnsight 0.7 won't provide
-`dL/d(residual)` for a neuron-level AtP anyway.)
+> **Why not exhaustive activation patching?** Patching (zero each gate in a separate forward pass;
+> one forward per expert) is the exact ground truth, but costs ~64× more. We validated gate-AtP
+> against it once on the toxicity grid and the two agreed closely — pooled Pearson **r ≈ 0.69**,
+> up to **≈ 0.96** in the late layers where the controllable signal lives — so the expensive
+> patching sweep was dropped and the cheap AtP grid is used throughout. That frozen validation
+> lives in `data/<model>/circuit/compare/faithfulness.json`. (A neuron-basis RelP variant was also
+> tried and removed: it underperformed AtP — OLMoE's gate is a clean differentiable leaf — and
+> nnsight 0.7 won't provide `dL/d(residual)` for a neuron-level AtP anyway.)
 
 ## 3. Intervene — suppress toxic generation
 
@@ -45,15 +44,16 @@ clean differentiable leaf so AtP isn't noisy here — and nnsight 0.7 won't prov
 python notebooks/circuits/steer.py   # knockout / project-out vs baseline, then assemble the HTML report
 ```
 
-`steer.py` ranks experts by each identification method (AtP, SOMP, patching, random)
-and, during generation, knocks out those experts or projects the toxic direction out of the
-residual stream, scoring toxic-logit propensity and offensive-word rate vs baseline with a
-neutral-prompt collateral check (`data/<model>/circuit/steer/`). Finding: **AtP-knockout
-reduces toxic propensity with minimal collateral; patching-knockout also works; SOMP/random
-knockout do ~nothing** (token association ≠ causal responsibility). Knockout is blunt (can break
-fluency) and naive additive steering (a large fixed `-α·v`) tanks neutral generation, so
-**project-out is the best suppressor**: it removes only the toxic direction and keeps generation
-fluent. The intervention generalizes to any concept via the `CONCEPT` variable in `steer.py`.
+`steer.py` ranks experts by each identification method (AtP, SOMP, random) and, during
+generation, knocks out those experts or projects the toxic direction out of the residual stream,
+scoring toxic-logit propensity and offensive-word rate vs baseline with a neutral-prompt
+collateral check (`data/<model>/circuit/steer/`). Finding: **single-expert knockout is near-inert
+for every selector — the causal (AtP) experts order correctly but top-k routing is redundant, so
+knocking out a handful barely moves toxicity, and SOMP/random do ~nothing** (token association ≠
+causal responsibility). Naive additive steering (a large fixed `-α·v`) tanks neutral generation,
+so **project-out is the best suppressor**: it removes only the toxic direction and keeps
+generation fluent. The intervention generalizes to any concept via the `CONCEPT` variable in
+`steer.py`.
 
 > All interventions act at **the router gate** (`layer.mlp.experts.inputs[0]`), the only
 > per-expert node the fused kernel exposes — so they scale/zero an expert's *whole* contribution.
@@ -64,25 +64,24 @@ fluent. The intervention generalizes to any concept via the `CONCEPT` variable i
 
 - `prompts.py` — RealToxicityPrompts split (high- vs low-toxicity) eliciting/neutral prompts.
 - `toxicity.py` — toxic-logit metric + shared gate-ablation plumbing.
-- `patching.py` — the brute-force causal grid (one forward per routed expert).
-- `attribution.py` — gate-AtP gradient attribution (`gate · dL/dgate`, one backward pass).
-- `compare.py` — faithfulness (Pearson r) of cheap attributors vs the patching grid.
-- `intervene.py` — generation-time knockout / project-out + scoring.
+- `attribution.py` — gate-AtP gradient attribution (`gate · dL/dgate`, one backward pass) — the causal localizer.
+- `compare.py` — the intervention propensity bar chart.
+- `intervene.py` — generation-time knockout / project-out / expert-output steering + scoring.
 - `steer.py` — intervention orchestration + the diff-of-means toxic direction (last-token residuals).
 - `report.py` — self-contained HTML report.
 
-Driven by the `# %%` notebooks in `notebooks/circuits/` (`patching.py`, `steer.py`), or
+Driven by the `# %%` notebooks in `notebooks/circuits/` (`localize.py`, `steer.py`), or
 end-to-end by `scripts/cineca/circuit_runner.py`.
 
 ## Running locally vs on Orfeo
 
-OLMoE-1B-7B loads on Apple MPS in ~30 s (~13 GB weights; ~16 GB free RAM) and one ablation
-forward is ~2 s, so the **full 16-layer grid (~15-20 min) runs on a Mac**. If RAM is tight,
-restrict the sweep with the `LAYERS` / `BATCH_SIZE` knobs at the top of `patching.py`, or run
-on the GPU cluster (`get_device()` picks CUDA there):
+OLMoE-1B-7B loads on Apple MPS in ~30 s (~13 GB weights; ~16 GB free RAM). gate-AtP is a single
+backward pass, so the **localization grid runs on a Mac in well under a minute**; the
+generation-time interventions in `steer.py` are the slower part. Tune `ATP_BATCH_SIZE` /
+`STEER_BATCH_SIZE` if RAM is tight, or run on the GPU cluster (`get_device()` picks CUDA there):
 
 ```bash
-DATA_DIR=$SCRATCH/data python notebooks/circuits/patching.py
+DATA_DIR=$SCRATCH/data python notebooks/circuits/localize.py
 # then pull data/<model>/circuit/ back to inspect locally
 ```
 

@@ -1,14 +1,18 @@
 #!/usr/bin/env python
-"""Run the full causal circuit pipeline: patching, gate-AtP, comparison, steer, report.
+"""Run the causal circuit pipeline: gate-AtP localization, expert interventions, report.
 
 Builds a disjoint RealToxicityPrompts train/test split and threads it through every
 model-dependent step so all methods share the same identification prompts and are scored
-on the same held-out test set. All artifacts land under ``data/<model>/circuit/``.
+on the same held-out test set. All artifacts land under ``data/<model>/circuit/``. Every
+intervention is *expert-level* (gate knockout / expert-output steering) — no residual-stream edits.
+
+The causal localizer is gate-AtP (one backward pass). Exhaustive activation patching was used
+once to validate it (the two grids agreed closely, pooled r≈0.69) and is no longer run here.
 
 Usage:
     python scripts/cineca/circuit_runner.py [--model MODEL] [--batch-size N]
                                             [--atp-batch-size N] [--knockout-k N]
-                                            [--steer-layer L] [--max-new-tokens N]
+                                            [--max-new-tokens N]
                                             [--n-prompts N] [--n-test N]
 """
 
@@ -22,15 +26,9 @@ from dotenv import load_dotenv
 from nnsight import LanguageModel
 
 from moe_interp.circuit.attribution import gate_attribution
-from moe_interp.circuit.compare import faithfulness, plot_faithfulness
-from moe_interp.circuit.patching import (
-    expert_patching_grid,
-    plot_expert_effect_grid,
-    top_grid_experts,
-)
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
-from moe_interp.circuit.steer import run_localized_steer, run_steer
+from moe_interp.circuit.steer import run_dose_response, run_expert_steer
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import build_toxic_token_ids
 
@@ -50,14 +48,23 @@ def main():
         "Use a smaller value (e.g. 2) if the backward pass OOMs after the grid sweep.",
     )
     parser.add_argument("--knockout-k", type=int, default=15)
-    parser.add_argument("--steer-layer", type=int, default=12)
     parser.add_argument("--max-new-tokens", type=int, default=24)
-    parser.add_argument("--n-prompts", type=int, default=48,
-                        help="Train-set size (used for grid identification and steer training).")
-    parser.add_argument("--n-test", type=int, default=24,
-                        help="Held-out test set size (scored by steer experiment).")
+    parser.add_argument(
+        "--n-prompts",
+        type=int,
+        default=48,
+        help="Train-set size (used for grid identification and steer training).",
+    )
+    parser.add_argument(
+        "--n-test",
+        type=int,
+        default=24,
+        help="Held-out test set size (scored by steer experiment).",
+    )
     args = parser.parse_args()
-    atp_batch = args.atp_batch_size if args.atp_batch_size is not None else args.batch_size
+    atp_batch = (
+        args.atp_batch_size if args.atp_batch_size is not None else args.batch_size
+    )
 
     model_name = args.model
     cdir = get_model_dir(model_name) / "circuit"
@@ -80,101 +87,62 @@ def main():
         flush=True,
     )
 
-    # 1. Causal patching grid (one forward per routed expert) — the ground truth.
-    patch_dir = cdir / "patching"
-    patch_dir.mkdir(parents=True, exist_ok=True)
-    grid_path = patch_dir / "patching_grid.npy"
-    if not grid_path.exists():
-        print("[1/4] Causal patching grid (this will take a while) ...", flush=True)
-        grid = expert_patching_grid(
-            model, elic_tr, toxic_ids, batch_size=args.batch_size
-        )
-        np.save(grid_path, grid.numpy())
-        top = top_grid_experts(grid)
-        (patch_dir / "top_experts.json").write_text(json.dumps(top, indent=2))
-        plot_expert_effect_grid(
-            grid,
-            patch_dir / "patching_grid.html",
-            title=f"Expert ablation effect — {model_name}",
-        )
-        print(f"  patching grid -> {patch_dir}", flush=True)
-    else:
-        print("[1/4] Patching grid already exists, skipping", flush=True)
-
-    # 2. gate-AtP (one backward pass) — the cheap estimate of the patching grid.
-    # Keyed by train-set size so step 4's offensive knockout reuses this exact grid
+    # 1. gate-AtP localization grid (one backward pass) — the causal localizer.
+    # Keyed by train-set size so step 2's offensive knockout reuses this exact grid
     # (same prompts, same toxic ids) instead of paying for a second backward pass.
     atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}.npy"
     if not atp_path.exists():
-        print("[2/4] gate-AtP ...", flush=True)
-        # Flush VRAM fragmentation from the patching sweep before the backward pass.
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        print("[1/3] gate-AtP localization grid ...", flush=True)
         atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=atp_batch)
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp.numpy())
     else:
-        print("[2/4] gate-AtP already exists, skipping", flush=True)
+        print("[1/3] gate-AtP already exists, skipping", flush=True)
 
-    # 3. Faithfulness comparison (gate-AtP vs the causal patching grid; model-free).
-    cmp_dir = cdir / "compare"
-    if not (cmp_dir / "faithfulness.json").exists():
-        print("[3/4] Faithfulness ...", flush=True)
-        patching = torch.from_numpy(np.load(grid_path)).float()
-        grids = {"gate-AtP": torch.from_numpy(np.load(atp_path)).float()}
-        scores = faithfulness(grids, patching)
-        cmp_dir.mkdir(parents=True, exist_ok=True)
-        (cmp_dir / "faithfulness.json").write_text(json.dumps(scores, indent=2))
-        plot_faithfulness(
-            scores,
-            cmp_dir / "faithfulness.html",
-            title=f"Attributor faithfulness — {model_name}",
-        )
-    else:
-        print("[3/4] Faithfulness already exists, skipping", flush=True)
-
-    # 4. Knockout / project-out / steer intervention experiment.
+    # 2. Expert-level causal interventions on the SOMP and gate-AtP experts (rtp/offensive, ranked
+    # by EVR@k / |AtP|) vs a matched-random control: knockout (necessity) and α-expert-OUTPUT DoM
+    # steering (influence), done per expert. Every intervention is expert-level — no residual-stream
+    # edits. The key checks are (a) does the causal (AtP) set beat SOMP and random, and (b) does the
+    # output stay coherent (distinct1)?
     steer_out = cdir / "steer" / "offensive"
-    iv_path = steer_out / "intervention.json"
-    if not iv_path.exists():
-        print("[4/5] Intervention experiment ...", flush=True)
-        res = run_steer(
+    exp_path = steer_out / "expert_intervention.json"
+    if not exp_path.exists():
+        print("[2/3] Expert-level interventions (SOMP / AtP vs random) ...", flush=True)
+        exp = run_expert_steer(
             model,
             model_name,
             concept="offensive",
-            knockout_k=args.knockout_k,
-            steer_layer=args.steer_layer,
+            dataset="rtp",
+            k=args.knockout_k,
             batch_size=args.batch_size,
             max_new_tokens=args.max_new_tokens,
             train=(elic_tr, neut_tr),
             test=(elic_te, neut_te),
         )
         steer_out.mkdir(parents=True, exist_ok=True)
-        iv_path.write_text(json.dumps(res, indent=2))
+        exp_path.write_text(json.dumps(exp, indent=2))
     else:
-        print("[4/5] Intervention already exists, skipping", flush=True)
-        res = json.loads(iv_path.read_text())
+        print("[2/3] Expert interventions already exist, skipping", flush=True)
 
-    # 5. Localized project-out: scrub the toxic direction only at positions routed to each
-    # selector's experts (AtP / patching / SOMP / random), reusing the sets from step 4. The
-    # key check is specificity — does the eliciting drop exceed the neutral drop?
-    loc_path = steer_out / "localized_intervention.json"
-    if not loc_path.exists():
-        print("[5/5] Localized project-out ...", flush=True)
-        loc = run_localized_steer(
+    # 3. Dose-response: cumulative top-1..k SOMP / AtP vs random, for α expert steering, on
+    # eliciting prompts only. Shows whether toxicity falls monotonically as more causal experts
+    # are hit (and stays flat for random) — the signature of a localized causal set.
+    dose_path = steer_out / "dose_response.json"
+    if not dose_path.exists():
+        print("[3/3] Dose-response curve ...", flush=True)
+        dose = run_dose_response(
             model,
+            model_name,
             concept="offensive",
-            sets=res["meta"]["sets"],
+            dataset="rtp",
+            k=args.knockout_k,
+            max_new_tokens=args.max_new_tokens,
             train=(elic_tr, neut_tr),
             test=(elic_te, neut_te),
-            steer_layer=args.steer_layer,
-            batch_size=args.batch_size,
-            max_new_tokens=args.max_new_tokens,
-            steer_alpha=-1.0,  # also add the localized additive-steering (Head-Pursuit) arms
         )
-        loc_path.write_text(json.dumps(loc, indent=2))
+        dose_path.write_text(json.dumps(dose, indent=2))
     else:
-        print("[5/5] Localized project-out already exists, skipping", flush=True)
+        print("[3/3] Dose-response already exists, skipping", flush=True)
 
     del model
     if torch.cuda.is_available():

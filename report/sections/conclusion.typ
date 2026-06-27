@@ -18,22 +18,28 @@ detectors, but as a sparse, honest summary of the *limited* low-dimensional stru
 expert carries --- consistent with the view that MoE semantics live largely in cross-layer
 routing paths rather than individual experts @monosemanticpaths2026.
 
-Finally, a causal toxic-expert circuit study --- with all identifiers fit on a train split and
-all interventions scored on held-out prompts --- draws a sharp line between vocabulary
-association and causation. The experts that causally drive toxic generation span all depths and
-include strong suppressors, unlike the late-layer specialists that pursuit surfaces; a one-pass
-gate attribution-patching score reproduces the expensive ablation grid moderately overall
-($r approx 0.69$) and faithfully in the late layers ($approx 0.93$). But the headline causal
-result is a *negative* one that sharpens the contribution: held out, single-expert top-$k$
-knockout is near-inert for _every_ identifier --- causal scores order the experts correctly but
-barely move toxicity --- because the behavior is spread redundantly across the active top-$k$
-ensemble. This is the opposite of Head Pursuit's strongly-causal heads, so the SOMP _description_
-transfers from heads to experts but the causal _localization_ does not. What does recover control
-is acting on the shared residual direction: gentle project-out suppresses toxicity cleanly, while
-aggressive additive steering works only by degrading generation indiscriminately. Correlational
-specialization summaries are thus a starting point for hypotheses, not a substitute for a causal
-test --- and in a redundant MoE, even causal _expert_ identification is better cashed out as a
-direction than as an edit to a few experts.
+Finally, a causal circuit study across three concepts --- with all selectors fit on a train split
+and all interventions scored on held-out prompts --- draws a sharp line between vocabulary
+association and causation, and reveals that causal _controllability_ is a *gradient*: `countries`
+is sharply localizable, `numbers` only weakly, toxicity not at all. Two findings recur along it.
+First, the separating signal is *influence, not necessity*: localized steering of the gate-AtP
+experts removes a localizable concept cleanly (country word-fraction $0.60 -> 0.03$ with coherence
+intact) and does so _specifically_ (the other concept survives), yet knocking the same experts out
+--- even the top $10%$ of all experts --- never removes the concept, because top-$k$ routing is
+redundant. This is the opposite of Head Pursuit's strongly-causal heads: the SOMP _description_
+transfers from heads to experts but the causal _localization_ does not. Second, the correlational
+SOMP selector is never cleanly causal --- where it lowers a metric it does so only by collapsing
+generation into garbage (distinct-1 $0.27$--$0.59$), a failure a coherence guard exposes
+immediately. A cheap one-pass gate gradient recovers the causal influence faithfully
+($r approx 0.69$ pooled, $approx 0.93$ in the late layers where the controllable signal lives), so
+the expensive patching grid is needed only to validate it. The diffuse tail (toxicity) is the
+honest endpoint: it has no usable expert handle at all --- knockout is inert and even expert-output
+steering of the causal set only suppresses it weakly and non-specifically --- because the behavior
+is semantic and fully distributed rather than carried by any sparse expert set. Correlational
+specialization summaries are thus a starting point for hypotheses, not a substitute for a causal,
+coherence-aware test --- and in a redundant MoE, causal _influence_ over a concept's experts is
+recoverable for the localizable concepts but expert _necessity_ is an illusion of redundant
+routing, with the least lexical behaviors not expert-localizable at all.
 
 == Future Work
 

@@ -1,10 +1,10 @@
 """Prompts for the circuit / intervention experiments — a RealToxicityPrompts split.
 
 :func:`rtp_prompts` partitions real RealToxicityPrompts by their own per-prompt toxicity
-score into high-toxicity (eliciting) and low-toxicity (neutral) sets. A diff-of-means over
-the two isolates the toxic direction, and the eliciting set drives the knockout/project-out
-comparison. This is the single prompt source for the whole circuit study; the notebooks use
-the same function with a small ``n`` and print a few examples for clarity.
+score into high-toxicity (eliciting) and low-toxicity (neutral) sets. The eliciting set drives
+the expert knockout / expert-output steering comparison and the neutral set is the collateral
+control. This is the single prompt source for the whole circuit study; the notebooks use the
+same function with a small ``n`` and print a few examples for clarity.
 """
 
 from __future__ import annotations

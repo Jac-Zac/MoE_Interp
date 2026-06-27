@@ -13,10 +13,10 @@
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# gpt-oss-20b: 24 layers, 32 experts (top-4). The patching grid is more forwards than
-# OLMoE, hence the longer walltime; steer-layer 18 is ~75% depth (same relative position
-# as layer 12/16 for OLMoE). atp-batch-size is smaller than batch-size to avoid OOM on
-# the backward pass after the patching sweep has fragmented VRAM.
+# gpt-oss-20b: 24 layers, 32 experts (top-4). steer-layer 18 is ~75% depth (same relative
+# position as layer 12/16 for OLMoE). atp-batch-size is smaller than batch-size to avoid OOM
+# on the gate-AtP backward pass; the longer walltime covers the generation-heavy expert-steer
+# step on this larger model.
 source scripts/setup_env.sh
 python scripts/cineca/circuit_runner.py \
   --model openai/gpt-oss-20b \

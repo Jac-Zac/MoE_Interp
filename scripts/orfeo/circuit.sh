@@ -6,23 +6,24 @@
 #SBATCH --mem=50G
 #SBATCH --partition=GPU
 #SBATCH --gres=gpu:V100:1
-#SBATCH -t 08:00:00
+#SBATCH -t 02:00:00
 #SBATCH --job-name=circuit_full
 #SBATCH -o circuit_full.out
 
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# Full causal-circuit pipeline at held-out scale: patching grid, gate-AtP, faithfulness,
-# the knockout/project-out intervention, and the localized project-out + localized additive
-# steering (step 5, both routed to the causal experts). The larger --n-test is what makes the
-# *specificity* check (Δelic vs Δneut) trustworthy — at small n the neutral collateral is too
-# noisy to tell blunt suppression from real localization. Step 5 now scores ~11 methods, so it
-# is generation-heavy; the 8h walltime covers it alongside the patching grid.
+# Full causal-circuit pipeline at held-out scale: gate-AtP localization (step 1), the
+# knockout/project-out intervention (step 2), the per-expert causal interventions on the SOMP and
+# AtP experts vs a matched-random control (step 3: knockout + α expert-output DoM steering, plus
+# DoM collection), and the dose-response curve (step 4). The larger --n-test is what makes the
+# *specificity* check (Δelic vs Δneut, causal vs random) trustworthy — at small n the neutral
+# collateral is too noisy. The GPU association caps walltime at 2h; step 3 is generation-heavy so
+# this is the full budget. (gate-AtP replaces exhaustive activation patching, validated once at
+# r≈0.69; patching is no longer run.)
 #
-# NOTE: the patching grid (patching_grid.npy) is cached and NOT keyed by --n-prompts. If you
-# change --n-prompts, delete data/<model>/circuit/patching/ and circuit/attribution/ first, or
-# the cheap steps will mix a stale grid with a freshly-sized AtP/steer split.
+# NOTE: the gate-AtP grid (atp_grid_n<N>.npy) is keyed by --n-prompts, so changing --n-prompts
+# just writes a new file — no stale-cache cleanup needed.
 source scripts/setup_env.sh
 module load cuda
 

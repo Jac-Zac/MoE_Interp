@@ -1,8 +1,9 @@
 """Assemble the toxic-circuit results into one self-contained HTML report.
 
 Reads the artifacts written by the `circuit*` commands under ``data/<model>/circuit/``:
-patching grid, the faithfulness comparison, and the intervention experiment. Missing
-pieces are skipped, so the report renders whatever has been produced so far.
+the gate-AtP localization grid, the intervention experiment, and the per-concept expert
+interventions. Missing pieces are skipped, so the report renders whatever has been produced
+so far.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 
-from moe_interp.circuit.compare import faithfulness_bar, intervention_bar
+from moe_interp.circuit.compare import intervention_bar
 from moe_interp.config import get_model_dir
 from moe_interp.io.plots import diverging_expert_heatmap
 
@@ -81,26 +82,21 @@ def build_report(model_name: str) -> Path:
                 ],
                 [
                     "localize",
-                    "activation patching",
-                    "ablate every expert's gate, measure Δ toxic-logit (ground truth)",
-                    "yes",
-                ],
-                [
-                    "localize",
                     "gate-AtP",
-                    "one backward pass estimates the whole patching grid (gate·dL/dgate)",
+                    "one backward pass scores every expert's gate effect (gate·dL/dgate); "
+                    "validated once against exhaustive activation patching (r≈0.69)",
                     "yes",
                 ],
                 [
                     "intervene",
-                    "knockout",
+                    "knockout (necessity)",
                     "zero the gate of the top causal experts during generation",
                     "yes",
                 ],
                 [
                     "intervene",
-                    "project-out",
-                    "remove the toxic direction from the residual stream each step",
+                    "expert-output steering (influence)",
+                    "add α·v_e to the selected experts' output (diff-of-means in expert space)",
                     "yes",
                 ],
             ],
@@ -109,13 +105,16 @@ def build_report(model_name: str) -> Path:
     parts.append(
         '<p class="note"><b>Headline findings.</b> (1) Causally important experts span all '
         "depths, including <i>suppressor</i> experts that <i>raise</i> toxicity when removed. "
-        "(2) gate-AtP predicts the expensive patching grid in one backward pass (Pearson "
-        "r≈0.69 pooled, up to ≈0.96 in the late layers). (3) The correlational SOMP classifier "
-        "flags toxicity-<i>associated</i> "
-        "experts, but knocking them out does nothing — only the causally-identified (AtP / "
-        "patching) experts suppress toxicity when removed. (4) <b>Project-out is the best "
-        "suppressor</b>: it lowers toxic propensity the most while keeping generation fluent, "
-        "where knockout is blunt and naive additive steering breaks the model.</p>"
+        "(2) The cheap gate-AtP localizer was validated once against exhaustive activation "
+        "patching (one forward per expert) and the two agreed closely (Pearson r≈0.69 pooled, up "
+        "to ≈0.96 in the late layers), so patching was dropped and AtP is used throughout. "
+        "(3) The correlational SOMP classifier flags toxicity-<i>associated</i> "
+        "experts, but knocking them out does nothing — and the causal (AtP) experts are no more "
+        "<i>necessary</i> (top-k routing is redundant). (4) The separating signal is "
+        "<b>influence, not necessity</b>: expert-output steering of the causal experts moves a "
+        "<i>localizable</i> concept (e.g. countries) cleanly, while SOMP only lowers it by "
+        "degrading the text (distinct-1 collapse) — toxicity, the diffuse case, has no clean "
+        "expert lever at all.</p>"
     )
 
     # 1. METHODS (text)
@@ -140,151 +139,89 @@ def build_report(model_name: str) -> Path:
     )
     parts.append(
         "<h3>Localization — which experts are <i>causally</i> responsible</h3><ul>"
-        "<li><b>Activation patching (ground truth).</b> For every routed (layer, expert), zero its "
-        "gate in one forward pass and record ΔΔ in the toxic-logit metric. Positive = the expert "
-        "promotes toxicity, negative = suppresses it. Cost: one forward per expert.</li>"
-        "<li><b>gate-AtP (attribution patching).</b> Estimates the whole grid from a single backward "
-        "pass: <code>attribution(e) ≈ gate_e · dL/dgate_e</code> summed over positions.</li>"
-        "<li><b>Faithfulness.</b> Pearson r between each cheap method’s per-expert score and the "
-        "patching ground truth.</li></ul>"
+        "<li><b>gate-AtP (attribution patching).</b> Scores every routed (layer, expert) from a "
+        "single backward pass: <code>attribution(e) ≈ gate_e · dL/dgate_e</code> summed over "
+        "positions. Positive = the expert promotes toxicity, negative = suppresses it.</li>"
+        "<li><b>Validation (one-off).</b> gate-AtP is a first-order approximation of exhaustive "
+        "activation patching (zero each gate in a separate forward pass; one forward per expert). "
+        "We checked the two on the toxicity grid once — they agreed closely (pooled r≈0.69, ≈0.93 "
+        "in the late layers) — so the expensive patching sweep was dropped and AtP is used "
+        "throughout.</li></ul>"
     )
     parts.append(
-        "<h3>Intervention — suppress the behaviour during generation</h3><ul>"
-        "<li><b>Knockout</b> — zero the gates of the top-k identified experts at every decoded step.</li>"
-        "<li><b>Project-out</b> — remove the toxic direction’s component from the residual stream each "
-        "step (non-destructive: orthogonal features are untouched).</li></ul>"
+        "<h3>Intervention — suppress the behaviour during generation (expert-level only)</h3><ul>"
+        "<li><b>Knockout</b> (necessity) — zero the gates of the top-k identified experts at every "
+        "decoded step.</li>"
+        "<li><b>Expert-output steering</b> (influence) — add α·v_e to the selected experts' output "
+        "activation, where v_e is the toxic−neutral diff-of-means in expert-output space (α&lt;0 "
+        "subtracts the concept direction). Per-expert and gate-weighted; no residual-stream edit.</li>"
+        "</ul>"
         "<p>Each is scored by greedy generation under the intervention: <b>toxic propensity</b> (mean "
-        "toxic-logit over the continuation) and offensive-word rate, with the neutral set as a "
-        "collateral check.</p>"
+        "toxic-logit over the continuation), offensive-word rate, and a <b>distinct-1</b> coherence "
+        "guard, with the neutral set as a collateral check.</p>"
     )
 
     # 2. RESULTS (figures + tables + findings)
     parts.append('<h2 id="results">Results</h2>')
 
-    parts.append("<h3>Identifying the experts</h3>")
-    pg = cdir / "patching" / "patching_grid.npy"
-    if pg.exists():
-        parts.append(
-            fig(_heatmap(np.load(pg), "Causal patching effect per expert", "Δ toxic"))
-        )
-        top = load_json(cdir / "patching" / "top_experts.json") or []
+    parts.append("<h3>Identifying the experts (gate-AtP)</h3>")
+    atp_grids = sorted((cdir / "attribution").glob("atp_grid_n*.npy"))
+    if atp_grids:
+        from moe_interp.grids import top_experts
+
+        grid = np.nan_to_num(np.load(atp_grids[-1]))
+        parts.append(fig(_heatmap(grid, "gate-AtP effect per expert", "gate-AtP")))
         parts.append(
             _table(
-                ["expert", "effect"],
+                ["expert", "gate-AtP"],
                 [
-                    [f"L{r['layer']}E{r['expert']}", f"{r['effect']:+.3f}"]
-                    for r in top[:10]
+                    [f"L{layer}E{e}", f"{v:+.3f}"]
+                    for layer, e, v in top_experts(grid, 10, by="abs")
                 ],
             )
         )
         parts.append(
-            '<p class="note">Causal effect of ablating each expert (red = promotes toxicity, '
+            '<p class="note">gate-AtP effect of each expert (red = promotes toxicity, '
             "blue = suppresses). Causally important experts span <b>all depths</b> and include "
             "<b>suppressors</b> (negative) — neither of which the classifiers below capture.</p>"
         )
     fa = load_json(cdir / "compare" / "faithfulness.json")
     if fa:
-        parts.append("<h3>Which cheap method predicts the causal grid?</h3>")
+        r = fa.get("gate-AtP", {}).get("pooled_r")
+        rtxt = f"pooled r≈{r:.2f}" if isinstance(r, (int, float)) else "pooled r≈0.69"
         parts.append(
-            fig(
-                faithfulness_bar(
-                    fa,
-                    title="Attributor faithfulness vs causal patching",
-                    height=380,
-                )
-            )
-        )
-        parts.append(
-            '<p class="note"><b>gate-AtP (one backward pass) faithfully predicts the '
-            "expensive patching grid</b> (pooled r≈0.69, per-layer up to 0.96) — causal "
-            "attribution, not token association, is what predicts causal effect.</p>"
+            '<p class="note"><b>Validation (one-off).</b> gate-AtP was checked against the '
+            f"exhaustive activation-patching grid on the toxicity run and tracked it closely "
+            f"({rtxt}, up to ≈0.96 in the late layers), so the expensive patching sweep is no "
+            "longer run — causal attribution, not token association, is what predicts causal "
+            "effect. (Frozen result in <code>compare/faithfulness.json</code>.)</p>"
         )
 
-    # Steer artifacts live under steer/<concept>/; report whichever concept was run
-    # (prefer offensive, else the first concept found), with the legacy flat layout
-    # (steer/intervention.json) as a final fallback. The concept label is read from meta.
+    # All interventions are expert-level; results live under steer/<concept>/.
     steer_dir = cdir / "steer"
-    iv_paths = [
-        steer_dir / "offensive" / "intervention.json",
-        *sorted(steer_dir.glob("*/intervention.json")),
-        steer_dir / "intervention.json",
-    ]
-    iv = next((load_json(p) for p in iv_paths if p.exists()), None)
-    if iv:
-        mm = iv.get("methods", {})
-        concept = iv.get("meta", {}).get("concept", "toxic")
-        parts.append(f"<h3>Suppressing “{concept}” generation</h3>")
-        rows, methods = [], list(mm)
-        base = mm.get("baseline", {}).get("eliciting_propensity", 0.0)
-        for m in methods:
-            b = mm[m]
-            drop = base - b.get("eliciting_propensity", 0.0)
-            rows.append(
-                [
-                    m,
-                    f"{b.get('eliciting_propensity', 0):+.3f}",
-                    f"{drop:+.3f}",
-                    f"{b.get('neutral_propensity', 0):+.3f}",
-                    f"{b.get('eliciting_word_frac', 0):.2f}",
-                ]
-            )
-        parts.append(
-            fig(
-                intervention_bar(
-                    mm,
-                    title=f"Intervention propensity — {concept}",
-                    height=420,
-                )
-            )
-        )
-        parts.append(
-            _table(
-                [
-                    "method",
-                    "concept propensity",
-                    "Δ vs baseline",
-                    "neutral propensity",
-                    "word frac",
-                ],
-                rows,
-            )
-        )
-        parts.append(
-            '<p class="note">Lower propensity = less of the concept; neutral is the '
-            "collateral check (should stay near baseline). <b>Causally-identified knockout "
-            "(AtP / patching) suppresses toxicity; correlational (SOMP / random) does "
-            "nothing. Project-out gives the largest drop while keeping generation fluent.</b></p>"
-        )
-        others = [m for m in methods if m != "baseline"]
-        best = min(
-            others, key=lambda m: mm[m].get("eliciting_propensity", 0.0), default=None
-        )
-        for label in [m for m in ("baseline", best) if m]:
-            ex = mm[label].get("examples", [])
-            if ex:
-                parts.append(f"<h4>{label} — example continuations</h4>")
-                parts.extend(f'<div class="ex">{e}</div>' for e in ex[:4])
 
-    # Localized project-out: project the toxic direction out only at positions routed to each
-    # selector's experts. Reported with a specificity column (Δelic - Δneut): a drop only
-    # counts as toxicity-removal if it suppresses eliciting prompts MORE than neutral ones.
-    loc = next(
-        (
-            load_json(p)
-            for p in (
-                steer_dir / "offensive" / "localized_intervention.json",
-                *sorted(steer_dir.glob("*/localized_intervention.json")),
-            )
-            if p.exists()
-        ),
-        None,
-    )
-    if loc:
-        lm = loc.get("methods", {})
-        base = lm.get("baseline", {}).get("eliciting_propensity", 0.0)
-        base_neu = lm.get("baseline", {}).get("neutral_propensity", 0.0)
+    # Expert-level interventions per concept (offensive + any lexical concepts: numbers,
+    # countries): knockout / α-expert-output-DoM steering for SOMP & AtP vs a matched-random
+    # control. Each concept renders an intervention bar + table (with a distinct-1 degeneracy
+    # column) and its dose-response curve. The cross-concept comparison is the point: does
+    # expert-level intervention work on a *localizable* concept where toxicity — semantic and
+    # redundant — resists it?
+    concept_dirs = []
+    if (steer_dir / "offensive" / "expert_intervention.json").exists():
+        concept_dirs.append(steer_dir / "offensive")
+    concept_dirs += [
+        p.parent
+        for p in sorted(steer_dir.glob("*/expert_intervention.json"))
+        if p.parent.name != "offensive"
+    ]
+    for cdir_c in concept_dirs:
+        cname = cdir_c.name
+        exp = load_json(cdir_c / "expert_intervention.json")
+        em = exp.get("methods", {})
+        base = em.get("baseline", {}).get("eliciting_propensity", 0.0)
+        base_neu = em.get("baseline", {}).get("neutral_propensity", 0.0)
         rows = []
-        for m, b in lm.items():
+        for m, b in em.items():
             de = base - b.get("eliciting_propensity", 0.0)
             dn = base_neu - b.get("neutral_propensity", 0.0)
             rows.append(
@@ -292,28 +229,83 @@ def build_report(model_name: str) -> Path:
                     m,
                     f"{b.get('eliciting_propensity', 0):+.3f}",
                     f"{de:+.3f}",
-                    f"{b.get('neutral_propensity', 0):+.3f}",
-                    f"{dn:+.3f}",
                     f"{de - dn:+.3f}",
+                    f"{b.get('eliciting_word_frac', 0):.2f}",
+                    f"{b.get('eliciting_distinct1', 0):.2f}",
                 ]
             )
-        nt = loc.get("meta", {}).get("n_test", "?")
-        parts.append("<h3>Localized project-out — is the direction carried at the causal experts?</h3>")
+        meta = exp.get("meta", {})
+        nt = meta.get("n_test", "?")
+        kk = meta.get("k", "?")
+        sel_names = ", ".join(meta.get("sets", {}).keys())
+        parts.append(
+            f"<h3>Expert-level interventions — “{cname}” ({sel_names} vs random)</h3>"
+        )
+        parts.append(
+            fig(
+                intervention_bar(
+                    em,
+                    title=f"Expert-intervention propensity — {cname}",
+                    height=480,
+                )
+            )
+        )
         parts.append(
             _table(
-                ["method", "elic prop.", "Δelic", "neutral prop.", "Δneut", "specificity"],
+                [
+                    "method",
+                    "elic prop.",
+                    "Δelic",
+                    "specificity",
+                    "word frac",
+                    "distinct-1",
+                ],
                 rows,
             )
         )
         parts.append(
-            '<p class="note">Project-out applied <b>only at positions routed to each selector’s '
-            "experts</b> (vs a global single-layer control). The decisive comparison is between "
-            "<i>routed</i> variants (patching / AtP vs SOMP / random): same edit, different selector. "
-            "<b>Specificity = Δelic − Δneut</b>; a result is toxicity-specific only if it is "
-            f"positive (suppresses toxic prompts more than neutral ones). Held out on n={nt} test "
-            "prompts — read specificity, not the raw eliciting drop, and treat small samples as "
-            "noisy.</p>"
+            '<p class="note">Per-expert interventions on the top-'
+            f"{kk} experts of each selector ({sel_names}) vs a matched-random set. "
+            "<b>knockout</b> = zero the gate (Lorenzo's α=0, near-inert under top-k redundancy); "
+            "<b>esteer(α)</b> = add "
+            "α·DoM to the expert <i>output</i> (α&lt;0 suppresses the concept, α&gt;0 should "
+            "<i>raise</i> it — the causal sanity check). <b>Specificity = Δelic − Δneut</b>; "
+            "<b>distinct-1</b> is the degeneracy guard (healthy ≈0.6–0.9; near 0 = broken text, so "
+            f"ignore its drop). n={nt} held-out prompts. The decisive read: do the causal selectors "
+            "separate from random while staying coherent?</p>"
         )
+
+        dose = load_json(cdir_c / "dose_response.json")
+        if dose:
+            curves = dose.get("curves", {})
+            dbase = dose.get("baseline_prop", 0.0)
+            dfig = go.Figure()
+            for method, bysel in curves.items():
+                for sel, pts in bysel.items():
+                    dfig.add_trace(
+                        go.Scatter(
+                            x=[p["k"] for p in pts],
+                            y=[p["prop"] for p in pts],
+                            mode="lines+markers",
+                            name=f"{method} · {sel}",
+                            line=dict(dash="solid" if sel == "AtP" else "dot"),
+                        )
+                    )
+            dfig.add_hline(
+                y=dbase, line_dash="dash", line_color="#888", annotation_text="baseline"
+            )
+            dfig.update_layout(
+                title=f"Cumulative top-k intervention — {cname} propensity",
+                xaxis_title="# experts intervened (cumulative)",
+                yaxis_title=f"{cname} propensity",
+                height=420,
+            )
+            parts.append(fig(dfig))
+            parts.append(
+                '<p class="note">Each curve sweeps the cumulative top-1..k experts. A localizable '
+                "causal set shows propensity falling <b>monotonically</b> for the causal selectors "
+                "(solid) while the matched-random control (dotted) stays flat near baseline.</p>"
+            )
 
     nav = (
         '<nav><a href="#overview">Overview</a> · <a href="#methods">Methods</a> · '

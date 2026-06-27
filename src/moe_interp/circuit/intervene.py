@@ -1,18 +1,19 @@
-"""Generation-time interventions to suppress toxicity — the causal capstone.
+"""Generation-time interventions to suppress a concept — the causal capstone.
 
-The patching grid + gate-AtP identify which experts *cause* toxic continuations. Here we
-act on that: during greedy generation we either **knock out** the top gate-AtP promoter
-experts (zero their router gate) or **project out** the diff-of-means toxic direction from
-the residual stream, and measure the drop in toxic propensity versus the un-intervened
-baseline. Two controls
-keep it honest: a **random** expert knockout (specificity — does it have to be *these*
-experts?) and a **neutral** prompt set (collateral — does the intervention break ordinary
+Gate-AtP identifies which experts *cause* the concept. Here we act on those experts (and no
+other locus — every intervention is expert-level, never on the residual stream): during greedy
+generation we either **knock out** the selected experts (zero their router gate) or **steer
+their output** (add ``α·v_e`` to each expert's MLP output, ``v_e`` the diff-of-means in
+expert-output space), and measure the change in the concept propensity versus the un-intervened
+baseline. Two controls keep it honest: a **random** expert set (specificity — does it have to be
+*these* experts?) and a **neutral** prompt set (collateral — does the intervention break ordinary
 generation?).
 
-Toxicity is scored two ways: the mean **toxic-logit propensity** over the generated
-continuation (the sensitive probe used throughout the study, re-evaluated with the
-intervention active) and a lexical **offensive-word rate** in the decoded text (the literal
-output). Lower = less toxic on both. Generated text is kept for qualitative inspection.
+A concept is scored three ways: the mean **concept-logit propensity** over the generated
+continuation (the sensitive probe), a lexical **concept-word rate** in the decoded text, and a
+**distinct-1** coherence guard. Lower propensity/word-rate = less of the concept — but only if
+distinct-1 stays healthy (≈0.6–0.9); a drop with collapsed distinct-1 is degraded text, not
+removal. Generated text is kept for qualitative inspection.
 """
 
 from __future__ import annotations
@@ -43,103 +44,44 @@ def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
     return fn
 
 
-def projectout_intervention(layer: int, v: torch.Tensor) -> Callable:
-    """Remove the ``v`` component from the residual stream at ``layer`` (ablate the direction).
-
-    Far gentler than additive steering: it only zeroes the projection onto the (unit) toxic
-    direction, leaving every orthogonal feature untouched, so neutral generation is preserved.
-    """
-
-    def fn(model):
-        h = model.model.layers[layer].output
-        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
-        h[:] = h - (h @ vhat).unsqueeze(-1) * vhat
-
-    return fn
-
-
-def localized_projectout_intervention(
-    layer: int, v: torch.Tensor, experts: list[int]
+def expert_steer_intervention(
+    v_by_le: dict[tuple[int, int], torch.Tensor], alpha: float
 ) -> Callable:
-    """Project ``v`` out of the residual at ``layer`` *only at positions routed to ``experts``*.
+    """Steer the *output activation* of named experts by ``alpha * v_e`` (DoM in expert space).
 
-    Per-expert localized variant of :func:`projectout_intervention`: instead of scrubbing the
-    toxic direction from every position, it scrubs it only where the named (toxic) experts
-    actually fired, using the router's ``top_k_index`` to build the position mask. If the
-    localized edit recovers the global project-out effect, toxicity is carried by a few experts;
-    if it does not, the direction is genuinely distributed. ``experts`` are the expert ids *at
-    this layer* (empty -> no-op).
+    This is Lorenzo's / the advisor's experiment done at expert granularity. The model adds
+    ``gate_{t,e} * f_e(h_t)`` to the residual, where ``f_e`` is expert ``e``'s raw MLP output and
+    ``gate`` its (normalised) router weight. Shifting that output ``f_e -> f_e + alpha * v_e``
+    therefore changes the residual by ``gate_{t,e} * alpha * v_e`` at exactly the tokens routed to
+    ``e`` — which is what we add here, reading the live router gate from ``experts.inputs``.
+
+    ``v_e`` is the per-expert diff-of-means in expert-output space (toxic - neutral; see
+    :func:`~moe_interp.circuit.steer.collect_expert_output_dom`), so ``alpha = -1`` subtracts one
+    unit of the toxic direction from the expert (detox), ``alpha = +1`` amplifies it. Unlike the
+    residual-stream steer this is per-expert and *gate-weighted*, so it never stacks an unscaled
+    shift across many layers — the failure mode that made the residual localized-steer degenerate.
+
+    ``v_by_le`` maps ``(layer, expert) -> v_e`` (model-dim); experts absent here are left alone.
     """
+    by_layer: dict[int, list[tuple[int, torch.Tensor]]] = {}
+    for (layer, e), v in v_by_le.items():
+        by_layer.setdefault(layer, []).append((e, v))
 
     def fn(model):
-        if not experts:
-            return
-        L = model.model.layers[layer]
-        _, idx, _ = L.mlp.experts.inputs[0]  # idx: (n_tokens, top_k) router assignments
-        h = L.output  # (B, T, D) residual stream at this layer
-        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
-        fired = torch.zeros(idx.shape[0], dtype=torch.bool, device=idx.device)
-        for e in experts:
-            fired |= (idx == e).any(dim=-1)
-        # align the (n_tokens,) routing mask to the (B, T) residual positions
-        mask = fired.to(h.dtype).reshape(h.shape[:-1]).unsqueeze(-1)
-        h[:] = h - mask * (h @ vhat).unsqueeze(-1) * vhat
-
-    return fn
-
-
-def compose_interventions(fns: list[Callable]) -> Callable:
-    """Chain several interventions into one callable (applied in forward-layer order)."""
-
-    def fn(model):
-        for f in fns:
-            f(model)
-
-    return fn
-
-
-def steer_intervention(layer: int, v: torch.Tensor, alpha: float = -1.0) -> Callable:
-    """Add ``alpha * unit(v)`` to every token position in the residual stream at ``layer``.
-
-    Additive steering (CAA-style): alpha < 0 steers away from the direction, alpha > 0
-    amplifies it. Unlike project-out this shifts the whole residual rather than only
-    removing its projection, so the effect is stronger but less surgical.
-    """
-
-    def fn(model):
-        h = model.model.layers[layer].output
-        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
-        h[:] = h + alpha * vhat
-
-    return fn
-
-
-def localized_steer_intervention(
-    layer: int, v: torch.Tensor, experts: list[int], alpha: float = -1.0
-) -> Callable:
-    """Add ``alpha * unit(v)`` to the residual at ``layer`` *only at positions routed to ``experts``*.
-
-    The additive (CAA / Head-Pursuit-style) analogue of
-    :func:`localized_projectout_intervention`, and the expert-group version of
-    :func:`steer_intervention`: it shifts the residual along the diff-of-means direction only
-    where the named experts fired, rather than scrubbing the existing projection. This is the
-    direct test of whether *steering the identified experts* (not the whole residual) reproduces
-    the Head-Pursuit effect — where zeroing a component is near-inert but ``alpha = -1`` steering
-    suppresses the target behaviour. ``experts`` are the expert ids at this layer (empty -> no-op).
-    """
-
-    def fn(model):
-        if not experts:
-            return
-        L = model.model.layers[layer]
-        _, idx, _ = L.mlp.experts.inputs[0]
-        h = L.output
-        vhat = torch.nn.functional.normalize(v.to(h.device, h.dtype), dim=0)
-        fired = torch.zeros(idx.shape[0], dtype=torch.bool, device=idx.device)
-        for e in experts:
-            fired |= (idx == e).any(dim=-1)
-        mask = fired.to(h.dtype).reshape(h.shape[:-1]).unsqueeze(-1)
-        h[:] = h + mask * alpha * vhat
+        for layer in sorted(by_layer):
+            L = model.model.layers[layer]
+            _, idx, w = L.mlp.experts.inputs[0]  # idx,w: (n_tokens, top_k)
+            h = L.output  # (B, T, D) residual after this layer's MoE
+            delta = torch.zeros(
+                idx.shape[0], h.shape[-1], device=h.device, dtype=torch.float32
+            )
+            for e, v in by_layer[layer]:
+                vt = v.to(h.device, torch.float32)
+                gate_e = (w.float() * (idx == e)).sum(
+                    dim=-1
+                )  # (n_tokens,) gate of e, 0 if unrouted
+                delta += gate_e.unsqueeze(-1) * (alpha * vt)
+            h[:] = h + delta.to(h.dtype).reshape(h.shape)
 
     return fn
 
@@ -230,19 +172,24 @@ def run_intervention_experiment(
             ("neutral", neutral_prompts),
         ):
             print(f"  [{name} / {setname}] generating {len(prompts)} ...", flush=True)
-            props, counts, examples = [], [], []
+            props, counts, distinct, examples = [], [], [], []
             for j, ids in enumerate(prompts):
                 cont = generate(model, ids, max_new_tokens, intervention)
                 props.append(
                     concept_propensity(model, ids, cont, concept_ids, intervention)
                 )
                 counts.append(len(pattern.findall(tok.decode(cont))))
+                # distinct-1 ratio: degeneracy guard. Near 0 = the intervention broke
+                # generation into a repeated token ("the the the"), so any propensity drop is
+                # an artifact, not detox. Healthy text is ~0.6-0.9 here.
+                distinct.append(len(set(cont)) / max(len(cont), 1))
                 if setname == "eliciting" and j < n_examples:
                     examples.append(tok.decode(cont).strip())
             block[f"{setname}_propensity"] = float(sum(props) / max(len(props), 1))
             block[f"{setname}_word_frac"] = float(
                 sum(c > 0 for c in counts) / max(len(counts), 1)
             )
+            block[f"{setname}_distinct1"] = float(sum(distinct) / max(len(distinct), 1))
             if examples:
                 block["examples"] = examples
         results[name] = block

@@ -68,65 +68,88 @@ steering.
 
 Expert Pursuit is _correlational_: it reports which vocabulary directions an expert's output
 aligns with, not whether that expert _causes_ a behavior. To test causation we build a small
-circuit pipeline around a concrete target behavior --- toxic text generation --- in two stages:
-we _localize_ the experts that are causally responsible, then _intervene_ during generation to
-suppress the behavior, using the correlational pursuit (SOMP) ranking from above as the
-association-only baseline to beat. The same machinery is concept-agnostic: only the target token
-set and prompts are toxicity-specific. All experiments run locally on Apple MPS.
+circuit pipeline that, for a chosen concept, _localizes_ the experts the concept routes through
+and then _intervenes_ during generation to remove it. The pipeline is concept-agnostic --- only
+the target token set and prompts change --- and we run it on three concepts of decreasing
+lexical sharpness: `countries`, `numbers`, and `offensive` (toxicity). Throughout, the
+correlational pursuit (SOMP) ranking from above is the association-only baseline to beat. All
+experiments run locally on Apple MPS.
+
+The pipeline is a *selectors $times$ interventions* design: a selector proposes the concept's
+experts, an intervention acts on them, and we ask both whether the _selector_ matters and whether
+the effect is _necessity_ or merely _influence_.
 
 The fused-experts kernel in OLMoE does not expose per-expert hidden neurons during a forward
 pass, so the only differentiable, interventionable per-expert node is the *router gate*: tapping
 `layer.mlp.experts.inputs[0]` yields the boundary tuple $(bold(h), "idx", bold(g))$ of hidden
-states, selected expert indices, and gate weights. Every causal operation below acts on $bold(g)$.
+states, selected expert indices, and gate weights. The gate-level operations below all act on
+$bold(g)$; the direction-level controls act on the residual $bold(h)$.
 
-=== Toxicity Probe and Prompts
+=== Concept Probe and Prompts
 
-We score toxicity with a *toxic-logit* probe: for a logit vector $bold(z)$ at the prediction
-position, $ s_("tox")(bold(z)) = 1/(|cal(T)|) sum_(t in cal(T)) z_t - 1/v sum_(t=1)^v z_t $ <eq:toxprobe>
-where $cal(T)$ is a set of single-token offensive words (from the `offensive` concept list) and
-$v$ is the vocabulary size --- the mean toxic-token logit relative to the row mean. For prompts
-we draw a split from RealToxicityPrompts @gehman2020realtoxicityprompts, partitioning by each
-prompt's own toxicity score into a high-toxicity _eliciting_ set and a matched low-toxicity
-_neutral_ set. A diff-of-means between the two sets isolates the toxic direction used for
-project-out.
+We score a concept with a *concept-logit* probe: for a logit vector $bold(z)$ at the prediction
+position, $ s_(cal(C))(bold(z)) = 1/(|cal(C)|) sum_(t in cal(C)) z_t - 1/v sum_(t=1)^v z_t $ <eq:toxprobe>
+where $cal(C)$ is the set of single-token concept words (e.g. the `offensive` list for toxicity)
+and $v$ is the vocabulary size --- the mean concept-token logit relative to the row mean. We
+complement this sensitive probe with a literal *word-fraction*: the share of generated
+continuations that contain a concept word. For prompts we draw a split from RealToxicityPrompts
+@gehman2020realtoxicityprompts, partitioning by each prompt's own toxicity score into a
+high-toxicity _eliciting_ set and a matched low-toxicity _neutral_ set; the neutral set doubles
+as a *collateral check* and, for the lexical concepts, as the _other_ concept in a specificity
+test. For each selected expert $e$, a diff-of-means between its eliciting and neutral *output*
+activations isolates the per-expert concept direction $bold(v)_e$ used by the steering intervention
+(@sec:interventions).
 
-Crucially, every identifier (patching grid, gate-AtP, SOMP ranking, diff-of-means direction) is
-fit on a _train_ split of the eliciting/neutral prompts and every intervention is then scored on a
-_disjoint held-out test_ split ($n_"train" = 100$, $n_"test" = 50$). This avoids the
-identify-and-score-on-the-same-prompts circularity that would otherwise inflate any
-causally-selected method against the correlational baseline.
+Crucially, every selector (gate-AtP, SOMP ranking) and the diff-of-means direction is fit on a
+_train_ split of the prompts and every intervention is then scored on a _disjoint held-out test_
+split. This avoids the identify-and-score-on-the-same-prompts circularity that would otherwise
+inflate any causally-selected method against the correlational baseline.
 
-=== Activation Patching (causal ground truth)
+=== Selectors: Which Experts <sec:selectors>
 
-For every routed $(l,e)$ we run one forward pass with the expert's gate zeroed wherever it was
-selected, and record the change in the probe at the last token, averaged over prompts:
-$ "PE"(l,e) = bb(E)_("prompt") [ s_("tox")(bold(z)_("base")) - s_("tox")(bold(z)_(- (l,e))) ] $ <eq:patch>
-A positive effect means the expert _promotes_ toxicity (ablating it lowers the score); a negative
-effect marks a _suppressor_. This yields a $16 times 64$ causal grid, at a cost of one forward
-pass per routed expert.
+We compare three ways to pick a concept's top-$k$ experts:
 
-=== Gate Attribution Patching (gate-AtP)
+- *SOMP* (correlational) --- experts whose pursuit atoms most overlap the concept lexicon; the
+  no-forward-pass, association-only baseline.
+- *Gate-AtP* (causal) --- one backward pass. Attribution patching @kramar2024atp estimates every
+  expert's gate-ablation effect from a first-order expansion,
+  $ "AtP"(l,e) approx - sum_("pos") g_e dot (dif cal(L)) / (dif g_e), quad cal(L) = sum_("prompt") s_(cal(C)), $ <eq:atp>
+  where $g_e$ is the gate weight wherever expert $e$ fired. Sign: positive = the expert raises the
+  concept score, so ablating it would lower it. This is our causal selector, driving every
+  intervention below.
+- *Random* (control) --- $k$ random experts in the same layers as the AtP set, isolating whether
+  it has to be _these_ experts.
 
-Activation patching is exact but expensive. Attribution patching @kramar2024atp estimates the
-entire grid from a single backward pass via a first-order expansion around the gate-to-zero
-intervention:
-$ "AtP"(l,e) approx - sum_("pos") g_e dot (dif cal(L)) / (dif g_e) $ <eq:atp>
-where $cal(L) = sum_("prompt") s_("tox")$ and $g_e$ is the gate weight wherever expert $e$ fired.
-We quantify how well this cheap estimate reproduces the patching ground truth by the Pearson
-correlation of the two per-expert grids.
+Gate-AtP is a first-order approximation of *exhaustive activation patching* --- zeroing each
+expert's gate in a separate forward pass and recording the probe change,
+$ "PE"(l,e) = bb(E)_("prompt") [ s_(cal(C))(bold(z)_("base")) - s_(cal(C))(bold(z)_(- (l,e))) ], $ <eq:patch>
+which is the exact causal effect but costs one forward pass per routed expert ($approx 64 times$
+more). We ran the patching grid *once* to validate gate-AtP and the two agreed closely (Pearson
+$r approx 0.69$ pooled, $approx 0.93$ in the late layers; @sec:results), so the expensive sweep is
+not part of the pipeline --- AtP gives effectively the same ranking at a fraction of the cost. The
+AtP grid spans all 16 layers $times$ 64 experts; a positive entry promotes the concept, a negative
+entry _suppresses_ it.
 
-=== Interventions
+=== Interventions: What We Do <sec:interventions>
 
-To suppress toxicity at generation time we compare two families of intervention, applied at
-every decoded step:
-- *Knockout* --- zero the gates of the top-$k$ identified experts (we vary which identifier
-  supplies the set: AtP, patching, SOMP, or a random control).
-- *Project-out* --- remove the toxic direction's component from the residual stream at a layer,
-  $bold(h) <- bold(h) - (bold(h) dot hat(bold(v))) hat(bold(v))$, leaving every
-  orthogonal feature untouched. This is a non-destructive variant of activation steering
-  @turner2023activation. The direction $bold(v)$ is the activation-derived diff-of-means of the
-  eliciting and neutral residuals.
-Each method is scored by greedy generation under the intervention: the mean probe value over the
-continuation (lower is less toxic) plus an offensive-word rate, with the neutral prompts as a
-collateral check. Because the direction and probe can be built from any concept's token set, the
-intervention generalizes to arbitrary concepts.
+Every intervention is *expert-level* --- it acts on the selected experts' router gate or output
+activation, never on the residual stream --- so a positive effect is attributable to those experts
+and nothing else. Each selected set is hit with one of two interventions, applied at every decoded
+step of greedy generation and read out on the held-out prompts:
+
+- *Knockout* (necessity) --- zero the gates of the top-$k$ experts. Asks: is any sparse expert set
+  _necessary_ for the concept?
+- *Expert-output steering* (influence) --- add $alpha bold(v)_e$ to each selected expert's *output*
+  activation, where $bold(v)_e$ is the toxic$-$neutral diff-of-means in that expert's output space
+  and $alpha < 0$ subtracts the concept direction. The shift enters the residual as
+  $g_(t,e) dot alpha bold(v)_e$ only at the tokens routed to expert $e$ (gate-weighted, per-expert),
+  so it never stacks an unscaled edit across layers. Asks: do the selected experts carry enough of
+  the concept that nudging _just them_ removes it?
+
+Scoring is held-out and multi-signal: the mean probe value over the continuation (lower = less
+concept), the literal word-fraction, the *neutral* prompts as a collateral/specificity check, and
+a *distinct-1* coherence guard (the ratio of unique unigrams; a healthy continuation sits around
+$0.6$--$0.9$). The coherence guard is what separates genuine concept removal from a method that
+merely *degrades the text into garbage* --- a probe drop with a collapsed distinct-1 is not a
+clean intervention. Because the direction and probe are built from any concept's token set, the
+whole pipeline generalizes across concepts.

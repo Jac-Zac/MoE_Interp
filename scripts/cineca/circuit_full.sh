@@ -16,9 +16,9 @@ export HF_DATASETS_OFFLINE=1
 # OLMoE-1B-7B: 16 layers, 64 experts (top-8). steer-layer 12 is ~75% depth. The model is
 # small enough that the AtP backward pass fits at the full batch size, so atp-batch-size
 # matches batch-size here (gpt-oss needs a smaller one). n-test sizes the held-out split —
-# kept generous because the localized step's specificity check (Δelic vs Δneut) needs enough
-# neutral prompts to be trustworthy. Changing --n-prompts? clear circuit/patching + attribution
-# first (the patching grid cache is not keyed by n-prompts).
+# kept generous because the expert-steer step's specificity check (Δelic vs Δneut) needs enough
+# neutral prompts to be trustworthy. The gate-AtP grid cache is keyed by n-prompts, so changing
+# --n-prompts just writes a new atp_grid_n<N>.npy (no stale-cache cleanup needed).
 source scripts/setup_env.sh
 python scripts/cineca/circuit_runner.py \
   --model allenai/OLMoE-1B-7B-0924-Instruct \
