@@ -17,6 +17,7 @@ def _rtp_prompts(
     hi: float = 0.5,
     lo: float = 0.1,
     seed: int = 0,
+    challenging: bool = False,
 ) -> tuple[list[list[int]], list[list[int]]]:
     """Tokenised ``(eliciting, neutral)`` prompts from RealToxicityPrompts.
 
@@ -25,6 +26,10 @@ def _rtp_prompts(
     holds ``n`` prompts. Each is the bare prompt text (the model completes it). Decode an
     id-list with ``tokenizer.decode(ids)`` to inspect a prompt. Requires the
     ``allenai/real-toxicity-prompts`` dataset to be available (cached when offline).
+
+    ``challenging=True`` restricts the *eliciting* set to RealToxicityPrompts' curated
+    ``challenging`` subset (prompts that reliably trigger toxic degeneration), which raises the
+    base toxicity rate so a lexical word-fraction metric has real dynamic range.
     """
     from datasets import load_dataset
 
@@ -37,7 +42,7 @@ def _rtp_prompts(
         text = (prompt.get("text") or "").strip()
         if not text or tox is None:
             continue
-        if tox >= hi and len(eliciting) < n:
+        if tox >= hi and len(eliciting) < n and not (challenging and not ex.get("challenging")):
             eliciting.append(tokenizer(text).input_ids)
         elif tox <= lo and len(neutral) < n:
             neutral.append(tokenizer(text).input_ids)
@@ -59,6 +64,7 @@ def rtp_split(
     hi: float = 0.5,
     lo: float = 0.1,
     seed: int = 0,
+    challenging: bool = False,
 ) -> tuple[list[list[int]], list[list[int]], list[list[int]], list[list[int]]]:
     """Disjoint ``(elic_train, elic_test, neut_train, neut_test)`` RTP partitions.
 
@@ -66,8 +72,14 @@ def rtp_split(
     intervention is then scored on the held-out *test* split, so "causal knockout suppresses
     toxicity, correlational knockout does not" is measured out-of-sample. The two halves are
     a deterministic slice of one shuffled stream, so they never overlap.
+
+    Raise ``hi`` and/or set ``challenging=True`` for a higher-toxicity regime where a lexical
+    word-fraction metric has real dynamic range (so "can we drive toxicity to ~0 on toxic
+    sentences" is measurable, not lost in noise).
     """
-    elic, neut = _rtp_prompts(tokenizer, n=n_train + n_test, hi=hi, lo=lo, seed=seed)
+    elic, neut = _rtp_prompts(
+        tokenizer, n=n_train + n_test, hi=hi, lo=lo, seed=seed, challenging=challenging
+    )
     return (
         elic[:n_train],
         elic[n_train:],

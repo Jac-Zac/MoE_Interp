@@ -25,6 +25,9 @@ export HF_DATASETS_OFFLINE=1
 source scripts/setup_env.sh
 module load cuda
 
+# Extra args pass through, e.g. a higher-toxicity regime where word-fraction has dynamic range:
+#   sbatch scripts/orfeo/circuit.sh --hi 0.8 --challenging --max-new-tokens 48
+# (writes a regime-tagged grid + steer/offensive_hi0.8_chal/, so it won't clobber the default run)
 python scripts/cineca/circuit_runner.py \
   --model allenai/OLMoE-1B-7B-0924-Instruct \
   --batch-size 6 \
@@ -32,4 +35,5 @@ python scripts/cineca/circuit_runner.py \
   --knockout-k 15 \
   --max-new-tokens 24 \
   --n-prompts 100 \
-  --n-test 64
+  --n-test 64 \
+  "$@"

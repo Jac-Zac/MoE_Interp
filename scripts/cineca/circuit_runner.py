@@ -61,6 +61,18 @@ def main():
         default=24,
         help="Held-out test set size (scored by steer experiment).",
     )
+    parser.add_argument(
+        "--hi",
+        type=float,
+        default=0.5,
+        help="Min RealToxicityPrompts toxicity for the eliciting set. Raise (e.g. 0.8) for a "
+        "higher-toxicity regime where the lexical word-fraction metric has dynamic range.",
+    )
+    parser.add_argument(
+        "--challenging",
+        action="store_true",
+        help="Restrict the eliciting set to RTP's curated 'challenging' subset (more toxic).",
+    )
     args = parser.parse_args()
     atp_batch = (
         args.atp_batch_size if args.atp_batch_size is not None else args.batch_size
@@ -79,7 +91,15 @@ def main():
     # Disjoint train/test split — all methods share elic_tr for identification,
     # all are scored on the disjoint elic_te so comparisons are out-of-sample.
     elic_tr, elic_te, neut_tr, neut_te = rtp_split(
-        model.tokenizer, n_train=args.n_prompts, n_test=args.n_test
+        model.tokenizer,
+        n_train=args.n_prompts,
+        n_test=args.n_test,
+        hi=args.hi,
+        challenging=args.challenging,
+    )
+    # Regime tag keeps a high-toxicity grid/run from clobbering the default (hi=0.5) one.
+    regime = "" if (args.hi == 0.5 and not args.challenging) else (
+        f"_hi{args.hi:g}" + ("_chal" if args.challenging else "")
     )
     toxic_ids = build_toxic_token_ids(model.tokenizer)
     print(
@@ -90,7 +110,7 @@ def main():
     # 1. gate-AtP localization grid (one backward pass) — the causal localizer.
     # Keyed by train-set size so step 2's offensive knockout reuses this exact grid
     # (same prompts, same toxic ids) instead of paying for a second backward pass.
-    atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}.npy"
+    atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}{regime}.npy"
     if not atp_path.exists():
         print("[1/3] gate-AtP localization grid ...", flush=True)
         atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=atp_batch)
@@ -104,7 +124,7 @@ def main():
     # steering (influence), done per expert. Every intervention is expert-level — no residual-stream
     # edits. The key checks are (a) does the causal (AtP) set beat SOMP and random, and (b) does the
     # output stay coherent (distinct1)?
-    steer_out = cdir / "steer" / "offensive"
+    steer_out = cdir / "steer" / f"offensive{regime}"
     exp_path = steer_out / "expert_intervention.json"
     if not exp_path.exists():
         print("[2/3] Expert-level interventions (SOMP / AtP vs random) ...", flush=True)
@@ -118,6 +138,7 @@ def main():
             max_new_tokens=args.max_new_tokens,
             train=(elic_tr, neut_tr),
             test=(elic_te, neut_te),
+            atp_grid_path=atp_path,
         )
         steer_out.mkdir(parents=True, exist_ok=True)
         exp_path.write_text(json.dumps(exp, indent=2))
@@ -139,6 +160,7 @@ def main():
             max_new_tokens=args.max_new_tokens,
             train=(elic_tr, neut_tr),
             test=(elic_te, neut_te),
+            atp_grid_path=atp_path,
         )
         dose_path.write_text(json.dumps(dose, indent=2))
     else:
