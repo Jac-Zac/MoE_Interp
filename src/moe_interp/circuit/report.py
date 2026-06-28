@@ -83,8 +83,8 @@ def build_report(model_name: str) -> Path:
                 [
                     "localize",
                     "gate-AtP",
-                    "one backward pass scores every expert's gate effect (gate·dL/dgate); "
-                    "validated once against exhaustive activation patching (r≈0.69)",
+                    "one backward pass scores every expert's gate effect (gate·dL/dgate), "
+                    "validated against exhaustive activation patching (see Methods)",
                     "yes",
                 ],
                 [
@@ -105,9 +105,8 @@ def build_report(model_name: str) -> Path:
     parts.append(
         '<p class="note"><b>Headline findings.</b> (1) Causally important experts span all '
         "depths, including <i>suppressor</i> experts that <i>raise</i> toxicity when removed. "
-        "(2) The cheap gate-AtP localizer was validated once against exhaustive activation "
-        "patching (one forward per expert) and the two agreed closely (Pearson r≈0.69 pooled, up "
-        "to ≈0.96 in the late layers), so patching was dropped and AtP is used throughout. "
+        "(2) The cheap gate-AtP localizer tracks exhaustive activation patching closely (so "
+        "patching is unnecessary as a selector — see Methods for the validation). "
         "(3) The correlational SOMP classifier flags toxicity-<i>associated</i> "
         "experts, but knocking them out does nothing — and the causal (AtP) experts are no more "
         "<i>necessary</i> (top-k routing is redundant). (4) The separating signal is "
@@ -128,7 +127,10 @@ def build_report(model_name: str) -> Path:
         "(partitioned by the dataset's own per-prompt toxicity score). The fused-experts kernel "
         "exposes only the router gate (<code>layer.mlp.experts.inputs[0]</code> → "
         "<code>hidden, top_k_index, top_k_weights</code>) as a per-expert node, so all "
-        "expert-level interventions and gradients act on the gate.</p>"
+        "expert-level interventions and gradients act on the gate. Every selector and steering "
+        "direction is <b>identified on a train split</b> of these prompts and every intervention "
+        "is <b>scored on a disjoint held-out test split</b>, so the causal comparison is "
+        "out-of-sample (no identify-and-score-on-the-same-prompts circularity).</p>"
     )
     parts.append(
         "<h3>Classification — which experts <i>associate</i> with toxicity (no model / no causal test)</h3>"
@@ -138,15 +140,27 @@ def build_report(model_name: str) -> Path:
         "are offensive words are flagged. Adapts HeadPursuit (attention heads) to MoE experts.</li></ul>"
     )
     parts.append(
-        "<h3>Localization — which experts are <i>causally</i> responsible</h3><ul>"
-        "<li><b>gate-AtP (attribution patching).</b> Scores every routed (layer, expert) from a "
-        "single backward pass: <code>attribution(e) ≈ gate_e · dL/dgate_e</code> summed over "
-        "positions. Positive = the expert promotes toxicity, negative = suppresses it.</li>"
-        "<li><b>Validation (one-off).</b> gate-AtP is a first-order approximation of exhaustive "
-        "activation patching (zero each gate in a separate forward pass; one forward per expert). "
-        "We checked the two on the toxicity grid once — they agreed closely (pooled r≈0.69, ≈0.93 "
-        "in the late layers) — so the expensive patching sweep was dropped and AtP is used "
-        "throughout.</li></ul>"
+        "<h3>Localization — which experts are <i>causally</i> responsible (gate-AtP)</h3>"
+        "<p><b>What it computes.</b> gate-AtP scores every routed <code>(layer, expert)</code> by "
+        "how much zeroing its router gate would change the toxic-logit objective, estimated from a "
+        "<b>single backward pass</b> — a first-order Taylor expansion of the gate ablation:</p>"
+        "<p style='text-align:center'><code>attribution(l,e) ≈ − Σ<sub>pos</sub> "
+        "gate<sub>e</sub> · ∂L/∂gate<sub>e</sub></code> , &nbsp; "
+        "<code>L = Σ<sub>prompt</sub> toxic-logit score</code></p>"
+        "<p><b>On what, with what data.</b> The objective <code>L</code> is the toxic-logit probe "
+        "summed over the <b>eliciting (high-toxicity) train prompts</b>, read at each prompt's last "
+        "token; <code>gate<sub>e</sub></code> is the router weight wherever expert <code>e</code> "
+        "fired. The result is one signed <b>16×64</b> grid: positive = the expert promotes toxicity "
+        "(ablation would lower the score), negative = it <i>suppresses</i> toxicity. Experts are "
+        "ranked off this grid (signed for promoters; |·| for the heatmap) to give the causal "
+        "selector that drives every intervention — itself scored only on the held-out test prompts.</p>"
+        "<p><b>Why not exhaustive patching?</b> The exact causal effect is activation patching — "
+        "zero each gate in its own forward pass and record the probe change — but that costs one "
+        "forward <i>per routed expert</i> (≈64× more). We ran it <b>once</b> as a yardstick: the "
+        "patching grid and gate-AtP agreed closely (pooled r≈0.69, up to ≈0.96 in the late layers, "
+        "where the controllable signal lives), so <b>had we used patching the ranking would be "
+        "effectively the same</b>. The expensive sweep is therefore dropped and the cheap one-pass "
+        "AtP grid is used throughout (frozen check in <code>compare/faithfulness.json</code>).</p>"
     )
     parts.append(
         "<h3>Intervention — suppress the behaviour during generation (expert-level only)</h3><ul>"
@@ -206,14 +220,11 @@ def build_report(model_name: str) -> Path:
     # column) and its dose-response curve. The cross-concept comparison is the point: does
     # expert-level intervention work on a *localizable* concept where toxicity — semantic and
     # redundant — resists it?
-    concept_dirs = []
-    if (steer_dir / "offensive" / "expert_intervention.json").exists():
-        concept_dirs.append(steer_dir / "offensive")
-    concept_dirs += [
-        p.parent
-        for p in sorted(steer_dir.glob("*/expert_intervention.json"))
-        if p.parent.name != "offensive"
-    ]
+    # "offensive" first (False sorts before True), then the remaining concepts alphabetically.
+    concept_dirs = sorted(
+        (p.parent for p in steer_dir.glob("*/expert_intervention.json")),
+        key=lambda d: (d.name != "offensive", d.name),
+    )
     for cdir_c in concept_dirs:
         cname = cdir_c.name
         exp = load_json(cdir_c / "expert_intervention.json")

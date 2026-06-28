@@ -174,6 +174,44 @@ def expert_intervention_sets(
     return sets
 
 
+def _sets_and_dom(
+    model,
+    model_name: str,
+    *,
+    concept: str,
+    dataset: str,
+    k: int,
+    train: tuple[list[list[int]], list[list[int]]],
+    atp_grid_path=None,
+) -> tuple[dict[str, list[tuple[int, int]]], dict[tuple[int, int], torch.Tensor]]:
+    """Shared preamble of the two intervention runners: selector sets + per-expert DoM.
+
+    Picks each selector's experts (SOMP / AtP / random), then collects every named expert's
+    toxic−neutral diff-of-means in expert-output space on the *train* prompts. Returns
+    ``(sets, dom)``.
+    """
+    eliciting, neutral = train
+    adapter = get_model_adapter(model)
+    sets = expert_intervention_sets(
+        model,
+        model_name,
+        eliciting,
+        concept=concept,
+        dataset=dataset,
+        k=k,
+        atp_grid_path=atp_grid_path,
+    )
+    by_layer_all: dict[int, list[int]] = {}
+    for experts in sets.values():
+        for layer, e in experts:
+            by_layer_all.setdefault(layer, []).append(e)
+    with right_padded(model):
+        dom = collect_expert_output_dom(
+            model, adapter, eliciting, neutral, by_layer_all
+        )
+    return sets, dom
+
+
 def run_expert_steer(
     model,
     model_name: str,
@@ -206,30 +244,19 @@ def run_expert_steer(
     *test* split, including the **neutral collateral** and a **distinct-1 degeneracy** guard (a
     propensity drop only counts if the text stays coherent, i.e. distinct-1 not collapsed).
     """
-    eliciting, neutral = train
     eliciting_eval, neutral_eval = test
     concept_words = CONCEPT_WORDS[concept]
     concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
-    adapter = get_model_adapter(model)
 
-    sets = expert_intervention_sets(
+    sets, dom = _sets_and_dom(
         model,
         model_name,
-        eliciting,
         concept=concept,
         dataset=dataset,
         k=k,
+        train=train,
         atp_grid_path=atp_grid_path,
     )
-
-    by_layer_all: dict[int, list[int]] = {}
-    for experts in sets.values():
-        for layer, e in experts:
-            by_layer_all.setdefault(layer, []).append(e)
-    with right_padded(model):
-        dom = collect_expert_output_dom(
-            model, adapter, eliciting, neutral, by_layer_all
-        )
 
     methods: dict = {"baseline": None}
     for name, experts in sets.items():
@@ -254,7 +281,7 @@ def run_expert_steer(
             "dataset": dataset,
             "k": k,
             "alphas": list(alphas),
-            "n_train": len(eliciting),
+            "n_train": len(train[0]),
             "n_test": len(eliciting_eval),
             "max_new_tokens": max_new_tokens,
             "sets": sets,
@@ -284,29 +311,18 @@ def run_dose_response(
     care about). Shows where — if anywhere — a causal signal emerges and whether the causal set
     separates from random as the budget grows. Cheap: reuses the same ``v_e`` for every budget.
     """
-    eliciting, neutral = train
     eliciting_eval = test[0]
-    concept_words = CONCEPT_WORDS[concept]
-    concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
-    adapter = get_model_adapter(model)
+    concept_ids = build_toxic_token_ids(model.tokenizer, CONCEPT_WORDS[concept])
 
-    sets = expert_intervention_sets(
+    sets, dom = _sets_and_dom(
         model,
         model_name,
-        eliciting,
         concept=concept,
         dataset=dataset,
         k=k,
+        train=train,
         atp_grid_path=atp_grid_path,
     )
-    by_layer_all: dict[int, list[int]] = {}
-    for experts in sets.values():
-        for layer, e in experts:
-            by_layer_all.setdefault(layer, []).append(e)
-    with right_padded(model):
-        dom = collect_expert_output_dom(
-            model, adapter, eliciting, neutral, by_layer_all
-        )
 
     def elic_prop(intervention) -> float:
         props = [

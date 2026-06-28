@@ -1,12 +1,4 @@
-"""Plotting helpers for the intervention experiment.
-
-The causal selector is **gate-AtP** (one backward pass; see :mod:`moe_interp.circuit.attribution`).
-We validated it once against exhaustive activation patching (one forward per expert) and the two
-per-expert grids agreed closely (pooled Pearson r≈0.69, ≈0.93 in the late layers where the
-controllable signal lives); that frozen result lives in ``data/<model>/circuit/compare/`` and is
-cited in the report, so the expensive patching sweep is no longer part of the pipeline. This module
-now only renders the intervention propensity comparison.
-"""
+"""Plotting helper for the intervention experiment: the concept-propensity bar chart."""
 
 from __future__ import annotations
 

@@ -40,6 +40,23 @@ def load_metadata(path: Path) -> dict:
     return json.loads(_metadata_path(path).read_text())
 
 
+def _append_dataset(group: h5py.Group, name: str, data: torch.Tensor) -> None:
+    """Create a resizable dataset on first write, else extend it along axis 0."""
+    if name not in group:
+        group.create_dataset(
+            name,
+            data=data,
+            maxshape=(None, *data.shape[1:]),
+            chunks=(max(data.shape[0], 1), *data.shape[1:]),
+            dtype=data.numpy().dtype,
+        )
+        return
+    ds = cast(h5py.Dataset, group[name])
+    n = data.shape[0]
+    ds.resize(ds.shape[0] + n, axis=0)
+    ds[-n:] = data
+
+
 def append_to_file(
     f: h5py.File,
     expert_id: int,
@@ -47,56 +64,30 @@ def append_to_file(
     tokens: torch.Tensor,
     routing_weights: torch.Tensor | None = None,
 ) -> None:
-    group_name = _expert_group_name(expert_id)
     acts = activations.detach().cpu()
     toks = tokens.detach().cpu()
     weights = routing_weights.detach().cpu() if routing_weights is not None else None
     if acts.numel() == 0:
         return
-    group = f.require_group(group_name)
-    if "activations" not in group:
+    group = f.require_group(_expert_group_name(expert_id))
+    # Legacy groups predate routing_weights: backfill the existing rows with NaN so the
+    # column stays aligned with activations before appending this batch's weights.
+    if (
+        weights is not None
+        and "activations" in group
+        and "routing_weights" not in group
+    ):
+        old = cast(h5py.Dataset, group["activations"]).shape[0]
         group.create_dataset(
-            "activations",
-            data=acts,
-            maxshape=(None, acts.shape[1]),
-            chunks=(max(acts.shape[0], 1), acts.shape[1]),
-            dtype=acts.numpy().dtype,
-        )
-        group.create_dataset(
-            "tokens",
-            data=toks,
+            "routing_weights",
+            data=torch.full((old,), float("nan")).numpy(),
             maxshape=(None,),
-            chunks=(max(toks.shape[0], 1),),
-            dtype=toks.numpy().dtype,
+            chunks=(max(old, 1),),
         )
-        if weights is not None:
-            group.create_dataset(
-                "routing_weights",
-                data=weights,
-                maxshape=(None,),
-                chunks=(max(weights.shape[0], 1),),
-                dtype=weights.numpy().dtype,
-            )
-        return
-    act_ds = cast(h5py.Dataset, group["activations"])
-    tok_ds = cast(h5py.Dataset, group["tokens"])
-    old_size = act_ds.shape[0]
-    new_size = act_ds.shape[0] + acts.shape[0]
-    act_ds.resize((new_size, act_ds.shape[1]))
-    act_ds[-acts.shape[0] :] = acts
-    tok_ds.resize((new_size,))
-    tok_ds[-toks.shape[0] :] = toks
+    _append_dataset(group, "activations", acts)
+    _append_dataset(group, "tokens", toks)
     if weights is not None:
-        if "routing_weights" not in group:
-            group.create_dataset(
-                "routing_weights",
-                data=torch.full((old_size,), float("nan")).numpy(),
-                maxshape=(None,),
-                chunks=(max(old_size, 1),),
-            )
-        weight_ds = cast(h5py.Dataset, group["routing_weights"])
-        weight_ds.resize((new_size,))
-        weight_ds[-weights.shape[0] :] = weights
+        _append_dataset(group, "routing_weights", weights)
 
 
 def save_unembedding(path: Path, tensor: torch.Tensor) -> None:

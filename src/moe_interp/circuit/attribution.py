@@ -1,19 +1,24 @@
-"""Method B — gradient attribution patching over router gates (AtP / RelP-style).
+"""gate-AtP — gradient attribution patching over the router gates (AtP-style).
 
-Whole-expert ablation needs one forward *per expert*; attribution patching estimates
-every expert's effect from a single backward pass via a first-order Taylor expansion.
-For the ablation baseline (gate -> 0), the predicted change in the metric from removing
-expert ``e`` is
+The causal localizer for the toxic-expert circuit, and the canonical reference for its
+validation (other modules point here). Whole-expert ablation needs one forward *per expert*;
+attribution patching estimates every expert's effect from a single backward pass via a
+first-order Taylor expansion. For the ablation baseline (gate -> 0), the predicted change in
+the metric from removing expert ``e`` is
 
     attribution_e  ≈  - g_e · dL/dg_e            (summed over token positions)
 
-where ``g_e`` is the router gate weight wherever expert ``e`` was selected and ``L`` is
-the toxic-logit metric. This is the linear-attribution core of AtP/RelP: the gate
-weights are real differentiable tensors at the fused-experts boundary (the per-expert
-hidden neurons are not materialised by the fused kernel, so the gate is the finest node
-we can take gradients of here). A large positive attribution means "this expert pushes
-the metric up; ablating it would push it down" — summed over the top-ranked experts it
-gives the *distributed* circuit.
+where ``g_e`` is the router gate weight wherever expert ``e`` was selected and ``L`` is the
+toxic-logit metric. The gate weights are real differentiable tensors at the fused-experts
+boundary (the per-expert hidden neurons are not materialised by the fused kernel, so the gate
+is the finest node we can take gradients of here). A large positive attribution means "this
+expert pushes the metric up; ablating it would push it down" — summed over the top-ranked
+experts it gives the *distributed* circuit.
+
+gate-AtP is a first-order approximation of exhaustive activation patching (zero each gate in a
+separate forward pass). The two were checked once on the toxicity grid and agreed closely
+(pooled Pearson r≈0.69, up to ≈0.96 in the late layers), so only the cheap AtP grid is run; the
+frozen check lives in ``data/<model>/circuit/compare/faithfulness.json``.
 """
 
 from __future__ import annotations

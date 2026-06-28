@@ -7,11 +7,8 @@ expert promotes toxicity, negative = it suppresses it. The result is an (n_layer
 grid, cached for the intervention notebooks (steer.py / circuit_runner.py) and plotted as a
 heatmap.
 
-gate-AtP is a first-order approximation of exhaustive activation patching (one *forward* per
-expert). We validated the two once on the toxicity grid — they agreed closely (pooled Pearson
-r≈0.69, ≈0.93 in the late layers where the controllable signal lives), so the expensive patching
-sweep was dropped from the pipeline and the cheap AtP grid is used throughout. That frozen
-validation lives in ``data/<model>/circuit/compare/faithfulness.json``.
+gate-AtP is a first-order approximation of exhaustive activation patching; the two were checked
+once and agreed closely (see ``moe_interp.circuit.attribution`` for the method + validation).
 
 Loads OLMoE via nnsight (Apple MPS ok).
 

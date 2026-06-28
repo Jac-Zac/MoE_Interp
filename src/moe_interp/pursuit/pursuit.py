@@ -194,9 +194,8 @@ def run_pursuit(
         output_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine device and move dictionary to it once — avoids 1024 redundant
-    # host-to-device transfers of the 393 MB unembedding matrix.
-    # PERF: no longer forcing MPS to CPU here — somp() handles MPS internally
-    # by only falling back to CPU for the lstsq solve (which needs float64).
+    # host-to-device transfers of the 393 MB unembedding matrix. Device handling lives
+    # in somp(): on MPS it falls back to CPU only for the float64 lstsq solve.
     device = get_device()
 
     metadata_path = extractions_dir / "metadata.json"

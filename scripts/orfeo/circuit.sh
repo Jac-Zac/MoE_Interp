@@ -13,14 +13,12 @@
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# Full causal-circuit pipeline at held-out scale: gate-AtP localization (step 1), the
-# knockout/project-out intervention (step 2), the per-expert causal interventions on the SOMP and
-# AtP experts vs a matched-random control (step 3: knockout + α expert-output DoM steering, plus
-# DoM collection), and the dose-response curve (step 4). The larger --n-test is what makes the
-# *specificity* check (Δelic vs Δneut, causal vs random) trustworthy — at small n the neutral
-# collateral is too noisy. The GPU association caps walltime at 2h; step 3 is generation-heavy so
-# this is the full budget. (gate-AtP replaces exhaustive activation patching, validated once at
-# r≈0.69; patching is no longer run.)
+# Full causal-circuit pipeline at held-out scale: gate-AtP localization, the per-expert
+# interventions on the SOMP and AtP experts vs a matched-random control (knockout + α
+# expert-output DoM steering), and the dose-response curve. The larger --n-test is what makes
+# the *specificity* check (Δelic vs Δneut, causal vs random) trustworthy — at small n the
+# neutral collateral is too noisy. The GPU association caps walltime at 2h; the intervention
+# step is generation-heavy, so this is the full budget.
 #
 # NOTE: the gate-AtP grid (atp_grid_n<N>.npy) is keyed by --n-prompts, so changing --n-prompts
 # just writes a new file — no stale-cache cleanup needed.
@@ -32,7 +30,6 @@ python scripts/cineca/circuit_runner.py \
   --batch-size 6 \
   --atp-batch-size 6 \
   --knockout-k 15 \
-  --steer-layer 12 \
   --max-new-tokens 24 \
   --n-prompts 100 \
   --n-test 64

@@ -6,8 +6,8 @@ model-dependent step so all methods share the same identification prompts and ar
 on the same held-out test set. All artifacts land under ``data/<model>/circuit/``. Every
 intervention is *expert-level* (gate knockout / expert-output steering) — no residual-stream edits.
 
-The causal localizer is gate-AtP (one backward pass). Exhaustive activation patching was used
-once to validate it (the two grids agreed closely, pooled r≈0.69) and is no longer run here.
+The causal localizer is gate-AtP (one backward pass); see ``moe_interp.circuit.attribution`` for
+the method and its one-off validation against exhaustive activation patching.
 
 Usage:
     python scripts/cineca/circuit_runner.py [--model MODEL] [--batch-size N]

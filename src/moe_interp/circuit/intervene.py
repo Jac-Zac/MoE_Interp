@@ -57,9 +57,9 @@ def expert_steer_intervention(
 
     ``v_e`` is the per-expert diff-of-means in expert-output space (toxic - neutral; see
     :func:`~moe_interp.circuit.steer.collect_expert_output_dom`), so ``alpha = -1`` subtracts one
-    unit of the toxic direction from the expert (detox), ``alpha = +1`` amplifies it. Unlike the
-    residual-stream steer this is per-expert and *gate-weighted*, so it never stacks an unscaled
-    shift across many layers — the failure mode that made the residual localized-steer degenerate.
+    unit of the toxic direction from the expert (detox), ``alpha = +1`` amplifies it. The shift is
+    per-expert and gate-weighted: it lands only at tokens routed to ``e`` and is scaled by the live
+    router gate, so it is never stacked unscaled across layers.
 
     ``v_by_le`` maps ``(layer, expert) -> v_e`` (model-dim); experts absent here are left alone.
     """

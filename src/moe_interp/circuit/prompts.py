@@ -1,16 +1,16 @@
 """Prompts for the circuit / intervention experiments — a RealToxicityPrompts split.
 
-:func:`rtp_prompts` partitions real RealToxicityPrompts by their own per-prompt toxicity
-score into high-toxicity (eliciting) and low-toxicity (neutral) sets. The eliciting set drives
-the expert knockout / expert-output steering comparison and the neutral set is the collateral
-control. This is the single prompt source for the whole circuit study; the notebooks use the
-same function with a small ``n`` and print a few examples for clarity.
+:func:`rtp_split` partitions real RealToxicityPrompts by each prompt's own toxicity score into
+high-toxicity (eliciting) and low-toxicity (neutral) sets, then into disjoint train (identify)
+and test (score) halves. The eliciting set drives the expert knockout / expert-output steering
+comparison and the neutral set is the collateral control. This is the single prompt source for
+the whole circuit study; the notebooks call ``rtp_split`` with a small ``n`` for a quick look.
 """
 
 from __future__ import annotations
 
 
-def rtp_prompts(
+def _rtp_prompts(
     tokenizer,
     *,
     n: int = 48,
@@ -67,7 +67,7 @@ def rtp_split(
     toxicity, correlational knockout does not" is measured out-of-sample. The two halves are
     a deterministic slice of one shuffled stream, so they never overlap.
     """
-    elic, neut = rtp_prompts(tokenizer, n=n_train + n_test, hi=hi, lo=lo, seed=seed)
+    elic, neut = _rtp_prompts(tokenizer, n=n_train + n_test, hi=hi, lo=lo, seed=seed)
     return (
         elic[:n_train],
         elic[n_train:],
