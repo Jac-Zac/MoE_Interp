@@ -248,9 +248,9 @@ move under expert steering at all.
 layer-matched random set: a real but small gap that never makes the concept disappear, and
 `numbers` shows no AtP-vs-random gap at all. With 8 experts active per token the model simply
 routes around any sparse set --- *top-$k$ redundancy*. This is the central negative result and the
-*opposite* of Head Pursuit @basile2025headpursuit, where SOMP-identified _heads_ are strongly
-causal: the descriptive SOMP story survives the head$->$expert transfer, the causal-_localization_
-story does not. The right reading is that the AtP experts have causal _influence_ over the concept
+*opposite* of Head Pursuit @basile2025headpursuit, where editing as few as $approx 1%$ of the
+SOMP-identified _heads_ reliably suppresses or enhances a target concept: the descriptive SOMP
+story survives the head$->$expert transfer, the causal-_localization_ story does not. The right reading is that the AtP experts have causal _influence_ over the concept
 without being individually _necessary_ for it.
 
 #figure(

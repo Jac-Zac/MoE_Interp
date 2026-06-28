@@ -43,21 +43,30 @@ routing, with the least lexical behaviors not expert-localizable at all.
 
 == Future Work
 
-- *Content-token averaging.* The current pipeline aggregates over the last token only.
-  Averaging over question-content tokens (as in the original Head Pursuit) remains a possible
-  extension if we want a closer apples-to-apples comparison with the original framework.
+The descriptive and faithfulness results are solid; the following close the gap to a
+paper-strength _causal_ claim, roughly in order of importance.
 
-- *Scaling and coverage.* Many experts have fewer than 100 activations even at 50,000
-  documents, particularly in early layers. Larger corpora or targeted prompting strategies
-  would improve coverage.
+- *Break the metric circularity.* The toxic-logit probe is built from the same offensive word
+  list as the diff-of-means steering direction it grades, so the intervention is partly judged
+  by the thing it removes. Scoring the held-out continuations with an *independent* toxicity
+  classifier (Detoxify @hanu2020detoxify or Perspective API) as the headline metric, keeping the
+  logit probe as a cheap proxy, is the single largest credibility upgrade and pairs naturally
+  with the existing held-out split.
 
-- *Cross-model comparison.* Applying the same pipeline to other MoE models (Mixtral
-  @jiang2024mixtral, DeepSeek-MoE @dai2024deepseekmoe, gpt-oss @openai2025gptoss) would test
-  whether the observed specialization patterns are model-specific or a general property of MoE
-  routing.
+- *Stress-test the redundancy claim and add uncertainty.* A *sufficiency curve* --- concept drop
+  versus number of experts ablated, for gate-AtP vs SOMP vs random --- would test the top-$k$
+  redundancy explanation directly; a random-dictionary / PCA ceiling would calibrate the EVR
+  result against the floor that $k$ free atoms give; and bootstrap confidence intervals on
+  $r approx 0.69$ and the small intervention deltas would quantify the noise from the small
+  prompt sets.
 
-- *Cross-layer paths.* Since semantics in MoEs appear to live in routing trajectories rather
-  than single experts @monosemanticpaths2026, decomposing the gated outputs *along an expert
-  path* (a sequence of experts across layers selected for the same token), rather than one
-  expert in isolation, is a natural way to extend pursuit toward the unit the literature
-  suggests is monosemantic.
+- *Cross-layer paths and expert groups.* Since semantics in MoEs appear to live in routing
+  trajectories rather than single experts @monosemanticpaths2026, and single-expert knockout is
+  redundant, decomposing and intervening *along an expert path* (the sequence of experts a token
+  routes through) or on expert *groups* rather than individuals is the natural fix for the
+  redundancy that defeats sparse knockout.
+
+- *Scale the second study.* The GPT-OSS run replicates the descriptive and faithfulness claims
+  but identified experts on only $n_"train" = 16$ prompts; re-running the full held-out circuit at
+  OLMoE scale, adding a third model (Mixtral @jiang2024mixtral, DeepSeek-MoE @dai2024deepseekmoe)
+  and more concepts, would turn the replication into a genuine cross-architecture result.

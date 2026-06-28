@@ -25,29 +25,30 @@ residual stream.
 
 == Related MoE Interpretability Work
 
-Recent work suggests several complementary views of MoE specialization. The domain/driver
-expert framework @wang2025whatgets separates experts that specialize in semantic domains
-from experts that exert strong causal influence on predictions @ternovtsii2026geometric. Semantic routing studies
-@jin2025probing test whether input meaning influences routing patterns, while MoE editing
-methods @moeedit2025 ask how to change expert behavior without perturbing routing. Newer
-interpretability analyses such as MoE Lens @chaudhari2026moelens emphasize that a small set
-of experts can dominate decoding behavior. These results motivate treating expert activations
-as structured, interpretable objects rather than only efficiency mechanisms.
+Recent work treats the *expert* --- not the neuron --- as the natural unit for interpreting
+MoEs. @wang2025whatgets distinguish *domain* experts (specialized to a topic) from *driver*
+experts (large causal effect on the output), and @chaudhari2026moelens show a single
+top-weighted expert can approximate a whole layer's contribution to decoding. @herbst2026expert
+argue the expert is a more effective interpretable unit than the neuron, automatically
+describing hundreds of experts. This view is *actionable*: @ternovtsii2026geometric control
+behavior by steering routing through its geometry, and @do2026domain find domain-specific
+experts do exist and edit their weights for training-free domain control. Together this
+motivates treating expert outputs as structured, interpretable, and *intervenable* objects ---
+the premise of our circuit study (@sec:causal).
 
-A second, more cautionary line of work bears directly on what a single-expert readout can
-recover. MoE experts are *polysemantic*: they pack many unrelated features into superposition,
-so one expert rarely corresponds to one human concept. @lecomte2025sparsity find experts are
-somewhat *more* monosemantic than dense FFN neurons but still polysemantic; @monosemanticpaths2026
-show that an individual expert at one layer yields little interpretable structure and that
-semantics instead live in cross-layer routing *paths*; and @illusionspecialization2026 report
-a domain-invariant ``standing committee'' of experts active across domains, i.e. specialization
-is weaker than routing statistics suggest; @do2026domain likewise question whether
-domain-specific experts exist at all, and @wang2026myth argue that expert assignment reflects
-representation geometry rather than genuine semantic specialization. Architectures such as Monet @park2024monet and
-intrinsically-interpretable MoEs @he2025intrinsic are built specifically to *force* the
-monosemanticity that standard experts lack. The defensible reading is therefore not that
-per-expert decomposition is uninformative, but that any *single-expert, single-readout* summary
-under-reads a polysemantic expert --- a claim we test directly in @sec:results.
+A second, cautionary line bounds what any *single-expert, single-readout* summary can recover.
+MoE experts are *polysemantic*, packing unrelated features into superposition, so one expert
+rarely maps to one concept. @lecomte2025sparsity and @herbst2026expert both find experts
+somewhat *more* monosemantic than dense FFN neurons but still far from one-concept-per-expert,
+with monosemanticity rising only as routing grows sparser. @monosemanticpaths2026 show an
+individual expert yields little interpretable structure while cross-layer routing *paths* are
+monosemantic; @illusionspecialization2026 find a domain-invariant ``standing committee'' that
+carries most routing mass across domains; and @wang2026myth argue expert assignment reflects
+representation *geometry* rather than genuine domain expertise. Architectures such as Monet
+@park2024monet and intrinsically-interpretable MoEs @he2025intrinsic instead *force* the
+monosemanticity standard experts lack. The defensible reading is not that per-expert
+decomposition is uninformative, but that a single-readout summary under-reads a polysemantic
+expert --- which we test directly in @sec:results.
 
 == SOMP
 
