@@ -40,15 +40,18 @@ A second, cautionary line bounds what any *single-expert, single-readout* summar
 MoE experts are *polysemantic*, packing unrelated features into superposition, so one expert
 rarely maps to one concept. @lecomte2025sparsity and @herbst2026expert both find experts
 somewhat *more* monosemantic than dense FFN neurons but still far from one-concept-per-expert,
-with monosemanticity rising only as routing grows sparser. @monosemanticpaths2026 show an
-individual expert yields little interpretable structure while cross-layer routing *paths* are
-monosemantic; @illusionspecialization2026 find a domain-invariant ``standing committee'' that
-carries most routing mass across domains; and @wang2026myth argue expert assignment reflects
-representation *geometry* rather than genuine domain expertise. Architectures such as Monet
-@park2024monet and intrinsically-interpretable MoEs @he2025intrinsic instead *force* the
-monosemanticity standard experts lack. The defensible reading is not that per-expert
-decomposition is uninformative, but that a single-readout summary under-reads a polysemantic
-expert --- which we test directly in @sec:results.
+with monosemanticity rising only as routing grows sparser.
+
+@monosemanticpaths2026 show an individual expert yields little interpretable structure while
+cross-layer routing *paths* are monosemantic; @illusionspecialization2026 find a
+domain-invariant ``standing committee'' that carries most routing mass across domains; and
+@wang2026myth argue expert assignment reflects representation *geometry* rather than genuine
+domain expertise. Architectures such as Monet @park2024monet and intrinsically-interpretable
+MoEs @he2025intrinsic instead *force* the monosemanticity standard experts lack.
+
+The defensible reading is not that per-expert decomposition is uninformative, but that a
+single-readout summary under-reads a polysemantic expert --- which we test directly in
+@sec:results.
 
 == SOMP
 

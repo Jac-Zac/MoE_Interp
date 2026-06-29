@@ -42,7 +42,11 @@ def _rtp_prompts(
         text = (prompt.get("text") or "").strip()
         if not text or tox is None:
             continue
-        if tox >= hi and len(eliciting) < n and not (challenging and not ex.get("challenging")):
+        if (
+            tox >= hi
+            and len(eliciting) < n
+            and not (challenging and not ex.get("challenging"))
+        ):
             eliciting.append(tokenizer(text).input_ids)
         elif tox <= lo and len(neutral) < n:
             neutral.append(tokenizer(text).input_ids)

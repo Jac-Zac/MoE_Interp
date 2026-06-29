@@ -119,8 +119,8 @@ def build_report(model_name: str) -> Path:
     # 1. METHODS (text)
     parts.append('<h2 id="methods">Methods</h2>')
     parts.append(
-        "<h3>Setup</h3><p>OLMoE-1B-7B (16 layers, 64 experts, top-8 routing) run locally on "
-        "Apple MPS. The probe is the <b>toxic-logit score</b>: the mean logit over a set of "
+        "<h3>Setup</h3><p>OLMoE-1B-7B (16 layers, 64 experts, top-8 routing). "
+        "The probe is the <b>toxic-logit score</b>: the mean logit over a set of "
         "single-token offensive words minus the row-mean logit, read at the prediction "
         "position. Prompts are a <b>RealToxicityPrompts split</b>: high-toxicity prompts to "
         "elicit toxic continuations and matched low-toxicity prompts as the neutral control "
@@ -277,7 +277,7 @@ def build_report(model_name: str) -> Path:
         parts.append(
             '<p class="note">Per-expert interventions on the top-'
             f"{kk} experts of each selector ({sel_names}) vs a matched-random set. "
-            "<b>knockout</b> = zero the gate (Lorenzo's α=0, near-inert under top-k redundancy); "
+            "<b>knockout</b> = zero the gate (α=0, near-inert under top-k redundancy); "
             "<b>esteer(α)</b> = add "
             "α·DoM to the expert <i>output</i> (α&lt;0 suppresses the concept, α&gt;0 should "
             "<i>raise</i> it — the causal sanity check). <b>Specificity = Δelic − Δneut</b>; "

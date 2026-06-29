@@ -11,7 +11,6 @@ from moe_interp.pursuit import load_pursuit, run_pursuit
 
 # %% Configuration
 seed = 1337
-# MODEL_NAME = "openai/gpt-oss-20b"
 MODEL_NAME = "allenai/OLMoE-1B-7B-0924-Instruct"
 load_dotenv()
 set_seed(seed)

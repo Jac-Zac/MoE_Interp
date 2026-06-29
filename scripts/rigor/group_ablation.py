@@ -28,7 +28,12 @@ from dotenv import load_dotenv
 from nnsight import LanguageModel
 
 from moe_interp.capture.model_adapter import model_num_experts
-from moe_interp.circuit.intervene import concept_propensity, concept_regex, generate, knockout_intervention
+from moe_interp.circuit.intervene import (
+    concept_propensity,
+    concept_regex,
+    generate,
+    knockout_intervention,
+)
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.steer import _causal_grid_set, _matched_random_set
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
@@ -73,8 +78,12 @@ def _score(model, prompts, concept_ids, pattern, experts, max_new_tokens):
         props.append(concept_propensity(model, ids, cont, concept_ids, fn))
         hits.append(1.0 if pattern.findall(model.tokenizer.decode(cont)) else 0.0)
         distinct.append(len(set(cont)) / max(len(cont), 1))
-    return {"propensity": float(np.mean(props)), "word_frac": float(np.mean(hits)),
-            "distinct1": float(np.mean(distinct)), "word_hit_per_prompt": hits}
+    return {
+        "propensity": float(np.mean(props)),
+        "word_frac": float(np.mean(hits)),
+        "distinct1": float(np.mean(distinct)),
+        "word_hit_per_prompt": hits,
+    }
 
 
 def main():
@@ -84,17 +93,24 @@ def main():
     p.add_argument("--model", default=get_default_model())
     p.add_argument("--concept", default="offensive")
     p.add_argument("--k", type=int, default=15, help="number of causal (AtP) experts")
-    p.add_argument("--m", type=int, default=4, help="co-firing neighbors per causal expert")
+    p.add_argument(
+        "--m", type=int, default=4, help="co-firing neighbors per causal expert"
+    )
     p.add_argument("--n-prompts", type=int, default=100)
     p.add_argument("--n-test", type=int, default=64)
     p.add_argument("--max-new-tokens", type=int, default=24)
     args = p.parse_args()
 
     model = LanguageModel(
-        args.model, device_map=os.environ.get("DEVICE_MAP", str(get_device())), dtype="auto", dispatch=True
+        args.model,
+        device_map=os.environ.get("DEVICE_MAP", str(get_device())),
+        dtype="auto",
+        dispatch=True,
     )
     ne = model_num_experts(model)
-    elic_tr, elic_te, _, _ = rtp_split(model.tokenizer, n_train=args.n_prompts, n_test=args.n_test)
+    elic_tr, elic_te, _, _ = rtp_split(
+        model.tokenizer, n_train=args.n_prompts, n_test=args.n_test
+    )
     concept_ids = build_toxic_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
     pattern = concept_regex(CONCEPT_WORDS[args.concept])
 
@@ -102,24 +118,39 @@ def main():
     atp_path = md / "circuit" / "attribution" / f"atp_grid_n{len(elic_tr)}.npy"
     atp = _causal_grid_set(atp_path, args.k)
     if not atp:
-        raise RuntimeError(f"No gate-AtP grid at {atp_path}; run the circuit pipeline first.")
+        raise RuntimeError(
+            f"No gate-AtP grid at {atp_path}; run the circuit pipeline first."
+        )
 
     neighbors = cofiring_neighbors(model, elic_tr, atp, args.m)
     group = list(dict.fromkeys(atp + neighbors))
     rand_group = _matched_random_set(group, ne)
 
     sets = {"AtP-only": atp, "AtP+cofiring": group, "random-group": rand_group}
-    out = {"meta": {"model": args.model, "concept": args.concept, "k": args.k, "m": args.m,
-                    "n_test": len(elic_te), "group_size": len(group)}}
-    out["baseline"] = _score(model, elic_te, concept_ids, pattern, [], args.max_new_tokens)
+    out = {
+        "meta": {
+            "model": args.model,
+            "concept": args.concept,
+            "k": args.k,
+            "m": args.m,
+            "n_test": len(elic_te),
+            "group_size": len(group),
+        }
+    }
+    out["baseline"] = _score(
+        model, elic_te, concept_ids, pattern, [], args.max_new_tokens
+    )
     print(f"[baseline] word_frac={out['baseline']['word_frac']:.3f}", flush=True)
     for name, s in sets.items():
         block = _score(model, elic_te, concept_ids, pattern, s, args.max_new_tokens)
         block["n_experts"] = len(s)
         block["experts"] = [list(le) for le in s]
         out[name] = block
-        print(f"[{name}] n={len(s)} word_frac={block['word_frac']:.3f} "
-              f"prop={block['propensity']:+.3f} d1={block['distinct1']:.2f}", flush=True)
+        print(
+            f"[{name}] n={len(s)} word_frac={block['word_frac']:.3f} "
+            f"prop={block['propensity']:+.3f} d1={block['distinct1']:.2f}",
+            flush=True,
+        )
 
     out_dir = md / "circuit" / "rigor"
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -2,7 +2,6 @@
 
 OFFENSIVE_WORDS = [
     "abuse",
-    "adult",
     "anger",
     "attack",
     "attacks",
@@ -14,7 +13,6 @@ OFFENSIVE_WORDS = [
     "brutal",
     "brutality",
     "chaos",
-    "child",
     "crime",
     "crimes",
     "cruel",
@@ -55,7 +53,6 @@ OFFENSIVE_WORDS = [
     "sex",
     "sexual",
     "shame",
-    "speech",
     "suffering",
     "terror",
     "terrorism",
@@ -70,7 +67,6 @@ OFFENSIVE_WORDS = [
     "violated",
     "violent",
     "war",
-    "white",
 ]
 
 COUNTRY_WORDS = [

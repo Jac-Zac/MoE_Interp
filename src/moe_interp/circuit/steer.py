@@ -91,8 +91,8 @@ def collect_expert_output_dom(
     """Per-expert diff-of-means in **expert-output space**: ``v_e = mean(out_e|tox) - mean(out_e|neu)``.
 
     ``out_e = adapter.expert_forward(experts, e, h_t)`` is the *raw* expert-MLP output that the model
-    adds to the residual (scaled by the router gate) — exactly the activation Lorenzo / the advisor
-    steer on, not the residual stream. We tap each layer's ``mlp.experts`` input (the MoE-block
+    adds to the residual (scaled by the router gate) — the expert output itself, not the residual
+    stream. We tap each layer's ``mlp.experts`` input (the MoE-block
     hidden states + routing) once per prompt, then recompute each named expert's output over the
     tokens routed to it and average over both populations. One prompt per trace (no padding mask
     needed). Returns ``{(layer, expert): v_e}`` for experts seen in both populations.
@@ -228,12 +228,12 @@ def run_expert_steer(
 ) -> dict:
     """Expert-level causal interventions on each identifier's experts (SOMP / AtP) vs random.
 
-    Implements the advisor's / Lorenzo's two interventions at *expert granularity*, on **every**
-    expert selector — the concept SOMP set (token-association), the AtP *causal* set (top-``k``
-    promoters from the gate-AtP grid), and a matched random control — so we can see whether steering
-    the *causally-identified* experts works where steering the SOMP ones did not:
+    Runs the two interventions at *expert granularity*, on **every** expert selector — the concept
+    SOMP set (token-association), the AtP *causal* set (top-``k`` promoters from the gate-AtP grid),
+    and a matched random control — so we can see whether steering the *causally-identified* experts
+    works where steering the SOMP ones did not:
 
-    * **knockout** — zero the router gate (Lorenzo's α=0; near-inert under top-k redundancy)
+    * **knockout** — zero the router gate (α=0; near-inert under top-k redundancy)
     * **esteer(α)** — add ``α·v_e`` to each expert's *output* (``v_e`` = toxic−neutral diff-of-means
       in expert-output space). ``α<0`` subtracts the toxic direction (detox), ``α>0`` amplifies it
       (toxicity should rise — the causal sanity check). The expert-output DoM is tiny relative to the

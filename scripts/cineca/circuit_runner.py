@@ -98,8 +98,10 @@ def main():
         challenging=args.challenging,
     )
     # Regime tag keeps a high-toxicity grid/run from clobbering the default (hi=0.5) one.
-    regime = "" if (args.hi == 0.5 and not args.challenging) else (
-        f"_hi{args.hi:g}" + ("_chal" if args.challenging else "")
+    regime = (
+        ""
+        if (args.hi == 0.5 and not args.challenging)
+        else (f"_hi{args.hi:g}" + ("_chal" if args.challenging else ""))
     )
     toxic_ids = build_toxic_token_ids(model.tokenizer)
     print(

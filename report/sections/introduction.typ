@@ -21,9 +21,10 @@ Our contributions:
 - Application of SOMP with the unembedding dictionary to obtain sparse, token-level
   expert summaries.
 - A TriviaQA-based pipeline for analyzing expert specialization in OLMoE.
-- A held-out causal circuit study using only *expert-level* interventions (selectors: SOMP /
-  gate-AtP / random $times$ interventions: gate knockout / expert-output steering) across three
-  concepts, showing that causal controllability is a _gradient_ (countries $>$ numbers $>$
-  toxicity); that within it the separating signal is causal _influence_, not expert _necessity_
-  (knockout is near-inert under redundant top-$k$ routing); and that the correlational SOMP selector
-  only lowers a concept by degrading generation, which a coherence guard exposes.
+- A held-out causal circuit study with only *expert-level* interventions: three selectors
+  (SOMP, gate-AtP, random) $times$ two interventions (gate knockout, expert-output steering),
+  run over three concepts.
+- Evidence that causal controllability is a _gradient_ (countries $>$ numbers $>$ toxicity), that
+  the separating signal is _influence_ rather than expert _necessity_ (knockout stays near-inert
+  under redundant top-$k$ routing), and that the SOMP selector lowers a concept only by degrading
+  generation --- which a coherence guard exposes.

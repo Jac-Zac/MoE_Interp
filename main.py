@@ -27,11 +27,8 @@ def main():
     if args.command == "extract":
         from nnsight import LanguageModel
 
-        # Default: pin the whole model to the single best device. Pass --device_map auto
-        # for pipeline parallelism across multiple GPUs (accelerate handles inter-device
-        # transfers). Avoid "auto" on a single-GPU node: it can flakily offload a sliver
-        # of an MoE model to disk when VRAM is tight, and MoE weights can't be re-saved
-        # without an offload_folder.
+        # Default device_map: single best device. Pass --device_map auto for
+        # pipeline parallelism across multiple GPUs (see --help for caveats).
         model_name = args.model
         device_map = args.device_map or str(get_device())
         model = LanguageModel(

@@ -49,7 +49,7 @@ def expert_steer_intervention(
 ) -> Callable:
     """Steer the *output activation* of named experts by ``alpha * v_e`` (DoM in expert space).
 
-    This is Lorenzo's / the advisor's experiment done at expert granularity. The model adds
+    This is the steering experiment done at expert granularity. The model adds
     ``gate_{t,e} * f_e(h_t)`` to the residual, where ``f_e`` is expert ``e``'s raw MLP output and
     ``gate`` its (normalised) router weight. Shifting that output ``f_e -> f_e + alpha * v_e``
     therefore changes the residual by ``gate_{t,e} * alpha * v_e`` at exactly the tokens routed to

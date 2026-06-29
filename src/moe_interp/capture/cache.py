@@ -70,8 +70,8 @@ def append_to_file(
     if acts.numel() == 0:
         return
     group = f.require_group(_expert_group_name(expert_id))
-    # Legacy groups predate routing_weights: backfill the existing rows with NaN so the
-    # column stays aligned with activations before appending this batch's weights.
+    # If a group has activations but no routing_weights, backfill with NaN so the
+    # column stays length-aligned before appending this batch's weights.
     if (
         weights is not None
         and "activations" in group

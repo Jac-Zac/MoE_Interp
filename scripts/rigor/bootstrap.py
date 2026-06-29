@@ -25,7 +25,11 @@ def boot_delta(base, meth, n_boot, rng):
     base, meth = np.asarray(base[:n]), np.asarray(meth[:n])
     idx = rng.integers(0, n, size=(n_boot, n))
     deltas = base[idx].mean(1) - meth[idx].mean(1)
-    return float(base.mean() - meth.mean()), float(np.percentile(deltas, 2.5)), float(np.percentile(deltas, 97.5))
+    return (
+        float(base.mean() - meth.mean()),
+        float(np.percentile(deltas, 2.5)),
+        float(np.percentile(deltas, 97.5)),
+    )
 
 
 def main():
@@ -39,18 +43,28 @@ def main():
     for path in args.paths:
         d = json.load(open(path))
         base = d["baseline"][args.field]
-        print(f"\n=== {path} ===\nbaseline = {np.mean(base):.3f}  (n={len(base)}, {args.n_boot} resamples)")
+        print(
+            f"\n=== {path} ===\nbaseline = {np.mean(base):.3f}  (n={len(base)}, {args.n_boot} resamples)"
+        )
         for name, block in d.items():
             if name in ("meta", "baseline") or not isinstance(block, dict):
                 continue
             # flat method block, or a nested selector→k tree
-            children = {name: block} if args.field in block else {
-                f"{name} k={k}": v for k, v in block.items() if isinstance(v, dict) and args.field in v
-            }
+            children = (
+                {name: block}
+                if args.field in block
+                else {
+                    f"{name} k={k}": v
+                    for k, v in block.items()
+                    if isinstance(v, dict) and args.field in v
+                }
+            )
             for label, b in children.items():
                 delta, lo, hi = boot_delta(base, b[args.field], args.n_boot, rng)
                 flag = "" if (lo > 0 or hi < 0) else "  <-- CI straddles 0"
-                print(f"  {label:18s} Δ = {delta:+.3f}  95% CI [{lo:+.3f}, {hi:+.3f}]{flag}")
+                print(
+                    f"  {label:18s} Δ = {delta:+.3f}  95% CI [{lo:+.3f}, {hi:+.3f}]{flag}"
+                )
 
 
 if __name__ == "__main__":

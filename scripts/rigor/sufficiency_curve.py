@@ -27,10 +27,19 @@ import torch
 from dotenv import load_dotenv
 from nnsight import LanguageModel
 
-from moe_interp.circuit.intervene import concept_propensity, concept_regex, generate, knockout_intervention
-from moe_interp.circuit.prompts import rtp_split
-from moe_interp.circuit.steer import _causal_grid_set, _matched_random_set, somp_concept_experts_evr
 from moe_interp.capture.model_adapter import model_num_experts
+from moe_interp.circuit.intervene import (
+    concept_propensity,
+    concept_regex,
+    generate,
+    knockout_intervention,
+)
+from moe_interp.circuit.prompts import rtp_split
+from moe_interp.circuit.steer import (
+    _causal_grid_set,
+    _matched_random_set,
+    somp_concept_experts_evr,
+)
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
 
@@ -54,8 +63,15 @@ def main():
     p.add_argument("--model", default=get_default_model())
     p.add_argument("--concept", default="offensive")
     p.add_argument("--dataset", default="rtp")
-    p.add_argument("--ks", default="1,2,5,10,25,50,103", help="comma-separated set sizes")
-    p.add_argument("--n-prompts", type=int, default=100, help="train size (selects the AtP grid file)")
+    p.add_argument(
+        "--ks", default="1,2,5,10,25,50,103", help="comma-separated set sizes"
+    )
+    p.add_argument(
+        "--n-prompts",
+        type=int,
+        default=100,
+        help="train size (selects the AtP grid file)",
+    )
     p.add_argument("--n-test", type=int, default=64)
     p.add_argument("--max-new-tokens", type=int, default=24)
     args = p.parse_args()
@@ -63,10 +79,15 @@ def main():
     kmax = max(ks)
 
     model = LanguageModel(
-        args.model, device_map=os.environ.get("DEVICE_MAP", str(get_device())), dtype="auto", dispatch=True
+        args.model,
+        device_map=os.environ.get("DEVICE_MAP", str(get_device())),
+        dtype="auto",
+        dispatch=True,
     )
     ne = model_num_experts(model)
-    elic_tr, elic_te, _, _ = rtp_split(model.tokenizer, n_train=args.n_prompts, n_test=args.n_test)
+    elic_tr, elic_te, _, _ = rtp_split(
+        model.tokenizer, n_train=args.n_prompts, n_test=args.n_test
+    )
     concept_ids = build_toxic_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
     pattern = concept_regex(CONCEPT_WORDS[args.concept])
 
@@ -76,27 +97,50 @@ def main():
     atp_full = _causal_grid_set(atp_path, kmax) or []
     somp_full = somp_concept_experts_evr(args.model, args.dataset, args.concept, kmax)
     if not atp_full:
-        raise RuntimeError(f"No gate-AtP grid at {atp_path}; run the circuit pipeline (localize) first.")
+        raise RuntimeError(
+            f"No gate-AtP grid at {atp_path}; run the circuit pipeline (localize) first."
+        )
     rand_full = _matched_random_set(atp_full, ne)
     selectors = {"AtP": atp_full, "SOMP": somp_full, "random": rand_full}
 
-    out = {"meta": {"model": args.model, "concept": args.concept, "ks": ks, "ne": ne, "n_test": len(elic_te)}}
-    base_p, base_h, base_d = _score(model, elic_te, concept_ids, pattern, [], args.max_new_tokens)
+    out = {
+        "meta": {
+            "model": args.model,
+            "concept": args.concept,
+            "ks": ks,
+            "ne": ne,
+            "n_test": len(elic_te),
+        }
+    }
+    base_p, base_h, base_d = _score(
+        model, elic_te, concept_ids, pattern, [], args.max_new_tokens
+    )
     out["baseline"] = {
-        "propensity": float(base_p.mean()), "word_frac": float(base_h.mean()), "distinct1": float(base_d.mean()),
-        "propensity_per_prompt": base_p.tolist(), "word_hit_per_prompt": base_h.tolist(),
+        "propensity": float(base_p.mean()),
+        "word_frac": float(base_h.mean()),
+        "distinct1": float(base_d.mean()),
+        "propensity_per_prompt": base_p.tolist(),
+        "word_hit_per_prompt": base_h.tolist(),
     }
     for name, full in selectors.items():
         out[name] = {}
         for k in ks:
             if k > len(full):
                 continue
-            pr, hi, di = _score(model, elic_te, concept_ids, pattern, full[:k], args.max_new_tokens)
+            pr, hi, di = _score(
+                model, elic_te, concept_ids, pattern, full[:k], args.max_new_tokens
+            )
             out[name][str(k)] = {
-                "propensity": float(pr.mean()), "word_frac": float(hi.mean()), "distinct1": float(di.mean()),
-                "propensity_per_prompt": pr.tolist(), "word_hit_per_prompt": hi.tolist(),
+                "propensity": float(pr.mean()),
+                "word_frac": float(hi.mean()),
+                "distinct1": float(di.mean()),
+                "propensity_per_prompt": pr.tolist(),
+                "word_hit_per_prompt": hi.tolist(),
             }
-            print(f"[{name} k={k}] word_frac={hi.mean():.3f} prop={pr.mean():+.3f} d1={di.mean():.2f}", flush=True)
+            print(
+                f"[{name} k={k}] word_frac={hi.mean():.3f} prop={pr.mean():+.3f} d1={di.mean():.2f}",
+                flush=True,
+            )
 
     out_dir = md / "circuit" / "rigor"
     out_dir.mkdir(parents=True, exist_ok=True)

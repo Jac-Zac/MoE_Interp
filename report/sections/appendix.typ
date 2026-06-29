@@ -59,8 +59,8 @@ Japan, Brazil, Nigeria, India, Australia_, etc. Multi-word names such as _United
 and _South Korea_ are included as single entries; the tokenizer may split these into
 multiple tokens, all of which are included in the restricted dictionary.
 
-*Offensive.* A list of 67 words associated with harmful or sensitive content, including
-_violence, hate, terrorism, racism_, etc. This list was used to probe whether any experts
+*Offensive.* A list of 66 words associated with harmful or sensitive content, including
+_hate, terrorism, violent, racist_, etc. This list was used to probe whether any experts
 specialize in harmful content; none of the top-ranked experts under this concept showed
 coherent specialization on TriviaQA.
 

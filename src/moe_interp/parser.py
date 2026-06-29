@@ -46,7 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="HuggingFace device_map for model loading. Default: single best device. "
-        "Use 'auto' for pipeline parallelism across all available GPUs.",
+        "Use 'auto' for pipeline parallelism across all available GPUs. "
+        "Avoid 'auto' on a single-GPU node: it can flakily offload layers to disk "
+        "when VRAM is tight.",
     )
 
     pursuit_parser = subparsers.add_parser(

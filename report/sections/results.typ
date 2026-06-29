@@ -7,8 +7,9 @@ sufficient activations (at least 5 routed documents) to analyze.
 == Expert Specialization
 
 Final EVR values (after $T = 25$ SOMP iterations) range from 0.021 to 0.248, with a median
-of 0.041. The low median is itself a finding: most experts are polysemantic, so no small set
-of vocabulary directions captures most of their variance. This matches the MoE
+of 0.041 across the 393 sufficiently-sampled experts (see @tab:lens for the mean EVR at fewer
+atoms, which is smaller). The low median is itself a finding: most experts are polysemantic,
+so no small set of vocabulary directions captures most of their variance. This matches the MoE
 interpretability literature, which reports that experts pack features in superposition
 @lecomte2025sparsity and that single experts under-determine model behavior
 @monosemanticpaths2026 @illusionspecialization2026 (@sec:lens quantifies this directly).
@@ -114,8 +115,9 @@ read off the cumulative EVR with the identical estimator used inside the SOMP ru
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-Cumulative EVR averaged over all 1{,}024 experts at decomposition depths 1, 3, and 10, for the
-mean-projection logit lens versus SOMP, computed on the same extraction. SOMP
+Cumulative EVR averaged over all 1,024 experts at decomposition depths 1, 3, and 10, for the
+mean-projection logit lens versus SOMP, computed on a pile (10k-document) extraction with both
+readouts on the same activations. SOMP
 explains $approx 2.1 times$ more activation variance at every depth. The mean top-10 token
 overlap between the two readouts (Jaccard) is only 0.043, so the two methods largely disagree
 on which tokens characterize an expert.
@@ -143,7 +145,7 @@ selectors~$times$~interventions pipeline on three concepts of decreasing lexical
 #emph[Data and protocol.] All causal experiments use RealToxicityPrompts
 @gehman2020realtoxicityprompts, split by each prompt's own toxicity score into eliciting (high) and
 neutral (low) halves and then into disjoint train (identify) and test (score) sets. The toxicity
-run identifies on $n_"train" = 100$ and scores on $n_"test" = 50$; the lexical-concept runs use the
+run identifies on $n_"train" = 100$ and scores on $n_"test" = 64$; the lexical-concept runs use the
 smaller split written by the per-concept pursuit ($n_"train" = 60$, $n_"test" = 40$ for
 `countries`/`numbers`). The SOMP selector is the concept-restricted Expert-Pursuit ranking
 (dictionary restricted to the concept lexicon, ranked by EVR\@10); the gate-AtP selector is the
@@ -159,13 +161,23 @@ where it "works" it does so only by degrading the text.
 === Causal Localization Is a Per-Concept Gradient
 
 Gate-AtP (@eq:atp) scores every $(l,e)$ from a single backward pass, giving one signed
-$16 times 64$ map per concept. The three maps differ qualitatively (the heatmaps are reproduced
-in the slides): for `countries` the attribution concentrates in a handful of strong late-layer
-experts --- a sharp, $approx 1%$-of-experts handle; for `numbers` the signal exists but is spread
-thinly across many experts (distributed, leaky); for toxicity it is diffuse and low-magnitude
-everywhere, with no sparse lever. This _localizability gradient_ is the organizing finding of the
-section, and the interventions below trace it: each concept is exactly as controllable as its map
-is concentrated.
+$16 times 64$ map per concept. The three maps differ qualitatively (@fig:atp-grids): for
+`countries` the attribution concentrates in a handful of strong late-layer experts --- a sharp,
+$approx 1%$-of-experts handle; for `numbers` the signal exists but is spread thinly across many
+experts (distributed, leaky); for toxicity it is diffuse and low-magnitude everywhere, with no
+sparse lever. This _localizability gradient_ is the organizing finding of the section, and the
+interventions below trace it: each concept is exactly as controllable as its map is concentrated.
+
+#figure(
+  image("../figures/grid_atp_concepts.png", width: 100%),
+  caption: [
+Gate-AtP attribution maps ($16$ layers $times$ $64$ experts) for `countries`, `numbers`, and
+`offensive` (toxicity). Colour is the signed first-order gate-ablation effect (@eq:atp); red
+promotes the concept, blue suppresses it. The maps grow visibly more diffuse left-to-right:
+`countries` concentrates on a few late-layer experts, `numbers` spreads thinly, and toxicity has
+no sparse lever --- the localizability gradient that the interventions trace.
+  ],
+) <fig:atp-grids>
 
 For toxicity specifically, the exact patching grid (@eq:patch) confirms the diffuse picture and
 adds a twist invisible to a vocabulary readout: the causally important experts are *not* confined
@@ -231,6 +243,17 @@ expensive grid, which we then drop. (Patching is the ground truth, so its self-$
   ],
 ) <tab:faith>
 
+#figure(
+  image("../figures/patching_faithfulness.png", width: 100%),
+  caption: [
+Faithfulness of gate-AtP against the exact patching grid on toxicity. _Left:_ the exhaustive
+patching effect map. _Centre:_ gate-AtP vs patching per expert (each point an $(l,e)$); the cloud
+tightens toward the diagonal in the late layers. _Right:_ per-layer Pearson $r$, rising from
+$approx 0.30$ early to $approx 0.96$ in the last layer --- AtP is most faithful exactly where the
+controllable signal lives.
+  ],
+) <fig:faithfulness>
+
 === Influence vs. Necessity
 
 With the cheap selector validated we ask the decisive question: does acting on a concept's AtP
@@ -240,18 +263,29 @@ sharply for the localizable concepts. On `countries`, steering the top-$k=15$ At
 the country word-fraction from a $0.60$ baseline to $0.17$ at $alpha=-3$ and to $0.03$ at
 $alpha=-5$, all while distinct-1 stays $approx 0.83$ (coherent removal, not degradation).
 `numbers` confirms the gradient: it never gets a clean lever, needing both $k=40$ experts _and_
-$alpha=-5$ to reach $0.43$ (@tab:influence). Toxicity, at the bottom of the gradient, does not
-move under expert steering at all.
+$alpha=-5$ to reach $0.43$ (@tab:influence, @fig:steer). Toxicity, at the bottom of the gradient,
+does not move under expert steering at all.
 
-*Necessity* --- knockout --- fails everywhere. Zeroing even the top $10%$ of all 1{,}024 experts
+*Necessity* --- knockout --- fails everywhere. Zeroing even the top $10%$ of all 1,024 experts
 ($p_90$, 103 experts) leaves the country word-fraction at $0.33$ for the AtP set vs $0.47$ for a
-layer-matched random set: a real but small gap that never makes the concept disappear, and
-`numbers` shows no AtP-vs-random gap at all. With 8 experts active per token the model simply
-routes around any sparse set --- *top-$k$ redundancy*. This is the central negative result and the
-*opposite* of Head Pursuit @basile2025headpursuit, where editing as few as $approx 1%$ of the
-SOMP-identified _heads_ reliably suppresses or enhances a target concept: the descriptive SOMP
-story survives the head$->$expert transfer, the causal-_localization_ story does not. The right reading is that the AtP experts have causal _influence_ over the concept
+layer-matched random set (@fig:knockout): a real but small gap that never makes the concept
+disappear, and `numbers` shows no AtP-vs-random gap at all. With 8 experts active per token the
+model simply routes around any sparse set --- *top-$k$ redundancy*. This is the central negative
+result and the *opposite* of Head Pursuit @basile2025headpursuit, where editing as few as
+$approx 1%$ of the SOMP-identified _heads_ reliably suppresses or enhances a target concept: the
+descriptive SOMP story survives the head$->$expert transfer, the causal-_localization_ story does
+not. The right reading is that the AtP experts have causal _influence_ over the concept
 without being individually _necessary_ for it.
+
+#figure(
+  image("../figures/threshold_knockout.png", width: 85%),
+  caption: [
+Necessity test on `countries`: country word-fraction as a function of the number of knocked-out
+experts, for the gate-AtP set vs a layer-matched random set. Even at $10%$ of all experts ($103$)
+the concept never disappears and the AtP-vs-random gap stays small --- with 8 experts firing per
+token the model routes around any sparse knockout (top-$k$ redundancy).
+  ],
+) <fig:knockout>
 
 #figure(
   table(
@@ -275,6 +309,17 @@ removal, not degraded text.
   ],
 ) <tab:influence>
 
+#figure(
+  image("../figures/steering_sweep.png", width: 100%),
+  caption: [
+Influence test: concept word-fraction under localized expert-output steering as the strength
+$alpha$ becomes more negative, for `countries` (left) and `numbers` (right) at several $k$.
+`countries` saturates at $k approx 15$ ($approx 1%$ of experts) and falls to $0.03$; `numbers`
+needs $k = 40$ and $alpha = -5$ just to reach $0.43$ --- the distributed concept never gets a
+clean lever.
+  ],
+) <fig:steer>
+
 === Specificity, and Why SOMP Only "Works" by Breaking Generation
 
 A genuine localization must be *specific*: steering down one concept with its own AtP set should
@@ -287,10 +332,10 @@ own_ concept and leave the other near baseline.
 The correlational SOMP selector behaves entirely differently, and this is the sharpest statement
 of its causal failure. SOMP-selected experts only "reduce" a concept under aggressive steering
 ($alpha = -10$), and when they do, *distinct-1 collapses to $0.27$--$0.59$* --- the model is
-melting the text into garbage, not removing the concept. SOMP thus passes a naive
+degrading the text into repetition, not removing the concept. SOMP thus passes a naive
 propensity-drop test for the wrong reason. The coherence guard is what exposes it: under the
-identical steering machinery, the gate-AtP set removes the concept cleanly and SOMP does not.
-Token association is not causal responsibility.
+identical steering machinery, the gate-AtP set removes the concept cleanly and SOMP does not ---
+token association is not causal responsibility.
 
 #figure(
   table(
@@ -363,7 +408,31 @@ Taken together the three concepts trace one gradient --- `countries` (sharp, $ap
 $>$ `numbers` (distributed, leaky) $>$ toxicity (redundant, direction-only) --- and one recurring
 lesson: causal _influence_ is recoverable from a cheap gate gradient, but expert _necessity_ is
 an illusion of redundant routing, and the only selector that survives a coherence-aware test is
-the causal one.
+the causal one. @tab:gradient collects the headline numbers for all three concepts in one place.
+
+#figure(
+  table(
+    columns: (auto, auto, auto, auto, auto),
+    align: (left, left, left, left, left),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Concept*], [*AtP map*], [*Best steer (base$->$best)*], [*Knockout (AtP vs rand)*], [*Verdict*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [`countries`], [sharp, $approx 1%$ late], [wf $0.60 -> bold(0.03)$, $k{=}15,alpha{=}{-}5$, d1~$0.83$], [$0.33$ vs $0.47$ @ $p_90$], [localizable],
+    [`numbers`],   [distributed],            [wf $0.80 -> 0.43$, $k{=}40,alpha{=}{-}5$],            [no gap],                  [leaky],
+    [toxicity],    [diffuse],                [prop $+2.07 -> +1.74$ ($-16%$), $alpha{=}{-}10$],     [$-0.10$ vs $-0.03$],      [not localizable],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+The localizability gradient at a glance. Each concept's best localized-steering result, its
+knockout effect (AtP vs layer-matched random), and the qualitative shape of its gate-AtP map.
+Word-fraction (wf) is the metric for the lexical concepts; toxicity uses the concept-logit
+propensity. Controllability tracks how concentrated the AtP map is: sharp $->$ clean lever,
+diffuse $->$ no expert handle.
+  ],
+) <tab:gradient>
 
 == Cross-Model Check: GPT-OSS-20B
 
@@ -376,9 +445,8 @@ faithfulness*: gate-AtP tracks the exhaustive patching grid even more closely he
 (pooled Pearson $r approx 0.77$), reinforcing that the cheap one-pass gradient stands in for the
 expensive sweep across architectures --- the reason patching is not part of the pipeline. (3)
 *Knockout redundancy*: on a held-out toxicity split, top-8 expert knockout is again near-inert for
-every selector (AtP $-0.06$, patching $-0.06$, random $-0.03$, SOMP slightly _raises_ the score),
-the same top-$k$ redundancy seen on OLMoE. The toxicity _intervention_ results on GPT-OSS are
-weaker and noisier than on OLMoE --- no expert intervention gives a clean drop --- but this run
-identified the experts on only $n_"train" = 16$ prompts (a fraction of OLMoE's 100), so we read
-GPT-OSS as a *replication of the descriptive and faithfulness claims* rather than a second
-intervention study.
+every selector (AtP and SOMP each $approx -0.06$, random $approx 0$), the same top-$k$ redundancy
+seen on OLMoE. The steering arm is noisier here: this run identified the experts on only
+$n_"train" = 16$ prompts (a fraction of OLMoE's 100), so the per-selector intervention picture is
+unreliable and we read GPT-OSS as a *replication of the descriptive and faithfulness claims* rather
+than a second intervention study.

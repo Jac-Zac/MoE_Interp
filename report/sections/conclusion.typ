@@ -37,9 +37,9 @@ honest endpoint: it has no usable expert handle at all --- knockout is inert and
 steering of the causal set only suppresses it weakly and non-specifically --- because the behavior
 is semantic and fully distributed rather than carried by any sparse expert set. Correlational
 specialization summaries are thus a starting point for hypotheses, not a substitute for a causal,
-coherence-aware test --- and in a redundant MoE, causal _influence_ over a concept's experts is
-recoverable for the localizable concepts but expert _necessity_ is an illusion of redundant
-routing, with the least lexical behaviors not expert-localizable at all.
+coherence-aware test. In a redundant MoE, causal _influence_ over a concept's experts is
+recoverable for the localizable concepts, but expert _necessity_ is an illusion of redundant
+routing, and the least lexical behaviors are not expert-localizable at all.
 
 == Future Work
 

@@ -6,8 +6,8 @@ outputs using the same SOMP-based sparse coding framework.
 
 == Dataset
 
-We use TriviaQA @joshi2017triviaqa (RC configuration, train split), following the Head
-Pursuit setup. Each question is one document. Questions are wrapped in the model's chat
+We use TriviaQA @joshi2017triviaqa (RC configuration, train split, $n = 50,000$), following
+the Head Pursuit setup. Each question is one document. Questions are wrapped in the model's chat
 template without any additional QA prompt --- only the raw question text is presented to the
 model.
 
@@ -47,7 +47,7 @@ word-augmented dictionary in which multi-token words are appended as averaged at
 the base vocabulary and re-normalized, so their direction --- not their smaller norm ---
 determines their influence during SOMP.
 
-*Full-dictionary mode.* SOMP searches the entire vocabulary ($v approx 50{,}000$ tokens). The
+*Full-dictionary mode.* SOMP searches the entire vocabulary ($v approx$ 50,000 tokens). The
 output is an unrestricted ranked list of tokens that summarize the expert's aggregate
 behavior --- analogous to a per-expert logit lens applied across many documents. This is the
 primary mode for discovering what each expert specializes in.
@@ -88,7 +88,7 @@ $bold(g)$; the direction-level controls act on the residual $bold(h)$.
 === Concept Probe and Prompts
 
 We score a concept with a *concept-logit* probe: for a logit vector $bold(z)$ at the prediction
-position, $ s_(cal(C))(bold(z)) = 1/(|cal(C)|) sum_(t in cal(C)) z_t - 1/v sum_(t=1)^v z_t $ <eq:toxprobe>
+position, $ s_(cal(C))(bold(z)) = 1/(|cal(C)|) sum_(t in cal(C)) z_t - 1/v sum_(t=1)^v z_t $ <eq:conceptprobe>
 where $cal(C)$ is the set of single-token concept words (e.g. the `offensive` list for toxicity)
 and $v$ is the vocabulary size --- the mean concept-token logit relative to the row mean. We
 complement this sensitive probe with a literal *word-fraction*: the share of generated
