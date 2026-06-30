@@ -10,10 +10,10 @@ specific semantic axes.
 
 Two results temper the "specialist" reading and align with recent MoE interpretability work.
 First, only a minority of experts are cleanly specialized: the median final EVR is low, so most
-experts are polysemantic @lecomte2025sparsity @illusionspecialization2026. Second, SOMP explains
-$approx 2.1 times$ the variance of a single mean-direction logit lens while sharing almost none
-of its top tokens, confirming that a one-shot per-expert readout under-reads a polysemantic
-expert. We therefore read Expert Pursuit not as evidence that experts are crisp concept
+experts are polysemantic @lecomte2025sparsity @illusionspecialization2026. Second, even
+atom-for-atom SOMP explains $approx 2 times$ the variance of a single mean-direction logit lens
+(and $approx 14 times$ with its full 10-atom basis) while sharing almost none of its top tokens,
+confirming that a one-shot per-expert readout under-reads a polysemantic expert. We therefore read Expert Pursuit not as evidence that experts are crisp concept
 detectors, but as a sparse, honest summary of the *limited* low-dimensional structure a single
 expert carries --- consistent with the view that MoE semantics live largely in cross-layer
 routing paths rather than individual experts @monosemanticpaths2026.

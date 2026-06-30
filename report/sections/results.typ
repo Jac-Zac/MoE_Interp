@@ -100,12 +100,12 @@ and quantifies specialization identified by the full-dictionary run.
 
 Our central methodological claim is that one direction per expert --- the standard *logit-lens*
 readout @nostalgebraist2020logitlens --- is too coarse for a polysemantic expert, and that the
-multi-atom SOMP basis recovers structure a single ranking misses. We test this directly. For
-each expert we compare (i) the bulk logit lens, which ranks tokens by the expert's *mean*
-activation, $"top-"k(bold(D) macron(bold(e)))$, against (ii) SOMP, which selects a *basis* of
-atoms explaining the *variance* of the centered activations. To compare them on equal footing,
-both methods' selected atoms reconstruct the same centered activations by least squares and we
-read off the cumulative EVR with the identical estimator used inside the SOMP run.
+multi-atom SOMP basis recovers structure a single ranking misses. We test this directly. The
+logit lens reads a *single* direction: it ranks tokens by the expert's *mean* activation,
+$"top-"k(bold(D) macron(bold(e)))$, and its top token names one unembedding row whose EVR we
+measure. SOMP instead selects a *basis* of atoms explaining the *variance* of the centered
+activations. Both EVRs use the identical estimator (squared projection over total variance)
+used inside the SOMP run, so they are directly comparable.
 
 #figure(
   table(
@@ -114,20 +114,20 @@ read off the cumulative EVR with the identical estimator used inside the SOMP ru
     stroke: none,
     table.hline(stroke: 0.8pt),
     table.header(
-      [*Method*], [*EVR\@1*], [*EVR\@3*], [*EVR\@10*],
+      [*Readout*], [*EVR\@1*], [*EVR\@3*], [*EVR\@10*],
       table.hline(stroke: 0.5pt),
     ),
-    [Logit lens (mean direction)], [0.0010], [0.0025], [0.0069],
-    [SOMP (variance basis)],       [0.0020], [0.0056], [0.0146],
+    [Logit lens (1 direction)], [0.0010], [---], [---],
+    [SOMP (variance basis)],    [0.0020], [0.0056], [0.0146],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-Cumulative EVR averaged over all 1,024 experts at decomposition depths 1, 3, and 10, for the
-mean-projection logit lens versus SOMP, computed on a pile (10k-document) extraction with both
-readouts on the same activations. SOMP
-explains $approx 2.1 times$ more activation variance at every depth. The mean top-10 token
-overlap between the two readouts (Jaccard) is only 0.043, so the two methods largely disagree
-on which tokens characterize an expert.
+EVR averaged over all 1,024 experts, computed on a pile (10k-document) extraction. The logit
+lens reads one direction, so it has a single EVR (0.0010); SOMP's basis is shown at depths 1, 3,
+and 10. Even atom-for-atom SOMP captures $approx 2 times$ the lens, and its 10-atom basis
+$approx 14 times$, yet both stay under 2%. The mean top-10 token overlap between the two readouts
+(Jaccard) is only 0.043, so the two methods largely disagree on which tokens characterize an
+expert.
   ],
 ) <tab:lens>
 

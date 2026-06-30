@@ -1,22 +1,22 @@
-"""Bulk mean-projection logit-lens baseline and SOMP-vs-lens comparison.
+"""Standard logit-lens baseline and SOMP-vs-lens comparison.
 
 The *logit lens* reads an activation by projecting it onto the unembedding and taking
-the top tokens. Aggregated over an expert's stored activations, the natural bulk
-baseline is the mean direction::
+the top tokens. Aggregated over an expert's stored activations, the natural baseline is
+the mean direction::
 
     scores = D @ mean(A)          # one direction, ranked tokens
 
-SOMP instead selects a *basis* of dictionary atoms that maximise explained variance
-of the (centred) activations. To compare the two on equal footing, we reconstruct the
-same centred activations from each method's selected atoms via least squares and read
-off the cumulative explained-variance ratio (EVR). Both EVR curves are computed with
-the identical estimator used inside ``pursuit.decomposition.somp`` (sum of per-dim
-recon variance / sum of per-dim total variance), so they are directly comparable to
-the EVR stored in ``results.jsonl``.
+That is a single direction. Its top-1 token names one unembedding row; we measure how
+much of the expert's activation variance that one direction captures (EVR), using the
+same estimator as ``pursuit.decomposition.somp`` (squared projection / total variance),
+so the number is directly comparable to the EVR stored in ``results.jsonl``.
 
-The headline this comparison exposes: the single best logit-lens token explains
-little variance, while SOMP's first few atoms explain much more — i.e. a single
-top-k token ranking under-reads a polysemantic expert.
+SOMP instead selects a *basis* of dictionary atoms that maximise explained variance.
+The comparison is deliberately asymmetric: the logit lens reads along one direction
+picked by mean alignment, while SOMP keeps adding variance-maximising atoms. The
+headline this exposes: the single logit-lens direction explains little variance, while
+SOMP's first few atoms explain much more — a single top-k token ranking under-reads a
+polysemantic expert.
 """
 
 from __future__ import annotations
@@ -42,22 +42,20 @@ def mean_projection_scores(A: torch.Tensor, dictionary: torch.Tensor) -> torch.T
     return dictionary @ A.mean(dim=0)
 
 
-def cumulative_evr(A: torch.Tensor, atoms: torch.Tensor) -> list[float]:
-    """Cumulative EVR of centred ``A`` reconstructed from a prefix of ``atoms``.
+def direction_evr(A: torch.Tensor, direction: torch.Tensor) -> float:
+    """EVR of centred ``A`` captured by a single ``direction`` (one row of the unembedding).
 
-    ``atoms`` is ``(m, d)`` (rows of the unembedding). Returns a length-``m`` list where
-    entry ``i`` is the EVR using ``atoms[: i + 1]``. Orthonormalising the atoms (QR) makes
-    the prefix subspaces nested — ``span(atoms[:m]) == span(Q[:, :m])`` — so the explained
-    variance is just the running sum of squared projections onto each orthonormal
-    direction. That is the same orthogonal-projection EVR the per-prefix least-squares
-    solve produced, but in one QR + matmul instead of ``m`` separate lstsq solves.
+    This is the standard logit-lens read: project the centred activations onto the one
+    direction and measure the fraction of total variance it recovers. Same estimator as
+    SOMP's EVR (squared projection / total variance), so the number is directly
+    comparable to SOMP's first atom. Scale-invariant: the direction is normalised.
     """
     Ac = (A - A.mean(dim=0, keepdim=True)).double().cpu()
     total = (Ac**2).sum().clamp_min(1e-12)  # == n * total variance
-    q, _ = torch.linalg.qr(atoms.double().cpu().T, mode="reduced")  # (d, m) orthonormal
-    coords = Ac @ q  # (n, m): centred rows along each orthonormal atom direction
-    explained = torch.cumsum((coords**2).sum(dim=0), dim=0)  # (m,)
-    return (explained / total).tolist()
+    u = direction.double().cpu()
+    u = u / u.norm().clamp_min(1e-12)
+    explained = (Ac @ u).pow(2).sum()
+    return float(explained / total)
 
 
 def _evr_at(evr: list[float], idx: int) -> float:
@@ -79,7 +77,7 @@ def compare_expert(
     scores = mean_projection_scores(A, dictionary)
     lens_idx = torch.topk(scores, k).indices.tolist()
     lens_tokens = [tokenizer.decode([i]) for i in lens_idx]
-    lens_evr = cumulative_evr(A, dictionary[lens_idx])
+    lens_evr = direction_evr(A, dictionary[lens_idx[0]])  # single top-1 direction
 
     a = {t.strip() for t in lens_tokens[:k]}
     b = {t.strip() for t in somp_tokens[:k]}
@@ -153,9 +151,11 @@ def run_logit_lens_comparison(
         "mean_jaccard_topk": (
             float(np.mean([r["jaccard_topk"] for r in records])) if records else 0.0
         ),
+        "mean_lens_evr": (
+            float(np.mean([r["lens_evr"] for r in records])) if records else 0.0
+        ),
     }
     for i in EVR_AT:
-        summary[f"mean_lens_evr_{i}"] = _mean_evr_at("lens_evr", i)
         summary[f"mean_somp_evr_{i}"] = _mean_evr_at("somp_evr", i)
     out = {"summary": summary, "experts": records}
 

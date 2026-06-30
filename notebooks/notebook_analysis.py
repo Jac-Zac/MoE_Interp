@@ -33,12 +33,12 @@ lens = run_logit_lens_comparison(
     MODEL_NAME, DATASET, min_activations=MIN_ACTS, max_rows=MAX_ROWS, output_dir=out_dir
 )
 s = lens["summary"]
-t = Table(title="Mean-projection logit lens vs SOMP")
+t = Table(title="Standard logit lens vs SOMP")
 t.add_column("metric")
 t.add_column("logit lens")
 t.add_column("SOMP")
-t.add_row("EVR @1", f"{s['mean_lens_evr_1']:.4f}", f"{s['mean_somp_evr_1']:.4f}")
-t.add_row("EVR @3", f"{s['mean_lens_evr_3']:.4f}", f"{s['mean_somp_evr_3']:.4f}")
-t.add_row("EVR @10", f"{s['mean_lens_evr_10']:.4f}", f"{s['mean_somp_evr_10']:.4f}")
+t.add_row("EVR @1", f"{s['mean_lens_evr']:.4f}", f"{s['mean_somp_evr_1']:.4f}")
+t.add_row("EVR @3", "—", f"{s['mean_somp_evr_3']:.4f}")
+t.add_row("EVR @10", "—", f"{s['mean_somp_evr_10']:.4f}")
 t.add_row("top-10 Jaccard", f"{s['mean_jaccard_topk']:.3f}", "—")
 print(t)

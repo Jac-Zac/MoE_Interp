@@ -14,13 +14,14 @@ Interactive version: `notebooks/notebook_analysis.py` (`# %%` cells).
 
 ## Logit-lens baseline vs SOMP (`analysis/logit_lens.py`)
 
-The bulk logit lens ranks tokens by the expert's **mean** activation, `topk(D @ mean(A))`.
-SOMP instead selects a **basis** of atoms that explain the **variance** of the (centred)
-activations. To compare fairly, both methods' atoms reconstruct the same centred `A` via
-least squares and we read the cumulative explained-variance ratio (EVR) — the identical
-estimator used in `pursuit.decomposition.somp`, so it is comparable to the stored EVR.
+The standard logit lens ranks tokens by the expert's **mean** activation, `topk(D @ mean(A))`.
+That is a **single direction**; its EVR is the variance share captured by the top-1 token's
+unembedding row. SOMP instead selects a **basis** of atoms that explain the **variance** of
+the (centred) activations. Both EVRs use the identical estimator (squared projection / total
+variance) from `pursuit.decomposition.somp`, so they are comparable to the stored EVR.
 
-Reported per expert and aggregated: top-10 token overlap (Jaccard) and EVR at depths 1/3/10. Writes `logit_lens_comparison.json`.
+Reported per expert and aggregated: top-10 token overlap (Jaccard), the logit lens's single
+EVR, and SOMP EVR at depths 1/3/10. Writes `logit_lens_comparison.json`.
 
 The headline: a single top-k token ranking explains little of an expert's variance, while
 SOMP's first few atoms explain much more — i.e. a single top-k logit-lens token under-reads

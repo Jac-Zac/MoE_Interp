@@ -96,7 +96,7 @@ def main():
         )["summary"]
         print(
             f"logit-lens vs SOMP: Jaccard@{lens['k']}={lens['mean_jaccard_topk']:.3f}  "
-            f"EVR@10 lens={lens['mean_lens_evr_10']:.4f} somp={lens['mean_somp_evr_10']:.4f}"
+            f"EVR lens(1 dir)={lens['mean_lens_evr']:.4f} somp@10={lens['mean_somp_evr_10']:.4f}"
         )
         print(f"Saved analysis to {out_dir}")
 
