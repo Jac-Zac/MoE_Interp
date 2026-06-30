@@ -214,17 +214,20 @@ def main() -> None:
         import matplotlib.pyplot as plt
 
         lff_mono = summary["control_monosemantic_numbers"]["largest_family_share"]
+        # Deck palette: pink = data, blue = expert median, grey = control reference.
+        PINK, BLUE, GREY = "#cf1c77", "#3462e7", "#9aa0a6"
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
-        ax1.hist(lffs, bins=np.linspace(0, 1, 31), color="#7c3aed", alpha=0.85)
+        ax1.hist(lffs, bins=np.linspace(0, 1, 31), color=PINK, alpha=0.85)
         ax1.axvline(
             lff_mono,
-            color="#1a7a3a",
+            color=GREY,
             lw=2,
+            ls="--",
             label=f"monosemantic (numbers) = {lff_mono:.2f}",
         )
         ax1.axvline(
             np.median(lffs),
-            color="#0057b3",
+            color=BLUE,
             lw=2,
             label=f"expert median = {np.median(lffs):.2f}",
         )
@@ -234,10 +237,10 @@ def main() -> None:
         ax1.set_ylabel("# experts")
         ax1.set_title("Does one topic dominate the readout?")
         ax1.legend(fontsize=8)
-        ax2.hist(prs, bins=30, color="#0057b3", alpha=0.85)
+        ax2.hist(prs, bins=30, color=PINK, alpha=0.85)
         ax2.axvline(
             np.median(prs),
-            color="#d97706",
+            color=BLUE,
             lw=2,
             label=f"expert median = {np.median(prs):.1f} / {args.top_n}",
         )
