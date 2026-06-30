@@ -66,13 +66,67 @@ coherent specialization on TriviaQA.
 
 == SOMP Algorithm <app:somp>
 
-Algorithm~1 gives the SOMP procedure used by Expert Pursuit. The dictionary $bold(D)$ is
+@app:somp-alg gives the SOMP procedure used by Expert Pursuit. The dictionary $bold(D)$ is
 L2-normalized row-wise before the run; rows correspond to vocabulary tokens. At each step,
-the atom with the highest sum of squared correlations across all $n$ documents is selected.
+the atom with the highest sum of *absolute* correlations across all $n$ documents is selected
+(the $ell_1$ criterion of Head Pursuit @basile2025headpursuit, $p^t = arg max_j norm(bold(D)_j bold(R)^(t top))_1$).
 Coefficients are refitted by least-squares on the growing support set, and the residual is
-updated. The EVR at step $t$ is:
+updated. The EVR at step $t$ is
 
 $ "EVR"^t = 1 - frac(norm(bold(R)^t)_F^2, norm(bold(H))_F^2) $
 
 where $bold(R)^t$ is the residual after $t$ steps and $bold(H)$ is the centered
 activation matrix.
+
+#figure(
+  kind: "algorithm",
+  supplement: [Algorithm],
+  caption: [SOMP decomposition for one expert (default $ell_1$ criterion).],
+  block(width: 100%, inset: 8pt, stroke: 0.5pt, radius: 3pt, align(left, [
+    #set text(size: 9pt)
+```
+Input:  centered data H (n×d); L2-normalized dictionary D (v×d); steps T
+Output: support S (ranked tokens); EVR curve
+1  R ← H ;  S ← ∅
+2  for t = 1 … T:
+3      c_j ← Σ_i |⟨R_i, D_j⟩|   for every atom j ∉ S        # ℓ1 correlation
+4      p   ← argmax_{j∉S} c_j ;  S ← S ∪ {p}
+5      W   ← argmin_W ‖H − W·D_S‖_F²                         # least-squares refit
+6      R   ← H − W·D_S
+7      EVR_t ← 1 − ‖R‖_F² / ‖H‖_F²
+8  return S ordered by ‖W‖ ,  {EVR_t}
+```
+  ])),
+) <app:somp-alg>
+
+== gate-AtP Algorithm <app:atp>
+
+@app:atp-alg gives the causal selector of @sec:selectors. It scores every $(l, e)$ from a
+single forward--backward pass, the first-order approximation of the $approx 1024$ ablation
+forward passes that exhaustive patching (@eq:patch) would cost. The only adaptation to MoE
+experts is the *node we differentiate*: the fused-experts kernel never materializes the
+per-expert hidden neurons, so the finest differentiable per-expert handle is the router gate
+$g_e$. Because the block output $sum_e g_e f_e$ is *linear* in $g_e$, the gate carries no
+node-level saturation, and AtP's only error is the downstream nonlinearity below the residual
+stream --- which is why it tracks the gold patching grid closely in the late layers (@sec:results).
+
+#figure(
+  kind: "algorithm",
+  supplement: [Algorithm],
+  caption: [gate-AtP: per-$(l, e)$ causal attribution in one backward pass.],
+  block(width: 100%, inset: 8pt, stroke: 0.5pt, radius: 3pt, align(left, [
+    #set text(size: 9pt)
+```
+Input:  prompts; concept token set C; metric s_C (concept-logit probe)
+Output: attribution grid AtP ∈ R^{L×E}
+1  AtP[l, e] ← 0
+2  forward pass; at each layer l read the fused-experts boundary (h, idx, g);
+                  mark the gates g differentiable
+3  L ← Σ_{prompt} s_C(z_last)                              # metric over the batch
+4  backward pass → ∂L/∂g for every layer l
+5  for each layer l, for each routed slot (token, expert e in idx):
+6      AtP[l, e] += g · ∂L/∂g                              # contribution = −Δmetric on g→0
+7  return AtP ;  rank experts by signed AtP
+```
+  ])),
+) <app:atp-alg>

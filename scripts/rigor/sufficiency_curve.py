@@ -41,7 +41,7 @@ from moe_interp.circuit.steer import (
     somp_concept_experts_evr,
 )
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
-from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
+from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_concept_token_ids
 
 
 def _score(model, prompts, concept_ids, pattern, experts, max_new_tokens):
@@ -88,7 +88,7 @@ def main():
     elic_tr, elic_te, _, _ = rtp_split(
         model.tokenizer, n_train=args.n_prompts, n_test=args.n_test
     )
-    concept_ids = build_toxic_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
+    concept_ids = build_concept_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
     pattern = concept_regex(CONCEPT_WORDS[args.concept])
 
     # Full ranked selector lists (prefixes give every k).

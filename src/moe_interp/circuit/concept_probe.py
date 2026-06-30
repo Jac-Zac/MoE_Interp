@@ -80,7 +80,7 @@ def _last_token_logits(
 def scorer(
     model,
     prompts: list[list[int]],
-    toxic_ids: list[int],
+    concept_ids: list[int],
     metric: Metric,
     batch_size: int,
 ) -> Callable[[list[tuple[int, int]] | None], torch.Tensor]:
@@ -89,7 +89,7 @@ def scorer(
 
     def score(ablate: list[tuple[int, int]] | None) -> torch.Tensor:
         return torch.cat(
-            [metric(_last_token_logits(model, b, ablate), toxic_ids) for b in batches]
+            [metric(_last_token_logits(model, b, ablate), concept_ids) for b in batches]
         )
 
     return score

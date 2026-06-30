@@ -37,7 +37,7 @@ from moe_interp.circuit.intervene import (
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.steer import _causal_grid_set, _matched_random_set
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
-from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
+from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_concept_token_ids
 
 
 def cofiring_neighbors(model, prompts, targets, m):
@@ -111,7 +111,7 @@ def main():
     elic_tr, elic_te, _, _ = rtp_split(
         model.tokenizer, n_train=args.n_prompts, n_test=args.n_test
     )
-    concept_ids = build_toxic_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
+    concept_ids = build_concept_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
     pattern = concept_regex(CONCEPT_WORDS[args.concept])
 
     md = get_model_dir(args.model)

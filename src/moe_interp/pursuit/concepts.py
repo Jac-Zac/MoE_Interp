@@ -336,7 +336,7 @@ CONCEPT_WORDS = {
 }
 
 
-def build_toxic_token_ids(tokenizer, words: list[str] | None = None) -> list[int]:
+def build_concept_token_ids(tokenizer, words: list[str] | None = None) -> list[int]:
     """Vocabulary ids of single-token concept words (with and without a leading space).
 
     Defaults to the ``offensive`` lexicon; multi-token words are dropped so the ids can be

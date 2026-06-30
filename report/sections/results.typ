@@ -1,21 +1,30 @@
 = Results <sec:results>
 
-We ran Expert Pursuit on 50,000 TriviaQA questions using OLMoE-1B-7B-Instruct, capturing
-last-token gated outputs for all 16 layers $times$ 64 experts. Of the 1,024 experts, 393 had
-sufficient activations (at least 5 routed documents) to analyze.
+We ran Expert Pursuit on 10,000 TriviaQA questions using OLMoE-1B-7B-Instruct, capturing
+last-token gated outputs for all 16 layers $times$ 64 experts. Of the 1,024 experts, only 334 had
+sufficient activations (at least 5 routed documents) to analyze --- not because the rest are dead,
+but because every TriviaQA prompt ends in the _same_ final token (the chat-template generation
+suffix after "Answer:"), so the last-token readout always routes that position to one stable expert
+support. The pile-10k extraction (completion-style, with lexically diverse final tokens) exercises
+all 1,024 experts; we therefore report the per-expert EVR distribution and the logit-lens comparison
+(@tab:lens, @sec:lens) on pile-10k, and read the discovery token-summaries in @tab:experts off the
+TriviaQA run.
 
 == Expert Specialization
 
-Final EVR values (after $T = 25$ SOMP iterations) range from 0.021 to 0.248, with a median
-of 0.041 across the 393 sufficiently-sampled experts (see @tab:lens for the mean EVR at fewer
-atoms, which is smaller). The low median is itself a finding: most experts are polysemantic,
-so no small set of vocabulary directions captures most of their variance. This matches the MoE
-interpretability literature, which reports that experts pack features in superposition
-@lecomte2025sparsity and that single experts under-determine model behavior
-@monosemanticpaths2026 @illusionspecialization2026 (@sec:lens quantifies this directly).
-Nevertheless, a substantial minority of experts exhibit clear semantic specialization, mostly
-in the later layers. @tab:experts shows representative examples across several categories
-identified by full-dictionary pursuit.
+Final EVR values (after $T = 25$ SOMP iterations) range from 0.041 to 0.285, with a median
+of 0.076 across the 334 sufficiently-sampled experts (and 0.042 on the all-expert pile-10k
+extraction used for @tab:lens and the cross-model check; see @tab:lens for the mean EVR at fewer
+atoms, which is smaller). A low median EVR is a _superposition_ signature --- the expert's output
+does not lie near any low-dimensional vocabulary subspace --- but it is not, on its own, evidence
+of _polysemanticity_: an under-explained readout could equally reflect an output that is simply
+off the unembedding manifold. We therefore test polysemanticity directly in @sec:polysemy, by
+asking whether an expert's top atoms span many _unrelated_ token families; they do. Both signatures
+match the MoE interpretability literature, which reports that experts pack features in
+superposition @lecomte2025sparsity and that single experts under-determine model behavior
+@monosemanticpaths2026 @illusionspecialization2026. Nevertheless, a substantial minority of
+experts exhibit clear semantic specialization, mostly in the later layers. @tab:experts shows
+representative examples across several categories identified by full-dictionary pursuit.
 
 #figure(
   table(
@@ -27,22 +36,20 @@ identified by full-dictionary pursuit.
       [*Expert*], [*Category*], [*Top tokens*], [*EVR*],
       table.hline(stroke: 0.5pt),
     ),
-    [L15 E03], [Numbers / dates],  [9, 55, 26, 200, four, 2003, 87, 15, 314, 2, Oct], [0.191],
-    [L14 E37], [Numbers / dates],  [16, 1991, 7, 40, 1960, June, 22, 10, 2005, 13],   [0.069],
-    [L13 E46], [Numbers],          [17, 49, 8, 2, 110, 300, Act, 73, 32, 12, fifth],  [0.039],
-    [L15 E49], [Geography],        [English, Thai, America, North, European, Canadian, British], [0.094],
-    [L12 E40], [Geography],        [Mediterranean, England, Arabia, Madrid, Swiss, Iowa], [0.036],
-    [L11 E59], [Geography],        [France, Italy, €, English, Lithuanian],            [0.048],
-    [L14 E02], [Names],            [David, Steve, John, Sir, Andrew, George, Sarah],   [0.048],
-    [L15 E16], [Names],            [Ryan, Smith, Bobby, Oliver, Shannon, Charles],     [0.044],
-    [L15 E38], [Biology],          [protein, human, digestive, blood, plant, chemical],[0.054],
-    [L15 E59], [Entertainment],    [music, comic, debut, screen, thriller, play],      [0.050],
-    [L14 E08], [Food],             [fruit, olive, pot, chicken, food],                 [0.036],
-    [L14 E51], [Kinship / address], [friends, beloved, child, folks, brother, ladies],  [0.077],
+    [L15 E03], [Numbers / dates],  [35, 66, 2004, 150, 17, four, twenty, 123, 91],     [0.256],
+    [L14 E37], [Numbers / dates],  [1997, 16, 1970, 26, June, 11, 19, 1930],           [0.104],
+    [L13 E46], [Numbers],          [26, 63, 600, 105, 40, 10, 14, 160, 90],            [0.062],
+    [L15 E49], [Geography],        [Japanese, American, Europe, South, Ukrainian, British, North], [0.127],
+    [L11 E59], [Geography],        [Belgium, Britain, Maryland, Cleveland, Lithuanian], [0.086],
+    [L12 E40], [Geography],        [Mediterranean, Welsh, Madrid, Africa, mountain, Castle], [0.044],
+    [L15 E16], [Names],            [Ryan, Richard, Robert, Daniel, Garcia, James, John], [0.073],
+    [L15 E38], [Biology],          [human, chemical, plant, metabolism, food, Animal, blood], [0.076],
+    [L15 E59], [Entertainment],    [comic, music, debut, screen, thriller, play, hit], [0.071],
+    [L14 E08], [Food],             [banana, jar, fruit, drinks, chicken, Apple],       [0.064],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-Selected experts identified by full-dictionary pursuit on 50,000 TriviaQA documents. EVR is
+Selected experts identified by full-dictionary pursuit on 10,000 TriviaQA documents. EVR is
 the cumulative explained variance ratio after 25 SOMP iterations. Top tokens are the
 highest-ranked readable atoms (sub-word fragments omitted).
   ],
@@ -134,6 +141,29 @@ toward the high-norm mean rather than the directions along which the expert actu
 This is the per-expert analogue of the cross-layer finding that semantics in MoEs live in
 distributed structure rather than any single component @monosemanticpaths2026, and it is the
 empirical justification for preferring a sparse multi-atom basis over a one-shot logit lens.
+
+== Polysemanticity, Measured Directly <sec:polysemy>
+
+Low EVR establishes that experts live in superposition, but polysemanticity is the stronger,
+_semantic_ claim that a single expert mixes many _unrelated_ concepts. We test it directly in the
+model's own readout geometry: every SOMP atom is a row of the unembedding, so two atoms are
+"related" when their unembedding rows are aligned (cosine $gt.eq 0.4$) and unrelated when
+near-orthogonal. For each expert we cluster its top-30 atoms (single-linkage at that threshold)
+and measure the _largest-family share_ --- the fraction of atoms falling in the biggest cluster.
+A monosemantic readout is dominated by one family (share near 1); a polysemantic grab-bag splits
+into many singletons (share near $1\/30$).
+
+The median expert has a largest-family share of just *0.03*: its biggest coherent token group is
+about one atom out of thirty. A genuine single-topic lexicon, by contrast --- the `numbers`
+concept words, clustered identically --- sits at *0.37*, an order of magnitude tighter, and only
+*4%* of experts have a coherent core of four or more related atoms. The effect is not an artifact
+of SOMP's atom decorrelation: a truly single-topic expert yields a clustered atom set (the sharpest
+expert, British/formal spelling at EVR 0.45, does retain an `amongst`/`among`/`whilst`/`realised`
+core), whereas the typical expert does not. Strikingly, the single _highest_-EVR expert
+(`L00 E06`, which fires on almost every prompt) is a complete grab-bag (`this`, `The`, `Kindle`,
+`Sutton`, `History`, ...) --- high EVR is not monosemanticity. The picture is consistent: real
+specialization is a thin on-theme layer over a polysemantic core. The measure is reproducible via
+`scripts/atom_polysemanticity.py`.
 
 == From Association to Causation: A Localizability Gradient <sec:causal>
 
@@ -270,12 +300,47 @@ does not move under expert steering at all.
 ($p_90$, 103 experts) leaves the country word-fraction at $0.33$ for the AtP set vs $0.47$ for a
 layer-matched random set (@fig:knockout): a real but small gap that never makes the concept
 disappear, and `numbers` shows no AtP-vs-random gap at all. With 8 experts active per token the
-model simply routes around any sparse set --- *top-$k$ redundancy*. This is the central negative
-result and the *opposite* of Head Pursuit @basile2025headpursuit, where editing as few as
-$approx 1%$ of the SOMP-identified _heads_ reliably suppresses or enhances a target concept: the
-descriptive SOMP story survives the head$->$expert transfer, the causal-_localization_ story does
-not. The right reading is that the AtP experts have causal _influence_ over the concept
-without being individually _necessary_ for it.
+model simply routes around any sparse set --- *top-$k$ redundancy*.
+
+This is the central negative result, and it is worth stating precisely against Head Pursuit
+@basile2025headpursuit, where editing as few as $approx 1%$ of the SOMP-identified _heads_ reliably
+suppresses or enhances a concept. Two things differ in our setting --- the _selector_ (SOMP vs
+gate-AtP) and the _operator_ (Head Pursuit rescales a component's whole contribution, knockout
+zeroes a gate) --- so to isolate the cause we re-ran Head Pursuit's _own_ operator, an $alpha = -1$
+output rescale, on the OLMoE experts (@tab:hp). On `countries` it moves the word-fraction only
+$0.60 -> 0.47$ on the SOMP experts --- _exactly_ the layer-matched random number ($0.47$) --- and
+$0.60 -> 0.43$ on the AtP experts; it never isolates a causal set. The descriptive SOMP story thus
+survives the head$->$expert transfer, but the causal-_localization_ story does not, and this holds
+under Head Pursuit's intervention as well as ours: the obstruction is the redundancy of $8$-of-$64$
+routing, not the choice of operator. Only our per-expert diff-of-means steering separates the causal
+set at all ($0.03$ for AtP vs $0.37$ for random). The right reading is that the AtP experts have
+causal _influence_ over the concept without being individually _necessary_ for it.
+
+#figure(
+  table(
+    columns: (1.4fr, auto, auto, auto, auto),
+    align: (left, right, right, right, right),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Intervention* (`countries`, base wf $0.60$)], [*SOMP*], [*AtP*], [*random*], [*distinct-1*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [Head Pursuit rescale ($alpha = -1$)],       [$0.47$], [$0.43$], [$0.47$], [$0.79$--$0.84$],
+    [knockout ($alpha = 0$)],                    [$0.40$], [$0.43$], [$0.47$], [$approx 0.82$],
+    [diff-of-means steer ($alpha = -5$, ours)],  [$0.30$ #text(fill: rgb("#b00"))[(d1 $0.66$)]], [$bold(0.03)$], [$0.37$], [$0.83$--$0.85$],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Head Pursuit's intervention vs ours on `countries` (word-fraction, lower = more removed; base
+$0.60$, $n_"test" = 30$). Head Pursuit's own $alpha = -1$ output rescale ties the layer-matched
+random control on every selector --- it does not isolate a causal set on experts --- and the SOMP
+set only "moves" under aggressive diff-of-means steering by collapsing coherence (distinct-1
+$0.66$). Only diff-of-means steering of the *gate-AtP* experts removes the concept cleanly ($0.03$
+vs $0.37$ random). The descriptive head$->$expert transfer survives; the causal-localization
+transfer does not, under Head Pursuit's operator as well as ours.
+  ],
+) <tab:hp>
 
 #figure(
   image("../figures/threshold_knockout.png", width: 85%),
@@ -319,6 +384,36 @@ needs $k = 40$ and $alpha = -5$ just to reach $0.43$ --- the distributed concept
 clean lever.
   ],
 ) <fig:steer>
+
+The numbers are easiest to read on the generations themselves (@fig:generation): steering the gate-AtP
+experts removes country names while the continuation stays fluent and on-topic, whereas knocking the
+same experts out leaves the country names in place. Fluency is read two ways --- the *distinct-1*
+unique-unigram ratio (held at $approx 0.79$ here, i.e. no degeneration) and the continuations
+themselves, which stay grammatical under steering.
+
+#figure(
+  table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Intervention*], [*Sample continuation, held-out `countries` prompt*],
+      table.hline(stroke: 0.5pt),
+    ),
+    [baseline],                   ["...the 2022 Olympics in Beijing, China ... held every four years..."],
+    [AtP-steer ($alpha {=} {-}5$)], ["...a place called Tokyo ... you can just go to a different country and use it there..."],
+    [AtP-knockout],               ["...the 2024 Olympics in Paris, France ... held every four years..."],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Generation under intervention (greedy decoding, held-out `countries` prompts). Steering the gate-AtP
+experts strips country names while keeping the text fluent (country word-fraction $0.68 -> 0.05$,
+distinct-1 $approx 0.79$); knocking the same experts out leaves the names intact (word-fraction
+$0.5$). The steered text is grammatical --- it simply stops naming countries --- which is how
+"clean removal" differs from the degeneration a distinct-1 collapse would flag.
+  ],
+) <fig:generation>
 
 === Specificity, and Why SOMP Only "Works" by Breaking Generation
 
@@ -434,19 +529,65 @@ diffuse $->$ no expert handle.
   ],
 ) <tab:gradient>
 
+=== Stress-Testing the Redundancy: Sufficiency and Co-Firing Groups
+
+Two further checks confirm the toxicity knockout is redundancy-bound, not mis-targeted. A
+*sufficiency curve* knocks out the top-$j$ experts of each selector for growing $j$ and scores the
+held-out toxic probe (@tab:sufficiency; throughout this subsection, following the table convention,
+*positive = less toxic*). The gate-AtP set lowers toxicity _monotonically_ at the reported budgets
+but the reduction only reaches $+0.21$ at $j = 103$ (10% of all experts), and it is the _only_
+selector whose effect is statistically resolved (95% bootstrap CI $[+0.11, +0.30]$ at $j = 103$);
+SOMP and random straddle zero at every budget, and SOMP even _raises_ toxicity at large $j$.
+Distinct-1 holds at $approx 0.83$ throughout, so these are coherent ablations, not degradation. A
+*co-firing group ablation* agrees: padding the 15 AtP experts with their four top co-firing
+neighbours each (69 experts) deepens the reduction to $+0.16$ (probe $2.07 -> 1.91$) versus only
+$+0.02$ for a size-matched random group --- better, and causal, but still nowhere near removal. Sparse knockout is defeated by redundant routing even
+when the set is causal and enlarged along co-firing structure; only direction-level steering removes
+the concept.
+
+#figure(
+  table(
+    columns: (1fr, auto, auto, auto, auto),
+    align: (left, right, right, right, right),
+    stroke: none,
+    table.hline(stroke: 0.8pt),
+    table.header(
+      [*Selector*], [$j = 1$], [$j = 10$], [$j = 50$], [$j = 103$],
+      table.hline(stroke: 0.5pt),
+    ),
+    [gate-AtP], [$+0.01$], [$+0.09$], [$+0.11$], [$bold(+0.21)$],
+    [SOMP],     [$0.00$],  [$+0.03$], [$-0.05$], [$-0.10$],
+    [random],   [$+0.03$], [$+0.03$], [$-0.02$], [$-0.04$],
+    table.hline(stroke: 0.8pt),
+  ),
+  caption: [
+Sufficiency curve: reduction in the toxic-logit probe (baseline $+2.07$; positive = less toxic) as
+the top-$j$ experts of each selector are knocked out, held-out $n_"test" = 64$, distinct-1
+$approx 0.83$ throughout. Only gate-AtP falls monotonically, and only its $j = 103$ point is
+bootstrap-significant (95% CI $[+0.11, +0.30]$); SOMP and random straddle zero. Knocking out even
+$10%$ of all experts leaves most toxicity intact --- top-$k$ redundancy.
+  ],
+) <tab:sufficiency>
+
 == Cross-Model Check: GPT-OSS-20B
 
 We re-ran the pipeline on a second, larger model --- `openai/gpt-oss-20b`, a 24-layer sparse MoE
 with 32 local experts per layer, top-4 routing, and hidden size 2880 @openai2025gptoss --- to test
 whether the central claims are architecture-specific. They are not. Three findings replicate. (1)
 *Polysemanticity*: the median per-expert EVR is $0.042$ (pile-10k extraction), essentially
-identical to OLMoE's $0.041$, so a single readout under-reads experts in both models. (2) *AtP
+identical to OLMoE's $0.042$ on the same pile-10k extraction, so a single readout under-reads experts in both models.
+Qualitatively, though, gpt-oss's experts are _less lexically interpretable_: even on TriviaQA its
+highest-EVR experts are dominated by multilingual fragments, code, and punctuation rather than the
+clean semantic categories OLMoE shows (@tab:experts), consistent with its 200k multilingual vocabulary
+and coarser top-4 routing --- so the clean per-expert _token_ summaries are an OLMoE phenomenon even
+though the low-EVR polysemanticity is shared. (2) *AtP
 faithfulness*: gate-AtP tracks the exhaustive patching grid even more closely here than on OLMoE
 (pooled Pearson $r approx 0.77$), reinforcing that the cheap one-pass gradient stands in for the
 expensive sweep across architectures --- the reason patching is not part of the pipeline. (3)
-*Knockout redundancy*: on a held-out toxicity split, top-8 expert knockout is again near-inert for
-every selector (AtP and SOMP each $approx -0.06$, random $approx 0$), the same top-$k$ redundancy
-seen on OLMoE. The steering arm is noisier here: this run identified the experts on only
-$n_"train" = 16$ prompts (a fraction of OLMoE's 100), so the per-selector intervention picture is
-unreliable and we read GPT-OSS as a *replication of the descriptive and faithfulness claims* rather
+*Knockout redundancy*: on a held-out toxicity split the causal gate-AtP set again separates from
+random, but no selector cleanly removes toxicity --- top-8 knockout lowers the probe by
+$approx 0.4$ for AtP versus $approx 0$ for random, yet with coherence loss (distinct-1
+$approx 0.65$) and a sizeable collateral drop on the _neutral_ prompts ($approx 0.2$), so the
+effect is neither clean nor specific. With only $n_"train" = 50$ / $n_"test" = 30$ prompts the per-selector intervention picture
+is noisy, so we read GPT-OSS as a *replication of the descriptive and faithfulness claims* rather
 than a second intervention study.

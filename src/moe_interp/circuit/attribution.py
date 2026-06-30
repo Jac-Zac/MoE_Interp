@@ -3,17 +3,20 @@
 The causal localizer for the toxic-expert circuit, and the canonical reference for its
 validation (other modules point here). Whole-expert ablation needs one forward *per expert*;
 attribution patching estimates every expert's effect from a single backward pass via a
-first-order Taylor expansion. For the ablation baseline (gate -> 0), the predicted change in
-the metric from removing expert ``e`` is
+first-order Taylor expansion. Zeroing expert ``e``'s gate (``g_e -> 0``) changes the metric,
+to first order, by ``-g_e · dL/dg_e``; we store the expert's *contribution* — the negative of
+that, i.e. how much the metric would drop on ablation:
 
-    attribution_e  ≈  - g_e · dL/dg_e            (summed over token positions)
+    attribution_e  ≈  g_e · dL/dg_e              (summed over token positions)
 
 where ``g_e`` is the router gate weight wherever expert ``e`` was selected and ``L`` is the
 toxic-logit metric. The gate weights are real differentiable tensors at the fused-experts
 boundary (the per-expert hidden neurons are not materialised by the fused kernel, so the gate
 is the finest node we can take gradients of here). A large positive attribution means "this
 expert pushes the metric up; ablating it would push it down" — summed over the top-ranked
-experts it gives the *distributed* circuit.
+experts it gives the *distributed* circuit. (Sign: this is the same convention as the patching
+grid's ``base - ablated``, with which the stored grid correlates +0.69; a leading minus would
+flip it to anti-correlation.)
 
 gate-AtP is a first-order approximation of exhaustive activation patching (zero each gate in a
 separate forward pass). The two were checked once on the toxicity grid and agreed closely
@@ -26,13 +29,13 @@ from __future__ import annotations
 import torch
 
 from moe_interp.capture.model_adapter import model_num_experts
-from moe_interp.circuit.toxicity import relative_logit_score, right_padded
+from moe_interp.circuit.concept_probe import relative_logit_score, right_padded
 
 
 def gate_attribution(
     model,
     prompts: list[list[int]],
-    toxic_ids: list[int],
+    concept_ids: list[int],
     batch_size: int = 8,
 ) -> torch.Tensor:
     """Per-(layer, expert) attribution for the toxic-logit metric.
@@ -62,7 +65,7 @@ def gate_attribution(
                 logits = model.output.logits
                 rows = torch.arange(logits.shape[0])
                 last = logits[rows, lengths - 1]
-                metric = relative_logit_score(last, toxic_ids).sum()
+                metric = relative_logit_score(last, concept_ids).sum()
                 # nnsight: backward() is a context manager; read .grad INSIDE it, in
                 # reverse execution order (see nnsight.net/features/3_gradients).
                 with metric.backward():

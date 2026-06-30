@@ -6,7 +6,7 @@ outputs using the same SOMP-based sparse coding framework.
 
 == Dataset
 
-We use TriviaQA @joshi2017triviaqa (RC configuration, train split, $n = 50,000$), following
+We use TriviaQA @joshi2017triviaqa (RC configuration, train split, $n = 10,000$), following
 the Head Pursuit setup. Each question is one document. Questions are wrapped in the model's chat
 template without any additional QA prompt --- only the raw question text is presented to the
 model.
@@ -36,9 +36,9 @@ SOMP. Documents where expert $e$ receives no routed tokens are excluded.
 
 == SOMP Decomposition
 
-For each expert, we run SOMP with the L2-normalized unembedding matrix as dictionary and
-$T = 25$ iterations. This produces a ranked list of vocabulary tokens that best explain the
-expert's variance across questions, along with cumulative EVR scores.
+For each expert, we run SOMP (@app:somp-alg) with the L2-normalized unembedding matrix as
+dictionary and $T = 25$ iterations. This produces a ranked list of vocabulary tokens that best
+explain the expert's variance across questions, along with cumulative EVR scores.
 
 == Analysis Modes
 
@@ -112,11 +112,14 @@ We compare three ways to pick a concept's top-$k$ experts:
 - *SOMP* (correlational) --- experts whose pursuit atoms most overlap the concept lexicon; the
   no-forward-pass, association-only baseline.
 - *Gate-AtP* (causal) --- one backward pass. Attribution patching @kramar2024atp estimates every
-  expert's gate-ablation effect from a first-order expansion,
-  $ "AtP"(l,e) approx - sum_("pos") g_e dot (dif cal(L)) / (dif g_e), quad cal(L) = sum_("prompt") s_(cal(C)), $ <eq:atp>
+  expert's contribution to the metric from a first-order expansion: zeroing a gate ($g_e -> 0$)
+  changes the metric by $approx - g_e dot (dif cal(L))/(dif g_e)$, so the expert's _contribution_
+  --- how far the probe would drop on ablation --- is the negative of that,
+  $ "AtP"(l,e) approx sum_("pos") g_e dot (dif cal(L)) / (dif g_e), quad cal(L) = sum_("prompt") s_(cal(C)), $ <eq:atp>
   where $g_e$ is the gate weight wherever expert $e$ fired. Sign: positive = the expert raises the
-  concept score, so ablating it would lower it. This is our causal selector, driving every
-  intervention below.
+  concept score, so ablating it would lower it (the same sign as the patching grid @eq:patch, with
+  which it correlates $r approx +0.69$; see @sec:results). This is our causal selector, driving
+  every intervention below; @app:atp-alg gives the one-pass procedure.
 - *Random* (control) --- $k$ random experts in the same layers as the AtP set, isolating whether
   it has to be _these_ experts.
 
@@ -137,14 +140,23 @@ activation, never on the residual stream --- so a positive effect is attributabl
 and nothing else. Each selected set is hit with one of two interventions, applied at every decoded
 step of greedy generation and read out on the held-out prompts:
 
-- *Knockout* (necessity) --- zero the gates of the top-$k$ experts. Asks: is any sparse expert set
-  _necessary_ for the concept?
+- *Knockout* (necessity) --- zero the gates of the top-$k$ experts. The simplest, scale-free test,
+  and our headline. Asks: is any sparse expert set _necessary_ for the concept?
 - *Expert-output steering* (influence) --- add $alpha bold(v)_e$ to each selected expert's *output*
   activation, where $bold(v)_e$ is the toxic$-$neutral diff-of-means in that expert's output space
   and $alpha < 0$ subtracts the concept direction. The shift enters the residual as
   $g_(t,e) dot alpha bold(v)_e$ only at the tokens routed to expert $e$ (gate-weighted, per-expert),
-  so it never stacks an unscaled edit across layers. Asks: do the selected experts carry enough of
-  the concept that nudging _just them_ removes it?
+  so it never stacks an unscaled edit across layers. Note that $alpha$ scales the small per-expert
+  diff-of-means ($norm(bold(v)_e) approx 1.4$), _not_ the residual stream: the natural unit is
+  $alpha = -1$, which lands the expert's output on the _neutral_ centroid (subtracts exactly one
+  toxic$->$neutral gap); $abs(alpha) > 1$ overshoots and is reported only as a dose--response,
+  policed by the distinct-1 guard. Asks: do the selected experts carry enough of the concept that
+  nudging _just them_ removes it?
+- *Directional ablation* (influence, scale-free) --- the Arditi-style @arditi2024refusal alternative
+  with no $alpha$ to tune: project each selected expert's output off the unit direction
+  $hat(bold(v))_e$, i.e. $bold(f)_e -> bold(f)_e - (bold(f)_e dot hat(bold(v))_e) hat(bold(v))_e$,
+  removing the whole concept component and nothing else. Implemented in
+  `expert_ablate_intervention`.
 
 Scoring is held-out and multi-signal: the mean probe value over the continuation (lower = less
 concept), the literal word-fraction, the *neutral* prompts as a collateral/specificity check, and

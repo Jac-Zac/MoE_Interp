@@ -5,7 +5,7 @@ we suppress toxicity by acting on them? Modules:
 
 - ``prompts``     — RealToxicityPrompts split: ``rtp_split`` gives disjoint train (identify)
   / test (evaluate) eliciting+neutral sets so the intervention is scored out-of-sample.
-- ``toxicity``    — toxic-logit metric, shared ablation plumbing, whole-set significance test.
+- ``concept_probe`` — concept-logit metric, shared ablation plumbing, whole-set significance test.
 - ``attribution`` — gate-AtP: a one-backward-pass causal effect grid over (layer, expert); the
   causal localizer. See ``attribution.py`` for the method and its one-off patching validation.
 - ``compare``     — the intervention propensity bar chart.

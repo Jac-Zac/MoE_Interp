@@ -2,7 +2,7 @@
 
 We presented Expert Pursuit, an adaptation of Head Pursuit to MoE expert FFNs. By running
 SOMP on aggregated gated outputs against the unembedding dictionary, we obtain human-readable
-token summaries for each expert. Applied to OLMoE-1B-7B-Instruct on 50,000 TriviaQA
+token summaries for each expert. Applied to OLMoE-1B-7B-Instruct on 10,000 TriviaQA
 questions, the method recovers interpretable specialists in numbers, geography, names,
 biology, kinship, and entertainment, concentrated in the later layers. The concept-
 restricted mode enables targeted queries that confirm and quantify specialization along
@@ -26,8 +26,10 @@ First, the separating signal is *influence, not necessity*: localized steering o
 experts removes a localizable concept cleanly (country word-fraction $0.60 -> 0.03$ with coherence
 intact) and does so _specifically_ (the other concept survives), yet knocking the same experts out
 --- even the top $10%$ of all experts --- never removes the concept, because top-$k$ routing is
-redundant. This is the opposite of Head Pursuit's strongly-causal heads: the SOMP _description_
-transfers from heads to experts but the causal _localization_ does not. Second, the correlational
+redundant. The SOMP _description_ transfers from heads to experts, but the causal _localization_
+does not --- and this holds even under Head Pursuit's own $alpha = -1$ rescale intervention, which
+on our experts ties a layer-matched random control (@tab:hp): the obstruction is $8$-of-$64$
+routing redundancy, not the choice of intervention. Second, the correlational
 SOMP selector is never cleanly causal --- where it lowers a metric it does so only by collapsing
 generation into garbage (distinct-1 $0.27$--$0.59$), a failure a coherence guard exposes
 immediately. A cheap one-pass gate gradient recovers the causal influence faithfully
@@ -53,20 +55,17 @@ paper-strength _causal_ claim, roughly in order of importance.
   logit probe as a cheap proxy, is the single largest credibility upgrade and pairs naturally
   with the existing held-out split.
 
-- *Stress-test the redundancy claim and add uncertainty.* A *sufficiency curve* --- concept drop
-  versus number of experts ablated, for gate-AtP vs SOMP vs random --- would test the top-$k$
-  redundancy explanation directly; a random-dictionary / PCA ceiling would calibrate the EVR
-  result against the floor that $k$ free atoms give; and bootstrap confidence intervals on
-  $r approx 0.69$ and the small intervention deltas would quantify the noise from the small
-  prompt sets.
+- *Calibrate the EVR floor.* A random-dictionary / PCA ceiling would calibrate the EVR result
+  against the floor that $k$ free atoms give (the sufficiency curve and co-firing group ablation
+  in @sec:causal already confirm the top-$k$ redundancy account, and bootstrap CIs resolve the
+  one significant knockout effect).
 
-- *Cross-layer paths and expert groups.* Since semantics in MoEs appear to live in routing
-  trajectories rather than single experts @monosemanticpaths2026, and single-expert knockout is
-  redundant, decomposing and intervening *along an expert path* (the sequence of experts a token
-  routes through) or on expert *groups* rather than individuals is the natural fix for the
-  redundancy that defeats sparse knockout.
+- *Cross-layer paths.* Since semantics in MoEs appear to live in routing trajectories rather than
+  single experts @monosemanticpaths2026, and even co-firing _groups_ are knockout-redundant,
+  decomposing and intervening *along an expert path* (the sequence of experts a token routes
+  through) is the natural next fix for the redundancy that defeats sparse knockout.
 
 - *Scale the second study.* The GPT-OSS run replicates the descriptive and faithfulness claims
-  but identified experts on only $n_"train" = 16$ prompts; re-running the full held-out circuit at
+  but identified experts on only $n_"train" = 50$ prompts; re-running the full held-out circuit at
   OLMoE scale, adding a third model (Mixtral @jiang2024mixtral, DeepSeek-MoE @dai2024deepseekmoe)
   and more concepts, would turn the replication into a genuine cross-architecture result.

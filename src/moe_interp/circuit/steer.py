@@ -16,17 +16,18 @@ import torch
 
 from moe_interp.analysis.common import load_somp_results
 from moe_interp.capture.model_adapter import get_model_adapter, model_num_experts
+from moe_interp.circuit.concept_probe import right_padded
 from moe_interp.circuit.intervene import (
     concept_propensity,
+    expert_ablate_intervention,
     expert_steer_intervention,
     generate,
     knockout_intervention,
     run_intervention_experiment,
 )
-from moe_interp.circuit.toxicity import right_padded
 from moe_interp.config import get_model_dir, get_pursuit_dir
 from moe_interp.grids import top_experts
-from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_toxic_token_ids
+from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_concept_token_ids
 
 
 def _matched_random_set(
@@ -223,8 +224,9 @@ def run_expert_steer(
     max_new_tokens: int,
     train: tuple[list[list[int]], list[list[int]]],
     test: tuple[list[list[int]], list[list[int]]],
-    alphas: tuple[float, ...] = (5.0, -5.0, -10.0),
+    alphas: tuple[float, ...] = (5.0, -1.0, -5.0, -10.0),
     atp_grid_path=None,
+    ablate: bool = True,
 ) -> dict:
     """Expert-level causal interventions on each identifier's experts (SOMP / AtP) vs random.
 
@@ -246,7 +248,7 @@ def run_expert_steer(
     """
     eliciting_eval, neutral_eval = test
     concept_words = CONCEPT_WORDS[concept]
-    concept_ids = build_toxic_token_ids(model.tokenizer, concept_words)
+    concept_ids = build_concept_token_ids(model.tokenizer, concept_words)
 
     sets, dom = _sets_and_dom(
         model,
@@ -258,10 +260,14 @@ def run_expert_steer(
         atp_grid_path=atp_grid_path,
     )
 
+    adapter = get_model_adapter(model)
     methods: dict = {"baseline": None}
     for name, experts in sets.items():
         methods[f"knockout-{name}"] = knockout_intervention(experts)
         v_set = {le: dom[le] for le in experts if le in dom}
+        # Directional ablation: scale-free projection off the concept direction (no alpha to tune)
+        if ablate:
+            methods[f"ablate-{name}"] = expert_ablate_intervention(v_set, adapter)
         for a in alphas:
             methods[f"esteer({a:+g})-{name}"] = expert_steer_intervention(v_set, a)
 
@@ -312,7 +318,7 @@ def run_dose_response(
     separates from random as the budget grows. Cheap: reuses the same ``v_e`` for every budget.
     """
     eliciting_eval = test[0]
-    concept_ids = build_toxic_token_ids(model.tokenizer, CONCEPT_WORDS[concept])
+    concept_ids = build_concept_token_ids(model.tokenizer, CONCEPT_WORDS[concept])
 
     sets, dom = _sets_and_dom(
         model,

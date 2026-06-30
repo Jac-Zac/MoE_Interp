@@ -29,7 +29,7 @@ from moe_interp.circuit.prompts import rtp_split
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.grids import top_experts
 from moe_interp.io.plots import diverging_expert_heatmap
-from moe_interp.pursuit.concepts import build_toxic_token_ids
+from moe_interp.pursuit.concepts import build_concept_token_ids
 
 # %% Configuration
 load_dotenv()
@@ -47,7 +47,7 @@ cdir = get_model_dir(MODEL_NAME) / "circuit"
 device_map = os.environ.get("DEVICE_MAP", str(get_device()))
 model = LanguageModel(MODEL_NAME, device_map=device_map, dtype="auto", dispatch=True)
 toxic_prompts, _, _, _ = rtp_split(model.tokenizer, n_train=N_PROMPTS, n_test=N_TEST)
-toxic_ids = build_toxic_token_ids(model.tokenizer)
+toxic_ids = build_concept_token_ids(model.tokenizer)
 print(
     f"{len(toxic_prompts)} RTP eliciting prompts (train) · {len(toxic_ids)} toxic ids"
 )

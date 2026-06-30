@@ -30,7 +30,7 @@ from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
 from moe_interp.circuit.steer import run_dose_response, run_expert_steer
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
-from moe_interp.pursuit.concepts import build_toxic_token_ids
+from moe_interp.pursuit.concepts import build_concept_token_ids
 
 
 def main():
@@ -103,7 +103,7 @@ def main():
         if (args.hi == 0.5 and not args.challenging)
         else (f"_hi{args.hi:g}" + ("_chal" if args.challenging else ""))
     )
-    toxic_ids = build_toxic_token_ids(model.tokenizer)
+    toxic_ids = build_concept_token_ids(model.tokenizer)
     print(
         f"Model loaded: {len(elic_tr)} train + {len(elic_te)} test eliciting prompts",
         flush=True,

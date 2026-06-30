@@ -23,7 +23,7 @@ from collections.abc import Callable
 
 import torch
 
-from moe_interp.circuit.toxicity import relative_logit_score
+from moe_interp.circuit.concept_probe import relative_logit_score
 from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 
@@ -81,6 +81,54 @@ def expert_steer_intervention(
                     dim=-1
                 )  # (n_tokens,) gate of e, 0 if unrouted
                 delta += gate_e.unsqueeze(-1) * (alpha * vt)
+            h[:] = h + delta.to(h.dtype).reshape(h.shape)
+
+    return fn
+
+
+def expert_ablate_intervention(
+    v_by_le: dict[tuple[int, int], torch.Tensor], adapter
+) -> Callable:
+    """Directional ablation (Arditi-style, *scale-free*): project each named expert's output off
+    its concept direction instead of adding a hand-tuned ``alpha``.
+
+    Where :func:`expert_steer_intervention` adds ``alpha * v_e`` (and so needs an ``alpha`` whose
+    "natural" value is ``-1`` = land on the neutral centroid), directional ablation removes the
+    *whole* component of the expert's output along the unit direction ``hat(v)_e`` and nothing
+    else: ``out_e -> out_e - <out_e, hat(v)_e> hat(v)_e``. There is no magnitude to choose — it
+    erases exactly the concept direction. The residual change at a token routed to ``e`` is
+
+        ``- gate_{t,e} * <out_e, hat(v)_e> * hat(v)_e``
+
+    To form ``<out_e, hat(v)_e>`` we recompute the expert's raw output on its routed tokens with
+    ``adapter.expert_forward`` (same path as
+    :func:`~moe_interp.circuit.steer.collect_expert_output_dom`), reading the MoE-block input and
+    the live router gate from ``experts.inputs``. ``v_by_le`` maps ``(layer, expert) -> v_e``
+    (un-normalized diff-of-means is fine; we normalize here)."""
+    import torch.nn.functional as F
+
+    by_layer: dict[int, list[tuple[int, torch.Tensor]]] = {}
+    for (layer, e), v in v_by_le.items():
+        by_layer.setdefault(layer, []).append((e, F.normalize(v.float(), dim=0)))
+
+    def fn(model):
+        for layer in sorted(by_layer):
+            L = model.model.layers[layer]
+            h_in, idx, w = L.mlp.experts.inputs[0]  # h_in:(n_tok,D) idx,w:(n_tok,top_k)
+            experts_mod = L.mlp.experts
+            h = L.output  # (B, T, D) residual after this layer's MoE
+            delta = torch.zeros(
+                idx.shape[0], h.shape[-1], device=h.device, dtype=torch.float32
+            )
+            for e, vhat in by_layer[layer]:
+                routed = (idx == e).any(dim=-1)
+                if not bool(routed.any()):
+                    continue
+                vt = vhat.to(h.device, torch.float32)
+                out_e = adapter.expert_forward(experts_mod, e, h_in[routed].float())
+                proj = (out_e @ vt).unsqueeze(-1) * vt  # component along hat(v)_e
+                gate_e = (w.float() * (idx == e)).sum(dim=-1)[routed]  # (n_routed,)
+                delta[routed] -= gate_e.unsqueeze(-1) * proj
             h[:] = h + delta.to(h.dtype).reshape(h.shape)
 
     return fn

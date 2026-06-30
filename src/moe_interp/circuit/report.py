@@ -9,6 +9,7 @@ so far.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,58 @@ def _table(headers: Sequence[Any], rows: Iterable[Sequence[Any]]) -> str:
 
 def _heatmap(grid: np.ndarray, title: str, cbar: str) -> go.Figure:
     return diverging_expert_heatmap(grid, title=title, colorbar_title=cbar, height=460)
+
+
+def _examples_html(em: dict) -> str:
+    """Side-by-side baseline-vs-intervention sample continuations, grouped per prompt.
+
+    The methods iterate the same eliciting prompts in the same order, so example ``i`` is the
+    *same prompt* across methods. We show the baseline (no edit), the causal knockout (necessity),
+    and the strongest causal vs SOMP steer (influence vs degradation), letting the reader see the
+    actual text behind the propensity numbers. The prompt text itself is not stored, only the
+    continuation.
+    """
+
+    def strongest_esteer(sel: str) -> str | None:
+        best, best_a = None, None
+        for k, v in em.items():
+            m = re.fullmatch(rf"esteer\(([-+0-9.]+)\)-{sel}", k)
+            if m and v.get("examples"):
+                a = float(m.group(1))
+                if a < 0 and (best_a is None or a < best_a):
+                    best, best_a = k, a
+        return best
+
+    chosen: list[tuple[str, str]] = []
+    if em.get("baseline", {}).get("examples"):
+        chosen.append(("baseline", "baseline (no intervention)"))
+    if em.get("knockout-AtP", {}).get("examples"):
+        chosen.append(("knockout-AtP", "AtP knockout (necessity)"))
+    for sel in ("AtP", "SOMP"):
+        k = strongest_esteer(sel)
+        if k:
+            chosen.append(
+                (k, f"{sel} steer {k[k.index('(') : k.index(')') + 1]} (influence)")
+            )
+    if not chosen:
+        return ""
+
+    n = min(len(em[k]["examples"]) for k, _ in chosen)
+    blocks = []
+    for i in range(n):
+        rows = "".join(
+            f'<div class="ex"><b>{label}:</b> {em[k]["examples"][i] or "∅"}</div>'
+            for k, label in chosen
+        )
+        blocks.append(
+            f"<p style='margin:.8rem 0 .2rem'><b>Prompt {i + 1}</b></p>{rows}"
+        )
+    return (
+        "<h4>Sample generations (baseline vs intervention)</h4>"
+        '<p class="note">Greedy continuations of the same held-out eliciting prompts under each '
+        "intervention (same prompt order across methods, so each block is one prompt). The prompt "
+        "text is not stored — only the continuation.</p>" + "".join(blocks)
+    )
 
 
 def build_report(model_name: str) -> Path:
@@ -317,6 +370,8 @@ def build_report(model_name: str) -> Path:
                 "causal set shows propensity falling <b>monotonically</b> for the causal selectors "
                 "(solid) while the matched-random control (dotted) stays flat near baseline.</p>"
             )
+
+        parts.append(_examples_html(em))
 
     nav = (
         '<nav><a href="#overview">Overview</a> · <a href="#methods">Methods</a> · '
