@@ -20,8 +20,9 @@
 #   pursuit   -> pursuit/<dataset>/results.jsonl,evr_matrix  (tab:experts, median EVR, EVR range)
 #   concepts  -> pursuit/<dataset>/{offensive,countries,numbers}/  (SOMP selector + tab:numbers)
 #   analysis  -> analysis/<dataset>/logit_lens_comparison.json     (tab:lens: SOMP vs logit lens)
-#   circuit   -> circuit/{attribution,steer}/...           (tab:intervene, fig:steer, dose-response)
-#   rigor     -> circuit/rigor/...                         (sufficiency curve, group ablation, CIs)
+#   circuit    -> circuit/attribution/... + report.html    (gate-AtP localization + faithfulness)
+#   downweight -> circuit/downweight/sweep_<concept>.json   (knockout/downweighting sweep + CIs)
+#   rigor      -> circuit/rigor/...                         (sufficiency curve, group ablation, CIs)
 #
 # Datasets the report uses (per table):
 #   tab:experts / median EVR  -> TriviaQA  (OLMoE headline; cleanest specialists)
@@ -98,10 +99,16 @@ do_analysis() {  # logit-lens vs SOMP on $1 = dataset (tab:lens)
   $PY main.py analysis --model "$MODEL" --dataset "$1"
 }
 
-do_circuit() {   # gate-AtP localization + expert interventions + dose-response + report (offensive)
+do_circuit() {   # gate-AtP localization + localization report (offensive)
   echo ">> circuit (offensive) n_prompts=$N_PROMPTS n_test=$N_TEST"
   $PY scripts/cineca/circuit_runner.py --model "$MODEL" \
-      --n-prompts "$N_PROMPTS" --n-test "$N_TEST" --knockout-k 15 --max-new-tokens 24
+      --n-prompts "$N_PROMPTS" --n-test "$N_TEST"
+}
+
+do_downweight() { # knockout/downweighting sweep, SOMP/AtP/random at 1% & 5% budgets (needs do_circuit grid)
+  echo ">> downweight sweep (offensive) n_prompts=$N_PROMPTS n_test=$N_TEST"
+  $PY scripts/cineca/downweight_runner.py --model "$MODEL" \
+      --n-prompts "$N_PROMPTS" --n-test "$N_TEST"
 }
 
 do_rigor() {     # extra rigor analyses (need the offensive circuit grid from do_circuit first)
@@ -110,7 +117,8 @@ do_rigor() {     # extra rigor analyses (need the offensive circuit grid from do
   $PY scripts/rigor/group_ablation.py    --model "$MODEL" --n-prompts "$N_PROMPTS" --n-test "$N_TEST"
   # bootstrap CIs run on the JSON the steps above wrote (no model needed):
   $PY scripts/rigor/bootstrap.py \
-      "$MODEL_DIR/circuit/steer/offensive/expert_intervention.json" || true
+      "$MODEL_DIR/circuit/rigor/sufficiency_offensive.json" \
+      "$MODEL_DIR/circuit/rigor/group_ablation_offensive.json" || true
 }
 
 case "$STEP" in
@@ -119,18 +127,19 @@ case "$STEP" in
   concepts)     do_concepts ;;
   analysis)     do_analysis pile10k ;;
   circuit)      do_circuit ;;
+  downweight)   do_downweight ;;
   rigor)        do_rigor ;;
   report-repro)
     # The minimal set to reproduce this model's report numbers from scratch.
     if [ "$MODEL_KEY" = olmoe ]; then do_extract triviaqa 50000; do_pursuit triviaqa; fi
     do_extract pile10k; do_pursuit pile10k; do_analysis pile10k
-    do_extract rtp; do_concepts; do_circuit
+    do_extract rtp; do_concepts; do_circuit; do_downweight
     ;;
   all)
     do_extract "$HEADLINE_DATASET" $([ "$MODEL_KEY" = olmoe ] && echo 50000)
     do_extract pile10k; do_extract rtp
     do_pursuit "$HEADLINE_DATASET"; do_pursuit pile10k
-    do_concepts; do_analysis pile10k; do_circuit; do_rigor
+    do_concepts; do_analysis pile10k; do_circuit; do_downweight; do_rigor
     ;;
   *) echo "Unknown step '$STEP'"; sed -n '2,40p' "$0"; exit 1 ;;
 esac

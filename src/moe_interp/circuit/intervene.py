@@ -1,19 +1,16 @@
-"""Generation-time interventions to suppress a concept — the causal capstone.
+"""Generation-time gate interventions to suppress a concept — the causal capstone.
 
 Gate-AtP identifies which experts *cause* the concept. Here we act on those experts (and no
 other locus — every intervention is expert-level, never on the residual stream): during greedy
-generation we either **knock out** the selected experts (zero their router gate) or **steer
-their output** (add ``α·v_e`` to each expert's MLP output, ``v_e`` the diff-of-means in
-expert-output space), and measure the change in the concept propensity versus the un-intervened
-baseline. Two controls keep it honest: a **random** expert set (specificity — does it have to be
-*these* experts?) and a **neutral** prompt set (collateral — does the intervention break ordinary
-generation?).
+generation we scale the selected experts' router gate, either zeroing it (**knockout**) or
+multiplying it by a factor (**downweighting**), and measure the change in the concept propensity
+versus the un-intervened baseline.
 
 A concept is scored three ways: the mean **concept-logit propensity** over the generated
 continuation (the sensitive probe), a lexical **concept-word rate** in the decoded text, and a
 **distinct-1** coherence guard. Lower propensity/word-rate = less of the concept — but only if
 distinct-1 stays healthy (≈0.6–0.9); a drop with collapsed distinct-1 is degraded text, not
-removal. Generated text is kept for qualitative inspection.
+removal.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ from collections.abc import Callable
 import torch
 
 from moe_interp.circuit.concept_probe import relative_logit_score
-from moe_interp.pursuit.concepts import CONCEPT_WORDS
 
 
 def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
@@ -44,92 +40,23 @@ def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
     return fn
 
 
-def expert_steer_intervention(
-    v_by_le: dict[tuple[int, int], torch.Tensor], alpha: float
-) -> Callable:
-    """Steer the *output activation* of named experts by ``alpha * v_e`` (DoM in expert space).
+def gate_scale_intervention(experts: list[tuple[int, int]], scale: float) -> Callable:
+    """Scale the router gate of each ``(layer, expert)`` by ``scale`` (partial knockout).
 
-    This is the steering experiment done at expert granularity. The model adds
-    ``gate_{t,e} * f_e(h_t)`` to the residual, where ``f_e`` is expert ``e``'s raw MLP output and
-    ``gate`` its (normalised) router weight. Shifting that output ``f_e -> f_e + alpha * v_e``
-    therefore changes the residual by ``gate_{t,e} * alpha * v_e`` at exactly the tokens routed to
-    ``e`` — which is what we add here, reading the live router gate from ``experts.inputs``.
-
-    ``v_e`` is the per-expert diff-of-means in expert-output space (toxic - neutral; see
-    :func:`~moe_interp.circuit.steer.collect_expert_output_dom`), so ``alpha = -1`` subtracts one
-    unit of the toxic direction from the expert (detox), ``alpha = +1`` amplifies it. The shift is
-    per-expert and gate-weighted: it lands only at tokens routed to ``e`` and is scaled by the live
-    router gate, so it is never stacked unscaled across layers.
-
-    ``v_by_le`` maps ``(layer, expert) -> v_e`` (model-dim); experts absent here are left alone.
+    ``scale=0.0`` zeros the gate (identical to :func:`knockout_intervention` — full removal);
+    ``scale=0.9`` is a 10% downweight, ``scale=0.5`` a 50% downweight. The expert's contribution
+    to the residual is ``gate_{t,e} * f_e(h_t)``, so scaling the live gate by ``scale`` scales that
+    contribution at exactly the tokens routed to ``e`` and leaves every other expert untouched.
     """
-    by_layer: dict[int, list[tuple[int, torch.Tensor]]] = {}
-    for (layer, e), v in v_by_le.items():
-        by_layer.setdefault(layer, []).append((e, v))
+    by_layer: dict[int, list[int]] = {}
+    for layer, e in experts:
+        by_layer.setdefault(layer, []).append(e)
 
     def fn(model):
-        for layer in sorted(by_layer):
-            L = model.model.layers[layer]
-            _, idx, w = L.mlp.experts.inputs[0]  # idx,w: (n_tokens, top_k)
-            h = L.output  # (B, T, D) residual after this layer's MoE
-            delta = torch.zeros(
-                idx.shape[0], h.shape[-1], device=h.device, dtype=torch.float32
-            )
-            for e, v in by_layer[layer]:
-                vt = v.to(h.device, torch.float32)
-                gate_e = (w.float() * (idx == e)).sum(
-                    dim=-1
-                )  # (n_tokens,) gate of e, 0 if unrouted
-                delta += gate_e.unsqueeze(-1) * (alpha * vt)
-            h[:] = h + delta.to(h.dtype).reshape(h.shape)
-
-    return fn
-
-
-def expert_ablate_intervention(
-    v_by_le: dict[tuple[int, int], torch.Tensor], adapter
-) -> Callable:
-    """Directional ablation (Arditi-style, *scale-free*): project each named expert's output off
-    its concept direction instead of adding a hand-tuned ``alpha``.
-
-    Where :func:`expert_steer_intervention` adds ``alpha * v_e`` (and so needs an ``alpha`` whose
-    "natural" value is ``-1`` = land on the neutral centroid), directional ablation removes the
-    *whole* component of the expert's output along the unit direction ``hat(v)_e`` and nothing
-    else: ``out_e -> out_e - <out_e, hat(v)_e> hat(v)_e``. There is no magnitude to choose — it
-    erases exactly the concept direction. The residual change at a token routed to ``e`` is
-
-        ``- gate_{t,e} * <out_e, hat(v)_e> * hat(v)_e``
-
-    To form ``<out_e, hat(v)_e>`` we recompute the expert's raw output on its routed tokens with
-    ``adapter.expert_forward`` (same path as
-    :func:`~moe_interp.circuit.steer.collect_expert_output_dom`), reading the MoE-block input and
-    the live router gate from ``experts.inputs``. ``v_by_le`` maps ``(layer, expert) -> v_e``
-    (un-normalized diff-of-means is fine; we normalize here)."""
-    import torch.nn.functional as F
-
-    by_layer: dict[int, list[tuple[int, torch.Tensor]]] = {}
-    for (layer, e), v in v_by_le.items():
-        by_layer.setdefault(layer, []).append((e, F.normalize(v.float(), dim=0)))
-
-    def fn(model):
-        for layer in sorted(by_layer):
-            L = model.model.layers[layer]
-            h_in, idx, w = L.mlp.experts.inputs[0]  # h_in:(n_tok,D) idx,w:(n_tok,top_k)
-            experts_mod = L.mlp.experts
-            h = L.output  # (B, T, D) residual after this layer's MoE
-            delta = torch.zeros(
-                idx.shape[0], h.shape[-1], device=h.device, dtype=torch.float32
-            )
-            for e, vhat in by_layer[layer]:
-                routed = (idx == e).any(dim=-1)
-                if not bool(routed.any()):
-                    continue
-                vt = vhat.to(h.device, torch.float32)
-                out_e = adapter.expert_forward(experts_mod, e, h_in[routed].float())
-                proj = (out_e @ vt).unsqueeze(-1) * vt  # component along hat(v)_e
-                gate_e = (w.float() * (idx == e)).sum(dim=-1)[routed]  # (n_routed,)
-                delta[routed] -= gate_e.unsqueeze(-1) * proj
-            h[:] = h + delta.to(h.dtype).reshape(h.shape)
+        for layer in sorted(by_layer):  # forward order for nnsight 0.7
+            _, idx, w = model.model.layers[layer].mlp.experts.inputs[0]
+            for e in by_layer[layer]:
+                w[idx == e] *= scale
 
     return fn
 
@@ -191,54 +118,3 @@ def concept_regex(words: list[str]) -> re.Pattern:
         + r")\b",
         re.I,
     )
-
-
-def run_intervention_experiment(
-    model,
-    eliciting_prompts: list[list[int]],
-    neutral_prompts: list[list[int]],
-    concept_ids: list[int],
-    methods: dict[str, Callable | None],
-    *,
-    concept_words: list[str] | None = None,
-    max_new_tokens: int = 32,
-    n_examples: int = 4,
-) -> dict:
-    """Generate + score every method on concept-eliciting and neutral prompts.
-
-    ``methods`` maps a name to an intervention callable (``None`` = baseline). Returns, per
-    method and prompt set, the mean concept-logit propensity (sensitive probe) and the
-    concept-word rate in the generated text, plus a few example eliciting-prompt continuations.
-    """
-    tok = model.tokenizer
-    pattern = concept_regex(concept_words or CONCEPT_WORDS["offensive"])
-    results: dict[str, dict] = {}
-    for name, intervention in methods.items():
-        block: dict[str, object] = {}
-        for setname, prompts in (
-            ("eliciting", eliciting_prompts),
-            ("neutral", neutral_prompts),
-        ):
-            print(f"  [{name} / {setname}] generating {len(prompts)} ...", flush=True)
-            props, counts, distinct, examples = [], [], [], []
-            for j, ids in enumerate(prompts):
-                cont = generate(model, ids, max_new_tokens, intervention)
-                props.append(
-                    concept_propensity(model, ids, cont, concept_ids, intervention)
-                )
-                counts.append(len(pattern.findall(tok.decode(cont))))
-                # distinct-1 ratio: degeneracy guard. Near 0 = the intervention broke
-                # generation into a repeated token ("the the the"), so any propensity drop is
-                # an artifact, not detox. Healthy text is ~0.6-0.9 here.
-                distinct.append(len(set(cont)) / max(len(cont), 1))
-                if setname == "eliciting" and j < n_examples:
-                    examples.append(tok.decode(cont).strip())
-            block[f"{setname}_propensity"] = float(sum(props) / max(len(props), 1))
-            block[f"{setname}_word_frac"] = float(
-                sum(c > 0 for c in counts) / max(len(counts), 1)
-            )
-            block[f"{setname}_distinct1"] = float(sum(distinct) / max(len(distinct), 1))
-            if examples:
-                block["examples"] = examples
-        results[name] = block
-    return results

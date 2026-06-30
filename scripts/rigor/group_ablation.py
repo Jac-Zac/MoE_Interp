@@ -35,7 +35,7 @@ from moe_interp.circuit.intervene import (
     knockout_intervention,
 )
 from moe_interp.circuit.prompts import rtp_split
-from moe_interp.circuit.steer import _causal_grid_set, _matched_random_set
+from moe_interp.circuit.expert_sets import _causal_grid_set, _matched_random_set
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_concept_token_ids
 

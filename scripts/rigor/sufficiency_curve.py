@@ -35,7 +35,7 @@ from moe_interp.circuit.intervene import (
     knockout_intervention,
 )
 from moe_interp.circuit.prompts import rtp_split
-from moe_interp.circuit.steer import (
+from moe_interp.circuit.expert_sets import (
     _causal_grid_set,
     _matched_random_set,
     somp_concept_experts_evr,

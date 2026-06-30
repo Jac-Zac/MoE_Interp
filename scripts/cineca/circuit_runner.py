@@ -1,23 +1,21 @@
 #!/usr/bin/env python
-"""Run the causal circuit pipeline: gate-AtP localization, expert interventions, report.
+"""Run the gate-AtP localization step + render the localization report.
 
-Builds a disjoint RealToxicityPrompts train/test split and threads it through every
-model-dependent step so all methods share the same identification prompts and are scored
-on the same held-out test set. All artifacts land under ``data/<model>/circuit/``. Every
-intervention is *expert-level* (gate knockout / expert-output steering) — no residual-stream edits.
+Builds the disjoint RealToxicityPrompts train/test split and computes the gate-AtP causal-effect
+grid (one backward pass) over the eliciting *train* prompts, then renders the HTML report
+(gate-AtP heatmap + activation-patching faithfulness). Artifacts land under ``data/<model>/circuit/``.
 
-The causal localizer is gate-AtP (one backward pass); see ``moe_interp.circuit.attribution`` for
-the method and its one-off validation against exhaustive activation patching.
+The grid is keyed by train-set size (``atp_grid_n<N>.npy``) and is *shared* with the
+knockout/downweighting sweep (``scripts/cineca/downweight_runner.py``), which is where the
+intervention results are produced. See ``moe_interp.circuit.attribution`` for the AtP method and
+its one-off validation against exhaustive activation patching.
 
 Usage:
     python scripts/cineca/circuit_runner.py [--model MODEL] [--batch-size N]
-                                            [--atp-batch-size N] [--knockout-k N]
-                                            [--max-new-tokens N]
-                                            [--n-prompts N] [--n-test N]
+                                            [--atp-batch-size N] [--n-prompts N] [--n-test N]
 """
 
 import argparse
-import json
 import os
 
 import numpy as np
@@ -28,7 +26,6 @@ from nnsight import LanguageModel
 from moe_interp.circuit.attribution import gate_attribution
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
-from moe_interp.circuit.steer import run_dose_response, run_expert_steer
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import build_concept_token_ids
 
@@ -45,28 +42,25 @@ def main():
         type=int,
         default=None,
         help="Batch size for the AtP backward pass. Defaults to --batch-size. "
-        "Use a smaller value (e.g. 2) if the backward pass OOMs after the grid sweep.",
+        "Use a smaller value (e.g. 2) if the backward pass OOMs.",
     )
-    parser.add_argument("--knockout-k", type=int, default=15)
-    parser.add_argument("--max-new-tokens", type=int, default=24)
     parser.add_argument(
         "--n-prompts",
         type=int,
-        default=48,
-        help="Train-set size (used for grid identification and steer training).",
+        default=100,
+        help="Train-set size (used for grid identification; keys the grid file).",
     )
     parser.add_argument(
         "--n-test",
         type=int,
-        default=24,
-        help="Held-out test set size (scored by steer experiment).",
+        default=64,
+        help="Held-out test-set size (kept for a split shared with the downweight sweep).",
     )
     parser.add_argument(
         "--hi",
         type=float,
         default=0.5,
-        help="Min RealToxicityPrompts toxicity for the eliciting set. Raise (e.g. 0.8) for a "
-        "higher-toxicity regime where the lexical word-fraction metric has dynamic range.",
+        help="Min RealToxicityPrompts toxicity for the eliciting set.",
     )
     parser.add_argument(
         "--challenging",
@@ -88,85 +82,33 @@ def main():
         model_name, device_map=device_map, dtype="auto", dispatch=True
     )
 
-    # Disjoint train/test split — all methods share elic_tr for identification,
-    # all are scored on the disjoint elic_te so comparisons are out-of-sample.
-    elic_tr, elic_te, neut_tr, neut_te = rtp_split(
+    # Train split identifies the experts; keyed by train size so the downweight sweep reuses this
+    # exact grid (same prompts, same toxic ids). The test split is computed for a shared split but
+    # not used here — the intervention scoring lives in the downweight sweep.
+    elic_tr, _, _, _ = rtp_split(
         model.tokenizer,
         n_train=args.n_prompts,
         n_test=args.n_test,
         hi=args.hi,
         challenging=args.challenging,
     )
-    # Regime tag keeps a high-toxicity grid/run from clobbering the default (hi=0.5) one.
     regime = (
         ""
         if (args.hi == 0.5 and not args.challenging)
         else (f"_hi{args.hi:g}" + ("_chal" if args.challenging else ""))
     )
     toxic_ids = build_concept_token_ids(model.tokenizer)
-    print(
-        f"Model loaded: {len(elic_tr)} train + {len(elic_te)} test eliciting prompts",
-        flush=True,
-    )
+    print(f"Model loaded: {len(elic_tr)} train eliciting prompts", flush=True)
 
-    # 1. gate-AtP localization grid (one backward pass) — the causal localizer.
-    # Keyed by train-set size so step 2's offensive knockout reuses this exact grid
-    # (same prompts, same toxic ids) instead of paying for a second backward pass.
+    # gate-AtP localization grid (one backward pass) — the causal localizer.
     atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}{regime}.npy"
     if not atp_path.exists():
-        print("[1/3] gate-AtP localization grid ...", flush=True)
+        print("gate-AtP localization grid ...", flush=True)
         atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=atp_batch)
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp.numpy())
     else:
-        print("[1/3] gate-AtP already exists, skipping", flush=True)
-
-    # 2. Expert-level causal interventions on the SOMP and gate-AtP experts (rtp/offensive, ranked
-    # by EVR@k / |AtP|) vs a matched-random control: knockout (necessity) and α-expert-OUTPUT DoM
-    # steering (influence), done per expert. Every intervention is expert-level — no residual-stream
-    # edits. The key checks are (a) does the causal (AtP) set beat SOMP and random, and (b) does the
-    # output stay coherent (distinct1)?
-    steer_out = cdir / "steer" / f"offensive{regime}"
-    exp_path = steer_out / "expert_intervention.json"
-    if not exp_path.exists():
-        print("[2/3] Expert-level interventions (SOMP / AtP vs random) ...", flush=True)
-        exp = run_expert_steer(
-            model,
-            model_name,
-            concept="offensive",
-            dataset="rtp",
-            k=args.knockout_k,
-            batch_size=args.batch_size,
-            max_new_tokens=args.max_new_tokens,
-            train=(elic_tr, neut_tr),
-            test=(elic_te, neut_te),
-            atp_grid_path=atp_path,
-        )
-        steer_out.mkdir(parents=True, exist_ok=True)
-        exp_path.write_text(json.dumps(exp, indent=2))
-    else:
-        print("[2/3] Expert interventions already exist, skipping", flush=True)
-
-    # 3. Dose-response: cumulative top-1..k SOMP / AtP vs random, for α expert steering, on
-    # eliciting prompts only. Shows whether toxicity falls monotonically as more causal experts
-    # are hit (and stays flat for random) — the signature of a localized causal set.
-    dose_path = steer_out / "dose_response.json"
-    if not dose_path.exists():
-        print("[3/3] Dose-response curve ...", flush=True)
-        dose = run_dose_response(
-            model,
-            model_name,
-            concept="offensive",
-            dataset="rtp",
-            k=args.knockout_k,
-            max_new_tokens=args.max_new_tokens,
-            train=(elic_tr, neut_tr),
-            test=(elic_te, neut_te),
-            atp_grid_path=atp_path,
-        )
-        dose_path.write_text(json.dumps(dose, indent=2))
-    else:
-        print("[3/3] Dose-response already exists, skipping", flush=True)
+        print("gate-AtP already exists, skipping", flush=True)
 
     del model
     if torch.cuda.is_available():

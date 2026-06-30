@@ -38,9 +38,9 @@ pipeline. It is kept out of the CLI as `# %%` walkthroughs under `notebooks/circ
 (it was the most experimental part of the project; see [docs/circuit.md](docs/circuit.md)):
 
 ```bash
-python main.py pursuit --concept offensive  # classify: SOMP experts whose atoms are offensive
-python notebooks/circuits/patching.py        # localize: causal patching grid + gate-AtP faithfulness
-python notebooks/circuits/steer.py           # intervene: knockout / project-out + assemble HTML report
+python main.py pursuit --concept offensive   # classify: SOMP experts whose atoms are offensive
+python notebooks/circuits/localize.py         # localize: gate-AtP grid + faithfulness (+ report)
+python scripts/cineca/downweight_runner.py    # intervene: knockout / downweighting sweep + CIs
 ```
 
 ## Project Structure
@@ -53,8 +53,7 @@ python notebooks/circuits/steer.py           # intervene: knockout / project-out
 │   ├── notebook_pursuit.py            # Pursuit demo
 │   ├── notebook_analysis.py           # Logit-lens vs SOMP walkthrough
 │   └── circuits/                      # Causal toxic-expert study (# %% walkthroughs)
-│       ├── patching.py               # localize: patching grid + gate-AtP faithfulness
-│       └── steer.py                   # intervene: knockout / project-out + report
+│       └── localize.py               # localize: gate-AtP grid + faithfulness
 ├── src/moe_interp/
 │   ├── capture/
 │   │   ├── capture.py                 # Expert activation extraction (nnsight)
@@ -72,10 +71,10 @@ python notebooks/circuits/steer.py           # intervene: knockout / project-out
 │   │   ├── toxicity.py                # Toxic-logit probe + shared gate-ablation plumbing
 │   │   ├── patching.py                # Per-(layer,expert) causal effect grid
 │   │   ├── attribution.py             # gate-AtP: whole grid in one backward pass
-│   │   ├── compare.py                 # Faithfulness of attributors vs patching
-│   │   ├── intervene.py               # Generation-time knockout / project-out
-│   │   ├── steer.py                   # Intervention orchestration + diff-of-means direction
-│   │   └── report.py                  # Self-contained HTML circuit report
+│   │   ├── intervene.py               # Generation-time gate knockout / downweighting
+│   │   ├── expert_sets.py             # SOMP / gate-AtP / matched-random expert sets
+│   │   ├── downweight.py              # Knockout/downweighting sweep + bootstrap error bars
+│   │   └── report.py                  # Self-contained HTML localization report
 │   ├── io/
 │   │   ├── data.py                    # Dataset loading + chat-template formatting
 │   │   └── plots.py                   # Plotly EVR/count heatmaps

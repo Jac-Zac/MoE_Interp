@@ -8,11 +8,10 @@ we suppress toxicity by acting on them? Modules:
 - ``concept_probe`` — concept-logit metric, shared ablation plumbing, whole-set significance test.
 - ``attribution`` — gate-AtP: a one-backward-pass causal effect grid over (layer, expert); the
   causal localizer. See ``attribution.py`` for the method and its one-off patching validation.
-- ``compare``     — the intervention propensity bar chart.
-- ``intervene``   — generation-time expert knockout / expert-output steering (expert-level only).
-- ``steer``       — orchestrates the intervention experiments (incl. the diff-of-means
-  toxic direction from last-token residuals and per-expert output steering).
-- ``report``      — assembles the artifacts into one self-contained HTML report.
+- ``intervene``   — generation-time expert gate knockout / downweighting (expert-level only).
+- ``expert_sets`` — builds the SOMP / gate-AtP / matched-random expert sets the interventions act on.
+- ``downweight``  — the knockout/downweighting sweep with per-prompt bootstrap error bars.
+- ``report``      — assembles the localization artifacts into one self-contained HTML report.
 
 The correlational expert *classifier* counterpart (no model) is SOMP / Expert Pursuit
 (``moe_interp.pursuit``), scored on the offensive concept word list.

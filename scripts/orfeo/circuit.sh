@@ -13,27 +13,22 @@
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# Full causal-circuit pipeline at held-out scale: gate-AtP localization, the per-expert
-# interventions on the SOMP and AtP experts vs a matched-random control (knockout + α
-# expert-output DoM steering), and the dose-response curve. The larger --n-test is what makes
-# the *specificity* check (Δelic vs Δneut, causal vs random) trustworthy — at small n the
-# neutral collateral is too noisy. The GPU association caps walltime at 2h; the intervention
-# step is generation-heavy, so this is the full budget.
+# gate-AtP localization + localization report. Computes the causal-effect grid (one backward
+# pass) over the eliciting train prompts and renders the gate-AtP heatmap + faithfulness report.
+# The grid is shared with the knockout/downweighting sweep (scripts/orfeo/downweight.sh), which is
+# where the intervention results are produced.
 #
 # NOTE: the gate-AtP grid (atp_grid_n<N>.npy) is keyed by --n-prompts, so changing --n-prompts
 # just writes a new file — no stale-cache cleanup needed.
 source scripts/setup_env.sh
 module load cuda
 
-# Extra args pass through, e.g. a higher-toxicity regime where word-fraction has dynamic range:
-#   sbatch scripts/orfeo/circuit.sh --hi 0.8 --challenging --max-new-tokens 48
-# (writes a regime-tagged grid + steer/offensive_hi0.8_chal/, so it won't clobber the default run)
+# Extra args pass through, e.g. a higher-toxicity regime (writes a regime-tagged grid so it
+# won't clobber the default run):  sbatch scripts/orfeo/circuit.sh --hi 0.8 --challenging
 python scripts/cineca/circuit_runner.py \
   --model allenai/OLMoE-1B-7B-0924-Instruct \
   --batch-size 6 \
   --atp-batch-size 6 \
-  --knockout-k 15 \
-  --max-new-tokens 24 \
   --n-prompts 100 \
   --n-test 64 \
   "$@"
