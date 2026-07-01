@@ -61,8 +61,8 @@ are most active on numeric content?_ The concept word lists are defined in
 
 The two modes are complementary: full-dictionary pursuit discovers specialists without prior
 hypotheses, while concept-restricted pursuit quantifies specialization along a specific
-semantic axis and is directly actionable for targeted interventions such as activation
-steering.
+semantic axis and is directly actionable for targeted interventions such as gate knockout
+and down-weighting.
 
 == From Specialization to Causation <sec:causal-methods>
 
@@ -95,14 +95,11 @@ complement this sensitive probe with a literal *word-fraction*: the share of gen
 continuations that contain a concept word. For prompts we draw a split from RealToxicityPrompts
 @gehman2020realtoxicityprompts, partitioning by each prompt's own toxicity score into a
 high-toxicity _eliciting_ set and a matched low-toxicity _neutral_ set; the neutral set doubles
-as a *collateral check* and, for the lexical concepts, as the _other_ concept in a specificity
-test. For each selected expert $e$, a diff-of-means between its eliciting and neutral *output*
-activations isolates the per-expert concept direction $bold(v)_e$ used by the steering intervention
-(@sec:interventions).
+as a *collateral check* on the intervention (how far it drags down prompts that never elicited the
+concept).
 
-Crucially, every selector (gate-AtP, SOMP ranking) and the diff-of-means direction is fit on a
-_train_ split of the prompts and every intervention is then scored on a _disjoint held-out test_
-split. This avoids the identify-and-score-on-the-same-prompts circularity that would otherwise
+Crucially, every selector (gate-AtP, SOMP ranking) is fit on a _train_ split of the prompts and
+every intervention is then scored on a _disjoint held-out test_ split. This avoids the identify-and-score-on-the-same-prompts circularity that would otherwise
 inflate any causally-selected method against the correlational baseline.
 
 === Selectors: Which Experts <sec:selectors>
@@ -135,33 +132,25 @@ entry _suppresses_ it.
 
 === Interventions: What We Do <sec:interventions>
 
-Every intervention is *expert-level* --- it acts on the selected experts' router gate or output
-activation, never on the residual stream --- so a positive effect is attributable to those experts
-and nothing else. Each selected set is hit with one of two interventions, applied at every decoded
-step of greedy generation and read out on the held-out prompts:
+Every intervention is *expert-level* --- it acts on the selected experts' router gate, never on the
+residual stream --- so a positive effect is attributable to those experts and nothing else. Each
+selected set is hit with one of two gate interventions, applied at every decoded step of greedy
+generation and read out on the held-out prompts:
 
-- *Knockout* (necessity) --- zero the gates of the top-$k$ experts. The simplest, scale-free test,
-  and our headline. Asks: is any sparse expert set _necessary_ for the concept?
-- *Expert-output steering* (influence) --- add $alpha bold(v)_e$ to each selected expert's *output*
-  activation, where $bold(v)_e$ is the toxic$-$neutral diff-of-means in that expert's output space
-  and $alpha < 0$ subtracts the concept direction. The shift enters the residual as
-  $g_(t,e) dot alpha bold(v)_e$ only at the tokens routed to expert $e$ (gate-weighted, per-expert),
-  so it never stacks an unscaled edit across layers. Note that $alpha$ scales the small per-expert
-  diff-of-means ($norm(bold(v)_e) approx 1.4$), _not_ the residual stream: the natural unit is
-  $alpha = -1$, which lands the expert's output on the _neutral_ centroid (subtracts exactly one
-  toxic$->$neutral gap); $abs(alpha) > 1$ overshoots and is reported only as a dose--response,
-  policed by the distinct-1 guard. Asks: do the selected experts carry enough of the concept that
-  nudging _just them_ removes it?
-- *Directional ablation* (influence, scale-free) --- the Arditi-style @arditi2024refusal alternative
-  with no $alpha$ to tune: project each selected expert's output off the unit direction
-  $hat(bold(v))_e$, i.e. $bold(f)_e -> bold(f)_e - (bold(f)_e dot hat(bold(v))_e) hat(bold(v))_e$,
-  removing the whole concept component and nothing else. Implemented in
-  `expert_ablate_intervention`.
+- *Knockout* (necessity) --- zero the gates of the top-$k$ experts. The simplest, scale-free test:
+  is any sparse expert set _necessary_ for the concept?
+- *Down-weighting* (dose--response) --- multiply the same gates by $s in (0,1)$ instead of zeroing
+  them. Since the expert's contribution to the residual is $g_(t,e) dot bold(f)_e (bold(h)_t)$,
+  scaling the live gate by $s$ scales that contribution at exactly the tokens routed to $e$ and
+  leaves every other expert untouched. Sweeping $s in {0.9, 0.5, 0.25, 0}$ (a 10% down-weight
+  through to full knockout at $s = 0$) turns the binary necessity test into a propensity-vs-strength
+  curve, with per-prompt bootstrap error bars. Both interventions are implemented as a single gate
+  scaling (`gate_scale_intervention`), knockout being the $s = 0$ endpoint.
 
 Scoring is held-out and multi-signal: the mean probe value over the continuation (lower = less
-concept), the literal word-fraction, the *neutral* prompts as a collateral/specificity check, and
-a *distinct-1* coherence guard (the ratio of unique unigrams; a healthy continuation sits around
+concept), the literal word-fraction, the *neutral* prompts as a collateral check, and a
+*distinct-1* coherence guard (the ratio of unique unigrams; a healthy continuation sits around
 $0.6$--$0.9$). The coherence guard is what separates genuine concept removal from a method that
 merely *degrades the text into garbage* --- a probe drop with a collapsed distinct-1 is not a
-clean intervention. Because the direction and probe are built from any concept's token set, the
-whole pipeline generalizes across concepts.
+clean intervention. Because the probe is built from any concept's token set, the whole pipeline
+generalizes across concepts.

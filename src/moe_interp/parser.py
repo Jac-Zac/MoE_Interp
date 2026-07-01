@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # The causal toxic-expert circuit study (gate-AtP localization, generation-time
-    # expert knockout / expert-output steering, and the HTML report) lives in the
+    # expert knockout / gate downweighting, and the HTML report) lives in the
     # `# %%` walkthroughs under notebooks/circuits/, driving moe_interp.circuit directly.
 
     return parser

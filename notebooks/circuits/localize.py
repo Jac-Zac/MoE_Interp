@@ -4,8 +4,8 @@
 For every routed (layer, expert) we estimate, from a *single backward pass*, how much zeroing
 its router gate would change the toxic-logit metric (gate-AtP, ``g·dL/dg``). Positive = the
 expert promotes toxicity, negative = it suppresses it. The result is an (n_layers, n_experts)
-grid, cached for the intervention notebooks (steer.py / circuit_runner.py) and plotted as a
-heatmap.
+grid, cached for the knockout/downweight sweep (circuit_runner.py / downweight_runner.py) and
+plotted as a heatmap.
 
 gate-AtP is a first-order approximation of exhaustive activation patching; the two were checked
 once and agreed closely (see ``moe_interp.circuit.attribution`` for the method + validation).
@@ -35,9 +35,9 @@ from moe_interp.pursuit.concepts import build_concept_token_ids
 load_dotenv()
 set_seed(1337)
 MODEL_NAME = get_default_model()
-# The grid is identified on the train split elic[:N_PROMPTS]; steer.py re-derives that same
-# deterministic prefix (so its AtP set + diff-of-means + this grid all share it) and scores every
-# method on the disjoint held-out tail. Keep N_PROMPTS in sync across both notebooks.
+# The grid is identified on the train split elic[:N_PROMPTS]; the downweight sweep re-derives that
+# same deterministic prefix (so its AtP set and this grid share it) and scores the intervention on
+# the disjoint held-out tail. Keep N_PROMPTS in sync with the sweep.
 N_PROMPTS = int(os.environ.get("N_PROMPTS", 100))
 N_TEST = int(os.environ.get("N_TEST", 50))
 ATP_BATCH_SIZE = int(os.environ.get("ATP_BATCH_SIZE", 8))
