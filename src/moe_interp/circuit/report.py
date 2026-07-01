@@ -116,8 +116,8 @@ def build_report(model_name: str) -> Path:
         "(partitioned by the dataset's own per-prompt toxicity score). The fused-experts kernel "
         "exposes only the router gate (<code>layer.mlp.experts.inputs[0]</code> → "
         "<code>hidden, top_k_index, top_k_weights</code>) as a per-expert node, so all "
-        "expert-level interventions and gradients act on the gate. Every selector and steering "
-        "direction is <b>identified on a train split</b> of these prompts and every intervention "
+        "expert-level interventions and gradients act on the gate. Every selector is "
+        "<b>identified on a train split</b> of these prompts and every intervention "
         "is <b>scored on a disjoint held-out test split</b>, so the causal comparison is "
         "out-of-sample (no identify-and-score-on-the-same-prompts circularity).</p>"
     )

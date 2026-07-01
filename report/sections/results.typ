@@ -385,11 +385,14 @@ clean lever.
   ],
 ) <fig:steer>
 
-The numbers are easiest to read on the generations themselves (@fig:generation): steering the gate-AtP
-experts removes country names while the continuation stays fluent and on-topic, whereas knocking the
-same experts out leaves the country names in place. Fluency is read two ways --- the *distinct-1*
-unique-unigram ratio (held at $approx 0.79$ here, i.e. no degeneration) and the continuations
-themselves, which stay grammatical under steering.
+The effect is easiest to read on the generations themselves (@fig:generation): knocking out the
+top-5% gate-AtP experts makes the model *invent* a place that does not exist ("the land of Arden")
+in place of a real country, coherently (distinct-1 $approx 0.78$), while a layer-matched random
+knockout keeps the real geography ("Khersonos, ... the Crimean Peninsula") and even degenerates
+into repetition (distinct-1 $0.55$). The causal set thus produces a concept-specific change the
+random control does not --- but note this is *soft* removal: the country *word* usually survives on
+most prompts even when the concept logit drops, which is why word-fraction moves far less than
+propensity (@tab:influence).
 
 #figure(
   table(
@@ -398,20 +401,21 @@ themselves, which stay grammatical under steering.
     stroke: none,
     table.hline(stroke: 0.8pt),
     table.header(
-      [*Intervention*], [*Sample continuation, held-out `countries` prompt*],
+      [*Intervention* (top-5% knockout)], [*Sample continuation, `countries` prompt "...celebrated each spring in"*],
       table.hline(stroke: 0.5pt),
     ),
-    [baseline],                   ["...the 2022 Olympics in Beijing, China ... held every four years..."],
-    [AtP-steer ($alpha {=} {-}5$)], ["...a place called Tokyo ... you can just go to a different country and use it there..."],
-    [AtP-knockout],               ["...the 2024 Olympics in Paris, France ... held every four years..."],
+    [baseline],        ["the village of Kherson, *Ukraine*. The festival ... in honor of the goddess of agriculture..." #text(fill: gray)[(d1 0.68)]],
+    [AtP-knockout],    ["the land of *Arden*. It is a time of great rejoicing ... a new cycle of life." #text(fill: rgb("#0a0"))[(invented place, d1 0.78)]],
+    [random-knockout], ["the village of *Khersonos*, ... the Crimean Peninsula. The festival is a celebration of the b— #text(fill: rgb("#b00"))[[repeats]]" #text(fill: gray)[(d1 0.55)]],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-Generation under intervention (greedy decoding, held-out `countries` prompts). Steering the gate-AtP
-experts strips country names while keeping the text fluent (country word-fraction $0.68 -> 0.05$,
-distinct-1 $approx 0.79$); knocking the same experts out leaves the names intact (word-fraction
-$0.5$). The steered text is grammatical --- it simply stops naming countries --- which is how
-"clean removal" differs from the degeneration a distinct-1 collapse would flag.
+Generation under gate knockout (greedy decoding, held-out `countries` prompt, top-5% of experts
+zeroed). Knocking out the gate-AtP experts replaces the real country with an *invented* place
+("Arden") while the text stays coherent (distinct-1 $0.78$); the layer-matched random knockout keeps
+the real geography and degrades into repetition instead. This is the qualitative face of the
+knockout sweep: the causal set produces a concept-specific edit the random control does not, but it
+is soft --- the concept *logit* drops (@tab:influence) while the concept *word* often survives.
   ],
 ) <fig:generation>
 

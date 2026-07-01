@@ -40,10 +40,9 @@ def test_gate_scale_scales_only_selected_expert():
     assert w[1, 0] == 4.0  # expert 5 untouched
 
 
-def test_gate_scale_zero_matches_knockout():
+def test_gate_scale_zero_is_knockout():
     idx = torch.tensor([[3], [5]])
-    w_dw = torch.tensor([[2.0], [4.0]])
-    w_ko = torch.tensor([[2.0], [4.0]])
-    intervene.gate_scale_intervention([(0, 3)], 0.0)(_FakeModel(idx, w_dw))
-    intervene.knockout_intervention([(0, 3)])(_FakeModel(idx, w_ko))
-    assert torch.equal(w_dw, w_ko)  # scale=0 == full knockout
+    w = torch.tensor([[2.0], [4.0]])
+    intervene.gate_scale_intervention([(0, 3)], 0.0)(_FakeModel(idx, w))
+    assert w[0, 0] == 0.0  # scale=0 fully zeros expert 3's gate (knockout)
+    assert w[1, 0] == 4.0  # expert 5 untouched

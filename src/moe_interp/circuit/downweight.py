@@ -24,13 +24,13 @@ from pathlib import Path
 import numpy as np
 
 from moe_interp.capture.model_adapter import model_num_experts
+from moe_interp.circuit.expert_sets import expert_intervention_sets
 from moe_interp.circuit.intervene import (
     concept_propensity,
     concept_regex,
     gate_scale_intervention,
     generate,
 )
-from moe_interp.circuit.expert_sets import expert_intervention_sets
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_concept_token_ids
 
 
@@ -175,13 +175,18 @@ def run_downweight_sweep(
                 if skey in mnode and "eliciting" in mnode[skey]:
                     continue
                 print(
-                    f"[budget={frac_key} (k={k}) / {name} / scale={skey}] ...", flush=True
+                    f"[budget={frac_key} (k={k}) / {name} / scale={skey}] ...",
+                    flush=True,
                 )
                 intervention = gate_scale_intervention(experts, s)
                 cell = {}
                 for setname, prompts in prompt_sets:
                     raw = _score_set(
-                        model, prompts, concept_ids, pattern, intervention,
+                        model,
+                        prompts,
+                        concept_ids,
+                        pattern,
+                        intervention,
                         max_new_tokens,
                     )
                     cell[setname] = _bootstrap_cell(

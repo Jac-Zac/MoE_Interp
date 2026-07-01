@@ -19,7 +19,7 @@ correlational about the probe but the intervention itself is causal.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 
 import torch
@@ -28,7 +28,7 @@ Metric = Callable[[torch.Tensor, list[int]], torch.Tensor]
 
 
 @contextmanager
-def right_padded(model) -> Iterator[None]:
+def right_padded(model) -> Generator[None, None, None]:
     """Force right-padding for the block so each prompt's last real token sits at
     ``len - 1`` and (causally downstream) padding cannot leak into it; restore on exit.
     """

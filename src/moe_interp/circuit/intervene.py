@@ -23,28 +23,11 @@ import torch
 from moe_interp.circuit.concept_probe import relative_logit_score
 
 
-def knockout_intervention(experts: list[tuple[int, int]]) -> Callable:
-    """Intervention that zeros the router gate of each ``(layer, expert)`` (forward order)."""
-    by_layer: dict[int, list[int]] = {}
-    for layer, e in experts:
-        by_layer.setdefault(layer, []).append(e)
-
-    def fn(model):
-        for layer in sorted(
-            by_layer
-        ):  # nnsight 0.7 needs envoys touched in forward order
-            _, idx, w = model.model.layers[layer].mlp.experts.inputs[0]
-            for e in by_layer[layer]:
-                w[idx == e] = 0.0
-
-    return fn
-
-
 def gate_scale_intervention(experts: list[tuple[int, int]], scale: float) -> Callable:
-    """Scale the router gate of each ``(layer, expert)`` by ``scale`` (partial knockout).
+    """Scale the router gate of each ``(layer, expert)`` by ``scale``.
 
-    ``scale=0.0`` zeros the gate (identical to :func:`knockout_intervention` — full removal);
-    ``scale=0.9`` is a 10% downweight, ``scale=0.5`` a 50% downweight. The expert's contribution
+    ``scale=0.0`` zeros the gate (**knockout** — full removal); ``scale=0.9`` is a 10%
+    downweight, ``scale=0.5`` a 50% downweight. The expert's contribution
     to the residual is ``gate_{t,e} * f_e(h_t)``, so scaling the live gate by ``scale`` scales that
     contribution at exactly the tokens routed to ``e`` and leaves every other expert untouched.
     """

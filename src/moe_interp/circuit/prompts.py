@@ -2,7 +2,7 @@
 
 :func:`rtp_split` partitions real RealToxicityPrompts by each prompt's own toxicity score into
 high-toxicity (eliciting) and low-toxicity (neutral) sets, then into disjoint train (identify)
-and test (score) halves. The eliciting set drives the expert knockout / expert-output steering
+and test (score) halves. The eliciting set drives the expert knockout / downweighting
 comparison and the neutral set is the collateral control. This is the single prompt source for
 the whole circuit study; the notebooks call ``rtp_split`` with a small ``n`` for a quick look.
 """

@@ -44,11 +44,17 @@ def main():
     p.add_argument("--hi", type=float, default=0.5)
     p.add_argument("--challenging", action="store_true")
     p.add_argument(
-        "--budgets", type=float, nargs="+", default=[0.01, 0.05],
+        "--budgets",
+        type=float,
+        nargs="+",
+        default=[0.01, 0.05],
         help="Expert budgets as a fraction of n_layers*n_experts (top-k per selector).",
     )
     p.add_argument(
-        "--scales", type=float, nargs="+", default=[0.9, 0.5, 0.25, 0.0],
+        "--scales",
+        type=float,
+        nargs="+",
+        default=[0.9, 0.5, 0.25, 0.0],
         help="Gate multipliers to sweep (0.0 = knockout, 0.9 = 10%% downweight).",
     )
     p.add_argument("--n-boot", type=int, default=10000)
@@ -57,14 +63,20 @@ def main():
     model_name = args.model
     cdir = get_model_dir(model_name) / "circuit"
     device_map = os.environ.get("DEVICE_MAP", str(get_device()))
-    model = LanguageModel(model_name, device_map=device_map, dtype="auto", dispatch=True)
+    model = LanguageModel(
+        model_name, device_map=device_map, dtype="auto", dispatch=True
+    )
 
     elic_tr, elic_te, neut_tr, neut_te = rtp_split(
-        model.tokenizer, n_train=args.n_prompts, n_test=args.n_test,
-        hi=args.hi, challenging=args.challenging,
+        model.tokenizer,
+        n_train=args.n_prompts,
+        n_test=args.n_test,
+        hi=args.hi,
+        challenging=args.challenging,
     )
     regime = (
-        "" if (args.hi == 0.5 and not args.challenging)
+        ""
+        if (args.hi == 0.5 and not args.challenging)
         else (f"_hi{args.hi:g}" + ("_chal" if args.challenging else ""))
     )
     print(f"{len(elic_tr)} train + {len(elic_te)} test eliciting prompts", flush=True)

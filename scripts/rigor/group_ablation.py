@@ -28,14 +28,14 @@ from dotenv import load_dotenv
 from nnsight import LanguageModel
 
 from moe_interp.capture.model_adapter import model_num_experts
+from moe_interp.circuit.expert_sets import _causal_grid_set, _matched_random_set
 from moe_interp.circuit.intervene import (
     concept_propensity,
     concept_regex,
+    gate_scale_intervention,
     generate,
-    knockout_intervention,
 )
 from moe_interp.circuit.prompts import rtp_split
-from moe_interp.circuit.expert_sets import _causal_grid_set, _matched_random_set
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import CONCEPT_WORDS, build_concept_token_ids
 
@@ -71,7 +71,7 @@ def cofiring_neighbors(model, prompts, targets, m):
 
 def _score(model, prompts, concept_ids, pattern, experts, max_new_tokens):
     """Knock out ``experts`` and return summary + per-prompt word-hit array (for bootstrap.py)."""
-    fn = knockout_intervention(experts) if experts else None
+    fn = gate_scale_intervention(experts, 0.0) if experts else None
     props, hits, distinct = [], [], []
     for ids in prompts:
         cont = generate(model, ids, max_new_tokens, fn)

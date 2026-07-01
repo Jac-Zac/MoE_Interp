@@ -24,8 +24,6 @@ separate forward pass). The two were checked once on the toxicity grid and agree
 frozen check lives in ``data/<model>/circuit/compare/faithfulness.json``.
 """
 
-from __future__ import annotations
-
 import torch
 
 from moe_interp.capture.model_adapter import model_num_experts
