@@ -23,7 +23,6 @@ import json
 import os
 
 import numpy as np
-import torch
 from dotenv import load_dotenv
 from nnsight import LanguageModel
 

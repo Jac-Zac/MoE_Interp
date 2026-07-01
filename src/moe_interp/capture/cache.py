@@ -9,6 +9,12 @@ import torch
 
 _OPTIONAL_EXPERT_FIELDS = ("routing_weights",)
 
+# Fixed HDF5 chunk length (rows) for the appendable per-expert datasets. Sizing chunks
+# to the first append (often 1-8 rows) litters a 10k-row dataset with thousands of tiny
+# chunks, slowing both the append path and the full-column reads in pursuit/analysis.
+# 64 rows ≈ 256 KB for a (n, 2048) float16 activations column.
+_CHUNK_ROWS = 64
+
 
 def _metadata_path(path: Path) -> Path:
     path = Path(path)
@@ -47,7 +53,7 @@ def _append_dataset(group: h5py.Group, name: str, data: torch.Tensor) -> None:
             name,
             data=data,
             maxshape=(None, *data.shape[1:]),
-            chunks=(max(data.shape[0], 1), *data.shape[1:]),
+            chunks=(_CHUNK_ROWS, *data.shape[1:]),
             dtype=data.numpy().dtype,
         )
         return
@@ -82,7 +88,7 @@ def append_to_file(
             "routing_weights",
             data=torch.full((old,), float("nan")).numpy(),
             maxshape=(None,),
-            chunks=(max(old, 1),),
+            chunks=(_CHUNK_ROWS,),
         )
     _append_dataset(group, "activations", acts)
     _append_dataset(group, "tokens", toks)

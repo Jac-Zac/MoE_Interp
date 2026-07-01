@@ -78,11 +78,12 @@ def _capture_batch(
             expert_inputs.append(adapter.tap_layer(layer).save())
         pre_norm_hidden = model.model.norm.input.save()
 
-    # Keep only the last real token of each prompt, over the flattened (b_size * max_len)
-    # axis (right-padding: prompt row r's last token sits at r*max_len + length_r - 1).
+    # Keep only the last real token of each prompt (right-padding puts it at
+    # lengths - 1), then flatten to match the (b_size * max_len) token axis.
     lengths = torch.as_tensor(prompt_lengths, dtype=torch.long)
-    flat = torch.arange(b_size * max_len)
-    keep_mask = flat == ((flat // max_len) * max_len + lengths[flat // max_len] - 1)
+    keep_mask = torch.zeros(b_size, max_len, dtype=torch.bool)
+    keep_mask[torch.arange(b_size), lengths - 1] = True
+    keep_mask = keep_mask.reshape(-1)
     token_ids = padded_token_ids.reshape(-1)
     second_moment = pre_norm_hidden.float().pow(2).mean(-1).reshape(-1)
 

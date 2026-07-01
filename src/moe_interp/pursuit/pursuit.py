@@ -59,11 +59,10 @@ def projection_pursuit(
     if X.var(dim=0).sum().item() < 1e-10:
         return [], []
 
-    decomposition = SOMP(k=k, pc=pc, compute_evr=True, return_full=False)
+    decomposition = SOMP(k=k, pc=pc)
     result = decomposition(
         X=X,
         dictionary=dictionary,
-        descriptors=list(range(len(dictionary))),
         device=device,
         dict_t=dict_t,
     )
@@ -247,8 +246,8 @@ def run_pursuit(
             )
 
             for expert_idx, acts in expert_acts.items():
+                n_acts = acts.shape[0]
                 X = acts.float().to(device)
-                n_acts = X.shape[0]
                 tokens, evr = projection_pursuit(
                     X,
                     dictionary,

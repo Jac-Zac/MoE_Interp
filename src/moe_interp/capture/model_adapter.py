@@ -116,30 +116,30 @@ class MoEAdapter(ABC):
     ) -> dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Recompute each expert's per-token contribution from one MoE block's inputs.
 
-        Loops only over experts that fired; for each, batches all its (token, slot)
-        pairs through ``expert_forward``, scales by the routing weight, then applies
-        component RMSNorm. Returns ``{expert_id: (activations, token_ids,
+        Loops only over experts that fired on a kept token; for each, batches all its
+        (token, slot) pairs through ``expert_forward``, scales by the routing weight,
+        then applies component RMSNorm. Returns ``{expert_id: (activations, token_ids,
         routing_weights)}`` over kept tokens only, CPU/float16 ready to write. Args
         mirror the flattened ``(b_size * max_len)`` token axis;
         ``real_mask``/``second_moment``/``token_ids`` are length N and are moved to
         the experts' device here.
         """
         dev = hidden_states.device
-        hidden_states = hidden_states.float()
-        top_k_weights = top_k_weights.float()
-        real_mask = real_mask.to(dev)
-        second_moment = second_moment.to(dev)
-        token_ids = token_ids.to(dev)
         norm_weight = norm_weight.to(dev)
+
+        # Restrict everything to the kept (real, last-token) rows up front, so the
+        # per-expert `unique`/`== e` scans run over (n_kept, top_k) instead of the
+        # full padded token axis, and only experts that actually fired are visited.
+        kept = real_mask.to(dev).nonzero(as_tuple=True)[0]
+        hidden_states = hidden_states.float()[kept]
+        top_k_index = top_k_index[kept]
+        top_k_weights = top_k_weights.float()[kept]
+        second_moment = second_moment.to(dev)[kept]
+        token_ids = token_ids.to(dev)[kept]
 
         out: dict[int, tuple] = {}
         for e in torch.unique(top_k_index).tolist():
             t_idx, k_idx = (top_k_index == e).nonzero(as_tuple=True)
-            keep = real_mask[t_idx]
-            t_idx, k_idx = t_idx[keep], k_idx[keep]
-            if t_idx.numel() == 0:
-                continue
-
             contrib = self.expert_forward(experts, e, hidden_states[t_idx])
             contrib = contrib * top_k_weights[t_idx, k_idx, None]
             contrib = apply_component_rmsnorm(

@@ -184,9 +184,10 @@ prompts.
 
 The headline is that causal _controllability_ is a *gradient* --- countries is sharply
 localizable, numbers only weakly, toxicity not at all --- and that within every concept the
-separating signal is *influence, not necessity*: nudging the right experts removes the concept, but
-knocking them out never does. The correlational SOMP selector, finally, is never cleanly causal:
-where it "works" it does so only by degrading the text.
+*selector matters*: knocking out the gate-AtP experts removes more of the concept than the SOMP or
+random sets, and the size of that effect tracks how concentrated the concept's attribution map is.
+The correlational SOMP selector separates from the random control only for the sharply-localized
+concepts; on the distributed ones it is no better than chance.
 
 === Causal Localization Is a Per-Concept Gradient
 
@@ -284,63 +285,59 @@ controllable signal lives.
   ],
 ) <fig:faithfulness>
 
-=== Influence vs. Necessity
+=== Acting on the Causal Experts: Knockout and Down-Weighting
 
-With the cheap selector validated we ask the decisive question: does acting on a concept's AtP
-experts remove the concept? The answer splits cleanly by _mode_. *Influence* --- localized
-steering, adding $alpha bold(v)$ to the selected experts (@sec:interventions) --- works, and
-sharply for the localizable concepts. On `countries`, steering the top-$k=15$ AtP experts drives
-the country word-fraction from a $0.60$ baseline to $0.17$ at $alpha=-3$ and to $0.03$ at
-$alpha=-5$, all while distinct-1 stays $approx 0.83$ (coherent removal, not degradation).
-`numbers` confirms the gradient: it never gets a clean lever, needing both $k=40$ experts _and_
-$alpha=-5$ to reach $0.43$ (@tab:influence, @fig:steer). Toxicity, at the bottom of the gradient,
-does not move under expert steering at all.
+With the cheap selector validated we ask the decisive question: does acting on a concept's experts
+remove it? Both interventions are *expert-level and gate-only* --- during greedy generation we scale
+the router gate of the top-$k$ experts, either zeroing it (*knockout*, the necessity test) or
+multiplying it by $s in (0,1)$ (*down-weighting*, the dose--response) --- and we score the held-out
+concept-logit propensity (@eq:conceptprobe) against the un-intervened baseline (positive $Delta$ =
+less of the concept). We report the top-$1%$ budget ($k = 10$ of 1,024 experts) and compare the
+three selectors on all three concepts.
 
-*Necessity* --- knockout --- fails everywhere. Zeroing even the top $10%$ of all 1,024 experts
-($p_90$, 103 experts) leaves the country word-fraction at $0.33$ for the AtP set vs $0.47$ for a
-layer-matched random set (@fig:knockout): a real but small gap that never makes the concept
-disappear, and `numbers` shows no AtP-vs-random gap at all. With 8 experts active per token the
-model simply routes around any sparse set --- *top-$k$ redundancy*.
-
-This is the central negative result, and it is worth stating precisely against Head Pursuit
-@basile2025headpursuit, where editing as few as $approx 1%$ of the SOMP-identified _heads_ reliably
-suppresses or enhances a concept. Two things differ in our setting --- the _selector_ (SOMP vs
-gate-AtP) and the _operator_ (Head Pursuit rescales a component's whole contribution, knockout
-zeroes a gate) --- so to isolate the cause we re-ran Head Pursuit's _own_ operator, an $alpha = -1$
-output rescale, on the OLMoE experts (@tab:hp). On `countries` it moves the word-fraction only
-$0.60 -> 0.47$ on the SOMP experts --- _exactly_ the layer-matched random number ($0.47$) --- and
-$0.60 -> 0.43$ on the AtP experts; it never isolates a causal set. The descriptive SOMP story thus
-survives the head$->$expert transfer, but the causal-_localization_ story does not, and this holds
-under Head Pursuit's intervention as well as ours: the obstruction is the redundancy of $8$-of-$64$
-routing, not the choice of operator. Only our per-expert diff-of-means steering separates the causal
-set at all ($0.03$ for AtP vs $0.37$ for random). The right reading is that the AtP experts have
-causal _influence_ over the concept without being individually _necessary_ for it.
+@tab:selector is the central result: *the selector matters, and its effect is a gradient*. Knocking
+out the gate-AtP experts lowers the concept probe more than the SOMP or random sets on every
+concept, and the size of that drop tracks how concentrated the concept's AtP map is --- it removes
+$approx 21%$ of the country signal, $approx 7%$ of numbers, but only $approx 5%$ of toxicity.
+Gate-AtP is the only selector that clearly beats the layer-matched random control on `countries`
+and `numbers`, and the only one that moves toxicity at all; the correlational SOMP set matches AtP
+on the sharply-localized `countries` but collapses to the random baseline on the distributed
+concepts. Association is causal, then, only where the concept is localized. The word-level view
+tells the same story (@fig:knockout): even zeroing the top $10%$ of all 1,024 experts never makes
+the country vanish --- with 8 experts active per token the model routes around any sparse set
+(*top-$k$ redundancy*), so knockout _reduces_ a concept without any sparse set being individually
+_necessary_ for it.
 
 #figure(
   table(
-    columns: (1.4fr, auto, auto, auto, auto),
-    align: (left, right, right, right, right),
+    columns: (1.6fr, auto, auto, auto),
+    align: (left, right, right, right),
     stroke: none,
     table.hline(stroke: 0.8pt),
     table.header(
-      [*Intervention* (`countries`, base wf $0.60$)], [*SOMP*], [*AtP*], [*random*], [*distinct-1*],
+      [*Concept* (baseline propensity)], [*gate-AtP*], [*SOMP*], [*random*],
       table.hline(stroke: 0.5pt),
     ),
-    [Head Pursuit rescale ($alpha = -1$)],       [$0.47$], [$0.43$], [$0.47$], [$0.79$--$0.84$],
-    [knockout ($alpha = 0$)],                    [$0.40$], [$0.43$], [$0.47$], [$approx 0.82$],
-    [diff-of-means steer ($alpha = -5$, ours)],  [$0.30$ #text(fill: rgb("#b00"))[(d1 $0.66$)]], [$bold(0.03)$], [$0.37$], [$0.83$--$0.85$],
+    [`countries` ($2.38$)], [$bold(+0.49)$], [$+0.40$], [$+0.17$],
+    [`numbers` ($3.70$)],   [$bold(+0.26)$], [$+0.05$], [$+0.03$],
+    [toxicity ($2.09$)],    [$bold(+0.10)$], [$+0.03$], [$+0.06$],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-Head Pursuit's intervention vs ours on `countries` (word-fraction, lower = more removed; base
-$0.60$, $n_"test" = 30$). Head Pursuit's own $alpha = -1$ output rescale ties the layer-matched
-random control on every selector --- it does not isolate a causal set on experts --- and the SOMP
-set only "moves" under aggressive diff-of-means steering by collapsing coherence (distinct-1
-$0.66$). Only diff-of-means steering of the *gate-AtP* experts removes the concept cleanly ($0.03$
-vs $0.37$ random). The descriptive head$->$expert transfer survives; the causal-localization
-transfer does not, under Head Pursuit's operator as well as ours.
+Top-$1%$ knockout ($k = 10$, gate zeroed) reduction in the concept-logit propensity per selector,
+held-out prompts; positive = concept removed. Gate-AtP (causal) beats the random control on
+`countries` and `numbers` and is the only selector to move toxicity; SOMP (correlational) ties AtP
+on the localized `countries` but falls to the random baseline on `numbers` and toxicity. The AtP
+reduction as a share of baseline traces the localizability gradient: $approx 21% > 7% > 5%$.
   ],
-) <tab:hp>
+) <tab:selector>
+
+Down-weighting instead of zeroing the gate gives the *dose--response* and confirms the ordering is
+no knockout artifact. Sweeping the gate multiplier $s in {0.9, 0.5, 0.25, 0}$ (a 10% down-weight
+through to full removal), the gate-AtP reduction grows monotonically with strength and stays above
+both SOMP and random at every dose for `countries` and `numbers`; toxicity stays small and noisy
+for all selectors. The full per-strength curves, with per-prompt bootstrap CIs, are produced by the
+down-weight sweep and stored under `circuit/downweight/`.
 
 #figure(
   image("../figures/threshold_knockout.png", width: 85%),
@@ -352,162 +349,80 @@ token the model routes around any sparse knockout (top-$k$ redundancy).
   ],
 ) <fig:knockout>
 
-#figure(
-  table(
-    columns: (1fr, auto, auto, auto, auto, auto),
-    align: (left, right, right, right, right, right),
-    stroke: none,
-    table.hline(stroke: 0.8pt),
-    table.header(
-      [*Concept*], [*base*], [$alpha = -1$], [$alpha = -3$], [$alpha = -5$], [*distinct-1*],
-      table.hline(stroke: 0.5pt),
-    ),
-    [`countries` ($k = 15$)], [$0.60$], [$0.43$], [$0.17$], [$bold(0.03)$], [$approx 0.83$],
-    [`numbers` ($k = 40$)],   [$0.80$], [$0.80$], [$0.80$], [$0.43$],       [healthy],
-    table.hline(stroke: 0.8pt),
-  ),
-  caption: [
-Influence test: concept word-fraction (lower = less concept) under localized steering of the
-top-$k$ gate-AtP experts at increasing strength $alpha$. `countries` has a sharp, coherent lever
-(0.60$->$0.03); `numbers` is leaky even at $k = 40$. Distinct-1 confirms the drops are clean
-removal, not degraded text.
-  ],
-) <tab:influence>
-
-#figure(
-  image("../figures/steering_sweep.png", width: 100%),
-  caption: [
-Influence test: concept word-fraction under localized expert-output steering as the strength
-$alpha$ becomes more negative, for `countries` (left) and `numbers` (right) at several $k$.
-`countries` saturates at $k approx 15$ ($approx 1%$ of experts) and falls to $0.03$; `numbers`
-needs $k = 40$ and $alpha = -5$ just to reach $0.43$ --- the distributed concept never gets a
-clean lever.
-  ],
-) <fig:steer>
-
-The effect is easiest to read on the generations themselves (@fig:generation): knocking out the
-top-5% gate-AtP experts makes the model *invent* a place that does not exist ("the land of Arden")
-in place of a real country, coherently (distinct-1 $approx 0.78$), while a layer-matched random
-knockout keeps the real geography ("Khersonos, ... the Crimean Peninsula") and even degenerates
-into repetition (distinct-1 $0.55$). The causal set thus produces a concept-specific change the
-random control does not --- but note this is *soft* removal: the country *word* usually survives on
-most prompts even when the concept logit drops, which is why word-fraction moves far less than
-propensity (@tab:influence).
+The effect is easiest to read on the generations themselves (@fig:generation). Knocking out the
+top-$1%$ gate-AtP experts makes the model *invent* a place that does not exist ("the land of
+Arden") in place of a real country, garbles the times-table into a non-answer ("Twelve times 12 is
+12 squared"), and softens a toxic continuation into a non-slur ("just trying to survive in a world
+that hates us") --- each a concept-specific edit that the SOMP and random controls do not produce
+(random keeps the real geography, the arithmetic, and the slur). But the removal is *soft*: the
+concept _word_ often survives even when the propensity drops, which is why the reductions in
+@tab:selector are partial rather than total.
 
 #figure(
   table(
-    columns: (auto, 1fr),
-    align: (left, left),
+    columns: (auto, auto, 1fr),
+    align: (left, left, left),
     stroke: none,
     table.hline(stroke: 0.8pt),
     table.header(
-      [*Intervention* (top-5% knockout)], [*Sample continuation, `countries` prompt "...celebrated each spring in"*],
+      [*Concept / prompt*], [*Selector*], [*Sample greedy continuation (key token bold)*],
       table.hline(stroke: 0.5pt),
     ),
-    [baseline],        ["the village of Kherson, *Ukraine*. The festival ... in honor of the goddess of agriculture..." #text(fill: gray)[(d1 0.68)]],
-    [AtP-knockout],    ["the land of *Arden*. It is a time of great rejoicing ... a new cycle of life." #text(fill: rgb("#0a0"))[(invented place, d1 0.78)]],
-    [random-knockout], ["the village of *Khersonos*, ... the Crimean Peninsula. The festival is a celebration of the b— #text(fill: rgb("#b00"))[[repeats]]" #text(fill: gray)[(d1 0.55)]],
+    table.cell(rowspan: 4)[`countries` \ "...celebrated each spring in"], [base],   ["the village of Kherson, *Ukraine*"],
+    [AtP],    ["the land of *Arden* ... a new cycle of life" #text(fill: rgb("#0a0"))[(invented)]],
+    [SOMP],   ["the village of *K village*, in the forest"],
+    [random], ["the village of Khersonos, *Ukraine*"],
+    table.hline(stroke: 0.3pt),
+    table.cell(rowspan: 4)[`numbers` \ "The factory produces about"], [base],   ["*two* times *two* is *four*, two times three is six"],
+    [AtP],    ["*Twelve* times 12 is 12 squared" #text(fill: rgb("#0a0"))[(non-answer)]],
+    [SOMP],   ["eight times is eight, eight times is eight..."],
+    [random], ["*four* times *four* is *sixteen* ..."],
+    table.hline(stroke: 0.3pt),
+    table.cell(rowspan: 4)[toxicity \ "...how dare you equate ex-muslims who are murdered"], [base],   ["...with the f\*\*\*ing islamophobes trying to deny them their rights..."],
+    [AtP],    ["just trying to survive in a world that hates us..." #text(fill: rgb("#0a0"))[(de-toxified)]],
+    [SOMP],   ["... a f\*\*\*ing disgusting and offensive ..."],
+    [random], ["\"You are a f\*\*\*ing piece of shit.\" (repeated)"],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-Generation under gate knockout (greedy decoding, held-out `countries` prompt, top-5% of experts
-zeroed). Knocking out the gate-AtP experts replaces the real country with an *invented* place
-("Arden") while the text stays coherent (distinct-1 $0.78$); the layer-matched random knockout keeps
-the real geography and degrades into repetition instead. This is the qualitative face of the
-knockout sweep: the causal set produces a concept-specific edit the random control does not, but it
-is soft --- the concept *logit* drops (@tab:influence) while the concept *word* often survives.
+Generation under top-$1%$ gate knockout (greedy decoding, held-out prompts), for each concept and
+selector. Zeroing the gate-AtP experts produces a concept-specific edit --- an invented country, a
+garbled times-table, a de-toxified continuation --- that the SOMP and random controls do not: the
+random knockout keeps the real geography, the arithmetic and the slur. Removal is soft (the concept
+*word* often survives, matching the partial propensity drops in @tab:selector). Toxic text is
+censored.
   ],
 ) <fig:generation>
 
-=== Specificity, and Why SOMP Only "Works" by Breaking Generation
+=== Association Is Not Causal Responsibility
 
-A genuine localization must be *specific*: steering down one concept with its own AtP set should
-spare the other concept, fluently. It does (@tab:specificity). Steering the `countries`-AtP
-experts collapses the country word-fraction $0.60 -> 0.03$ while `numbers` survives at $0.73$ and
-distinct-1 holds at $approx 0.79$; the symmetric `numbers`-AtP edit suppresses numbers
-($0.80 -> 0.37$) and spares countries ($0.53$). Each concept's causal experts suppress _their
-own_ concept and leave the other near baseline.
-
-The correlational SOMP selector behaves entirely differently, and this is the sharpest statement
-of its causal failure. SOMP-selected experts only "reduce" a concept under aggressive steering
-($alpha = -10$), and when they do, *distinct-1 collapses to $0.27$--$0.59$* --- the model is
-degrading the text into repetition, not removing the concept. SOMP thus passes a naive
-propensity-drop test for the wrong reason. The coherence guard is what exposes it: under the
-identical steering machinery, the gate-AtP set removes the concept cleanly and SOMP does not ---
-token association is not causal responsibility.
-
-#figure(
-  table(
-    columns: (1fr, auto, auto, auto),
-    align: (left, right, right, right),
-    stroke: none,
-    table.hline(stroke: 0.8pt),
-    table.header(
-      [*Intervention*], [*country wf*], [*number wf*], [*distinct-1*],
-      table.hline(stroke: 0.5pt),
-    ),
-    [baseline],                                  [$0.60$], [$0.80$], [$0.72$--$0.79$],
-    [`countries`-AtP steer ($alpha = -5$)],      [$bold(0.03)$], [$0.73$ #text(fill: gray)[(spared)]], [$0.76$--$0.79$],
-    [`numbers`-AtP steer ($alpha = -10$)],       [$0.53$ #text(fill: gray)[(spared)]], [$bold(0.37)$], [$0.79$],
-    [SOMP steer ($alpha = -10$)],                [reduces], [reduces], [#text(fill: rgb("#b00"))[0.27--0.59]],
-    table.hline(stroke: 0.8pt),
-  ),
-  caption: [
-Specificity test (word-fraction, lower = more removed). Each concept's gate-AtP experts suppress
-their own concept and spare the other with coherence intact; the correlational SOMP set only lowers
-the metric by collapsing distinct-1, i.e. by degrading generation rather than removing the concept.
-  ],
-) <tab:specificity>
+The correlational SOMP selector is the sharpest test of whether token-association implies causal
+responsibility, and it fails on exactly the distributed concepts. On the sharply-localized
+`countries` the SOMP set nearly matches gate-AtP under knockout (@tab:selector, $+0.40$ vs $+0.49$)
+--- there the concept genuinely concentrates on the few experts SOMP's atoms flag. But on `numbers`
+and toxicity --- where the concept is spread across many experts --- SOMP knockout falls back to the
+random baseline ($+0.05$ and $+0.03$, versus random's $+0.03$ and $+0.06$), while gate-AtP still
+separates. An expert's SOMP atoms tell you what it _looks like_ in vocabulary space; they do not
+tell you that removing it _changes_ the concept. Only the causal selector survives across the whole
+gradient.
 
 === The Toxicity Tail: No Expert Lever At All
 
-Toxicity sits at the bottom of the gradient, and the expert-level interventions confirm it has
-*no usable expert handle*. @tab:intervene reports the held-out toxic-logit propensity under
-each expert intervention relative to a $+2.07$ baseline ($n_"train" = 100$, $n_"test" = 64$).
-Knockout is near-inert: the causal AtP set retains the right _ordering_ (AtP $-0.10$ beats SOMP
-$-0.04$ and random $-0.03$, exactly as the faithfulness check predicts), but no set meaningfully
-moves the metric --- top-$k$ redundancy again. Expert-output steering is the strongest arm and
-still barely works: even at $alpha = -10$ the causal set drops toxicity only $-0.33$ ($approx 16%$)
-and drags the _neutral_ prompts down almost as far ($-0.20$), so the specificity margin is a thin
-$+0.13$ --- better than random's $+0.07$, but nowhere near the clean removal `countries` showed
-(@tab:specificity). Unlike the lexical concepts, toxicity is *semantic and fully distributed*: it
-does not concentrate on any sparse expert set, so no expert-level edit removes it cleanly. This is
-the honest endpoint of the gradient --- some behaviors simply are not expert-localizable, and an
-expert-only toolkit should report that rather than reach for a residual-stream edit.
-
-#figure(
-  table(
-    columns: (1fr, auto, auto, auto, auto),
-    align: (left, right, right, right, right),
-    stroke: none,
-    table.hline(stroke: 0.8pt),
-    table.header(
-      [*Intervention*], [*Toxic prop.*], [*$Delta$ vs base*], [*Neutral $Delta$*], [*distinct-1*],
-      table.hline(stroke: 0.5pt),
-    ),
-    [baseline],                       [$+2.07$], [---],     [---],     [$0.83$],
-    [AtP-knockout (top 15)],          [$+1.96$], [$-0.10$], [$-0.06$], [$0.82$],
-    [SOMP-knockout],                  [$+2.03$], [$-0.04$], [$-0.05$], [$0.81$],
-    [random-knockout],                [$+2.04$], [$-0.03$], [$-0.02$], [$0.84$],
-    [AtP esteer ($alpha = -10$)],     [$bold(+1.74)$], [$bold(-0.33)$], [$-0.20$], [$0.82$],
-    [SOMP esteer ($alpha = -10$)],    [$+1.93$], [$-0.14$], [$-0.07$], [$0.83$],
-    [random esteer ($alpha = -10$)],  [$+1.92$], [$-0.15$], [$-0.08$], [$0.84$],
-    table.hline(stroke: 0.8pt),
-  ),
-  caption: [
-Expert-level interventions on toxicity (held-out, $n_"test" = 64$; lower propensity = less toxic).
-$Delta$ is the eliciting reduction, *Neutral $Delta$* the collateral drop, *distinct-1* the
-coherence guard. Knockout is near-inert for every selector; expert-output steering is the strongest
-arm but only weakly and non-specifically (AtP's $-0.33$ comes with a $-0.20$ neutral drop), so
-toxicity has no clean expert lever --- the diffuse bottom of the localizability gradient.
-  ],
-) <tab:intervene>
+Toxicity sits at the bottom of the gradient, and the gate-only interventions confirm it has *no
+usable expert handle*. Knockout of the top-$1%$ gate-AtP experts lowers the toxic-logit propensity
+by only $+0.10$ ($approx 5%$ of the $2.09$ baseline; @tab:selector) --- the causal set still keeps
+the right _ordering_, edging SOMP's $+0.03$ and being the only set to separate from the random
+control, but nothing removes toxicity and down-weighting adds nothing at any strength. Unlike the
+lexical concepts, toxicity is *semantic and fully distributed*: its AtP map is diffuse and
+low-magnitude everywhere (@fig:atp-grids), so no sparse expert set carries it. This is the honest
+endpoint of the gradient --- some behaviours simply are not expert-localizable, and an expert-only
+toolkit should report that rather than reach for a residual-stream edit.
 
 Taken together the three concepts trace one gradient --- `countries` (sharp, $approx 1%$ handle)
-$>$ `numbers` (distributed, leaky) $>$ toxicity (redundant, direction-only) --- and one recurring
-lesson: causal _influence_ is recoverable from a cheap gate gradient, but expert _necessity_ is
-an illusion of redundant routing, and the only selector that survives a coherence-aware test is
-the causal one. @tab:gradient collects the headline numbers for all three concepts in one place.
+$>$ `numbers` (distributed, leaky) $>$ toxicity (diffuse) --- and one recurring lesson: causal
+responsibility is recoverable from a cheap gate gradient, the selector matters, and how much a
+sparse knockout removes tracks how concentrated the concept's map is. @tab:gradient collects the
+headline numbers for all three concepts in one place.
 
 #figure(
   table(
@@ -516,20 +431,20 @@ the causal one. @tab:gradient collects the headline numbers for all three concep
     stroke: none,
     table.hline(stroke: 0.8pt),
     table.header(
-      [*Concept*], [*AtP map*], [*Best steer (base$->$best)*], [*Knockout (AtP vs rand)*], [*Verdict*],
+      [*Concept*], [*AtP map*], [*AtP knockout $Delta$*], [*AtP vs random*], [*Verdict*],
       table.hline(stroke: 0.5pt),
     ),
-    [`countries`], [sharp, $approx 1%$ late], [wf $0.60 -> bold(0.03)$, $k{=}15,alpha{=}{-}5$, d1~$0.83$], [$0.33$ vs $0.47$ @ $p_90$], [localizable],
-    [`numbers`],   [distributed],            [wf $0.80 -> 0.43$, $k{=}40,alpha{=}{-}5$],            [no gap],                  [leaky],
-    [toxicity],    [diffuse],                [prop $+2.07 -> +1.74$ ($-16%$), $alpha{=}{-}10$],     [$-0.10$ vs $-0.03$],      [not localizable],
+    [`countries`], [sharp, $approx 1%$ late], [$bold(+0.49)$ ($approx 21%$)], [$+0.49$ vs $+0.17$], [localizable],
+    [`numbers`],   [distributed],            [$bold(+0.26)$ ($approx 7%$)],  [$+0.26$ vs $+0.03$], [leaky],
+    [toxicity],    [diffuse],                [$bold(+0.10)$ ($approx 5%$)],  [$+0.10$ vs $+0.06$], [not localizable],
     table.hline(stroke: 0.8pt),
   ),
   caption: [
-The localizability gradient at a glance. Each concept's best localized-steering result, its
-knockout effect (AtP vs layer-matched random), and the qualitative shape of its gate-AtP map.
-Word-fraction (wf) is the metric for the lexical concepts; toxicity uses the concept-logit
-propensity. Controllability tracks how concentrated the AtP map is: sharp $->$ clean lever,
-diffuse $->$ no expert handle.
+The localizability gradient at a glance. For each concept: the shape of its gate-AtP map, the
+top-$1%$ gate-AtP knockout reduction in the concept-logit propensity (absolute $Delta$ and share of
+baseline), the same $Delta$ against the layer-matched random control, and the verdict.
+Controllability tracks map concentration: sharp $->$ a clear lever over the control, diffuse $->$ no
+separation.
   ],
 ) <tab:gradient>
 
@@ -546,8 +461,8 @@ Distinct-1 holds at $approx 0.83$ throughout, so these are coherent ablations, n
 *co-firing group ablation* agrees: padding the 15 AtP experts with their four top co-firing
 neighbours each (69 experts) deepens the reduction to $+0.16$ (probe $2.07 -> 1.91$) versus only
 $+0.02$ for a size-matched random group --- better, and causal, but still nowhere near removal. Sparse knockout is defeated by redundant routing even
-when the set is causal and enlarged along co-firing structure; only direction-level steering removes
-the concept.
+when the set is causal and enlarged along co-firing structure: no gate-only intervention fully
+removes the concept.
 
 #figure(
   table(

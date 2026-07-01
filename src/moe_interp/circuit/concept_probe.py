@@ -1,30 +1,19 @@
-"""Gate-ablation primitives + the whole-set significance test.
+"""Shared primitives for the causal gate interventions.
 
-The shared building blocks for every causal gate intervention in this package. The
-intervention is a clean ablation: inside one traced forward we zero an expert's router
-gate weight wherever it was selected, removing exactly that expert's additive
-contribution to the residual stream (the other top-k experts are untouched, since OLMoE
-does not renormalise the gates after selection). We then read the next-token distribution
-at the last prompt position and score it with a concept-logit probe.
-
-- ``relative_logit_score`` / ``Metric`` — the probe (see ``relative_logit_score``).
-- ``right_padded`` / ``scorer`` — shared trace plumbing, reused by ``patching`` (the
-  per-expert grid) and ``attribution`` (gate-AtP).
+- ``relative_logit_score`` — the concept-logit probe (see its docstring).
+- ``right_padded`` — trace plumbing shared with ``attribution`` (gate-AtP).
 
 The boundary tap mirrors ``capture.py``: ``layer.mlp.experts.inputs[0]`` yields
 ``(hidden_states, top_k_index, top_k_weights)`` for the fused experts module, which is
-the only point where per-expert routing is exposed on transformers >= 5.9. The metric is
-correlational about the probe but the intervention itself is causal.
+the only point where per-expert routing is exposed on transformers >= 5.9.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 import torch
-
-Metric = Callable[[torch.Tensor, list[int]], torch.Tensor]
 
 
 @contextmanager
@@ -52,44 +41,3 @@ def relative_logit_score(
     """
     logits = logits_last.float()
     return logits[:, concept_ids].mean(dim=-1) - logits.mean(dim=-1)
-
-
-def _last_token_logits(
-    model,
-    batch_tokens: list[list[int]],
-    ablate: list[tuple[int, int]] | None = None,
-) -> torch.Tensor:
-    """Trace one right-padded batch, optionally zeroing gates of ``ablate`` experts.
-
-    Returns ``(B, V)`` logits at each prompt's last real token.
-    """
-    lengths = torch.tensor([len(t) for t in batch_tokens])
-    with torch.no_grad(), model.trace(batch_tokens):
-        if ablate:
-            # nnsight 0.7 requires touching Envoys in forward (layer) order.
-            for layer_idx, expert_id in sorted(ablate):
-                _, top_k_index, top_k_weights = model.model.layers[
-                    layer_idx
-                ].mlp.experts.inputs[0]
-                top_k_weights[top_k_index == expert_id] = 0.0
-        logits = model.output.logits.save()
-    rows = torch.arange(logits.shape[0])
-    return logits[rows, lengths - 1].cpu()
-
-
-def scorer(
-    model,
-    prompts: list[list[int]],
-    concept_ids: list[int],
-    metric: Metric,
-    batch_size: int,
-) -> Callable[[list[tuple[int, int]] | None], torch.Tensor]:
-    """Return a function mapping an ablation set to per-prompt scores (right-padded)."""
-    batches = [prompts[i : i + batch_size] for i in range(0, len(prompts), batch_size)]
-
-    def score(ablate: list[tuple[int, int]] | None) -> torch.Tensor:
-        return torch.cat(
-            [metric(_last_token_logits(model, b, ablate), concept_ids) for b in batches]
-        )
-
-    return score

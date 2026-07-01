@@ -113,35 +113,28 @@ def test_projection_pursuit_decodes_dataset_labels():
     assert len(evr) == 1
 
 
-def test_somp_residual_shrinks():
-    """Residual norm must decrease (or stay equal) at every SOMP step."""
+def test_somp_evr_grows_and_atoms_unique():
+    """EVR must be non-decreasing, positive by the last step, with unique atoms."""
     torch.manual_seed(42)
     n, d, vocab, k = 32, 16, 60, 8
     X = torch.randn(n, d).double()
     dictionary = F.normalize(torch.randn(vocab, d), dim=1).double()
-    descriptors = list(range(vocab))
 
     result = somp(
         X=X,
         orig_X=X,
         pc=None,
         dictionary=dictionary,
-        descriptors=descriptors,
         k=k,
         device="cpu",
-        compute_evr=True,
     )
 
-    # residual should be in original space: orig_X - recon
-    res_norm = torch.as_tensor(result["residual"]).float().norm().item()
-    total_norm = X.float().norm().item()
-    assert res_norm < total_norm, "Residual should be smaller than original signal"
-
-    # EVR must be monotonically non-decreasing
+    # EVR must be monotonically non-decreasing and explain real variance
     evr = result["evr"].tolist()
     assert all(evr[i] <= evr[i + 1] + 1e-6 for i in range(len(evr) - 1)), (
         f"EVR not monotone: {evr}"
     )
+    assert evr[-1] > 0.0, "SOMP explained no variance"
 
     # chosen atoms must be unique
     chosen = result["chosen"].tolist()
@@ -257,10 +250,8 @@ def test_somp_uses_double_precision_for_lstsq(monkeypatch):
         orig_X=X,
         pc=None,
         dictionary=dictionary,
-        descriptors=list(range(6)),
         k=2,
         device="cpu",
-        compute_evr=True,
     )
 
     assert captured["a"] == torch.float64
@@ -272,10 +263,9 @@ def test_somp_supports_pca_reduced_path():
     X = torch.randn(20, 8)
     dictionary = F.normalize(torch.randn(12, 8), dim=1)
 
-    result = SOMP(k=3, pc=4, compute_evr=True, return_full=False)(
+    result = SOMP(k=3, pc=4)(
         X=X,
         dictionary=dictionary,
-        descriptors=list(range(12)),
         device="cpu",
     )
 

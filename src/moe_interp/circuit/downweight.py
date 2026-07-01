@@ -120,24 +120,30 @@ def run_downweight_sweep(
     budgets = {f"{f:g}": max(1, round(f * n_total)) for f in budgets_frac}
     prompt_sets = (("eliciting", elic_eval), ("neutral", neut_eval))
 
-    # Resume from any prior partial run.
+    meta = {
+        "concept": concept,
+        "dataset": dataset,
+        "n_total_experts": n_total,
+        "budgets": budgets,
+        "scales": list(scales),
+        "max_new_tokens": max_new_tokens,
+        "n_test": len(elic_eval),
+        "n_boot": n_boot,
+    }
+    # Resume from any prior partial run; warn if the stored run used different args
+    # (completed cells are kept, so mixing regimes in one JSON is easy to miss).
     if out_path.exists():
         res = json.loads(out_path.read_text())
+        if res.get("meta") != meta:
+            print(
+                f"[resume] WARNING: args differ from the stored run at {out_path}\n"
+                f"  stored:  {res.get('meta')}\n"
+                f"  current: {meta}\n"
+                "  completed cells are kept; delete the file to start clean.",
+                flush=True,
+            )
     else:
-        res = {
-            "meta": {
-                "concept": concept,
-                "dataset": dataset,
-                "n_total_experts": n_total,
-                "budgets": budgets,
-                "scales": list(scales),
-                "max_new_tokens": max_new_tokens,
-                "n_test": len(elic_eval),
-                "n_boot": n_boot,
-            },
-            "baseline": {},
-            "budgets": {},
-        }
+        res = {"meta": meta, "baseline": {}, "budgets": {}}
 
     def save():
         out_path.parent.mkdir(parents=True, exist_ok=True)
