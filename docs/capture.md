@@ -36,7 +36,9 @@ layer_00.h5 -> expert_000/activations, expert_000/tokens, expert_000/routing_wei
 
 Each expert group stores:
 
-- `activations`: routed expert contribution vectors (gate + component-RMSNorm folded in).
+- `activations`: routed expert output vectors with the final RMSNorm scale folded in. This is
+  a direct-effect projection into unembedding space; it does not propagate the component
+  through later layers.
 - `tokens`: source token id for each stored row.
 - `routing_weights`: the router gate weight for the selected expert/token pair.
 

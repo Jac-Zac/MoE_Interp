@@ -6,7 +6,8 @@ Two complementary studies of expert specialization in MoE models:
    framework to MoE: projects expert activations onto the unembedding dictionary to identify which
    experts *associate* with which semantic concepts (descriptive / correlational).
 2. **Causal toxic-expert circuit** — which experts *causally* drive toxic generations (activation
-   patching + gate-AtP), and how to suppress them at generation time (knockout / project-out).
+   patching validation + gate-AtP), and how to suppress them at generation time (gate knockout /
+   downweighting).
 
 Target model: `allenai/OLMoE-1B-7B-0924-Instruct` (16 layers, 64 experts/layer, top-8 routing)
 
@@ -30,7 +31,7 @@ python main.py analysis --dataset pile10k  # logit-lens baseline vs SOMP
 
 **`extract`** captures activations, **`pursuit`** ranks each expert's tokens, and
 **`analysis`** sanity-checks pursuit against a logit-lens baseline. Multi-GPU capture,
-token-selection modes, concept restriction, and all flags are documented in
+last-token selection, concept restriction, and all flags are documented in
 [docs/](docs/README.md).
 
 The causal circuit study reuses the captured activations and adds a model-in-the-loop
@@ -61,15 +62,14 @@ python scripts/cineca/downweight_runner.py    # intervene: knockout / downweight
 │   │   └── model_adapter.py           # Model-specific MoE trace adapters
 │   ├── pursuit/
 │   │   ├── pursuit.py                 # Projection pursuit orchestration
-│   │   ├── decomposition.py           # PCA, OMP, SOMP implementations
+│   │   ├── decomposition.py           # PCA-reduced and standard SOMP
 │   │   └── concepts.py                # Word lists (offensive, countries, numbers)
 │   ├── analysis/
 │   │   ├── common.py                  # Shared loaders for the post-hoc analyses
 │   │   └── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
 │   ├── circuit/                       # Causal toxic-expert study (model in the loop)
 │   │   ├── prompts.py                 # RealToxicityPrompts eliciting/neutral split
-│   │   ├── toxicity.py                # Toxic-logit probe + shared gate-ablation plumbing
-│   │   ├── patching.py                # Per-(layer,expert) causal effect grid
+│   │   ├── concept_probe.py           # Concept-logit probe + right-padding context
 │   │   ├── attribution.py             # gate-AtP: whole grid in one backward pass
 │   │   ├── intervene.py               # Generation-time gate knockout / downweighting
 │   │   ├── expert_sets.py             # SOMP / gate-AtP / matched-random expert sets
@@ -83,9 +83,11 @@ python scripts/cineca/downweight_runner.py    # intervene: knockout / downweight
 │   └── parser.py                      # CLI argument parser
 ├── tests/
 │   ├── test_data.py                   # Dataset prompt loading tests
+│   ├── test_capture.py                # HDF5 + capture row-selection tests
 │   ├── test_model_adapter.py          # Model adapter tests
 │   ├── test_pursuit.py                # Projection pursuit + SOMP unit tests
-│   └── test_analysis.py               # Logit-lens cumulative-EVR tests
+│   ├── test_analysis.py               # Logit-lens cumulative-EVR tests
+│   └── test_circuit.py                # Model-free circuit helper tests
 ├── scripts/                           # Setup and cluster scripts
 └── pyproject.toml
 ```

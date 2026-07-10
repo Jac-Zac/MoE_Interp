@@ -30,8 +30,13 @@ def _matched_random_set(
     used = set(reference)
     rand: list[tuple[int, int]] = []
     for layer, _ in reference:
-        while (layer, e := rng.randrange(n_experts)) in used:
-            pass
+        candidates = [e for e in range(n_experts) if (layer, e) not in used]
+        if not candidates:
+            raise ValueError(
+                f"Cannot sample another distinct expert from layer {layer}; "
+                f"all {n_experts} experts are already used"
+            )
+        e = rng.choice(candidates)
         used.add((layer, e))
         rand.append((layer, e))
     return rand
@@ -74,7 +79,7 @@ def _causal_grid_set(path, k: int) -> list[tuple[int, int]] | None:
     """Top-``k`` promoter experts from a cached effect grid (signed: most toxicity-promoting)."""
     if not path.exists():
         return None
-    grid = np.nan_to_num(np.load(path))
+    grid = np.load(path)
     return [(layer, e) for layer, e, _ in top_experts(grid, k, by="signed")]
 
 

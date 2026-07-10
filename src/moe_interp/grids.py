@@ -16,6 +16,12 @@ def top_experts(grid, k: int = 20, *, by: str = "abs") -> list[tuple[int, int, f
     cells (unsampled experts) are dropped. Accepts a tensor or array.
     """
     g = grid.detach().cpu().numpy() if hasattr(grid, "detach") else np.asarray(grid)
+    if g.ndim != 2:
+        raise ValueError(f"grid must be 2D, got shape {g.shape}")
+    if k < 0:
+        raise ValueError(f"k must be non-negative, got {k}")
+    if by not in {"abs", "signed"}:
+        raise ValueError(f"by must be 'abs' or 'signed', got {by!r}")
     n_experts = g.shape[1]
     flat = g.ravel()
     keys = np.abs(flat) if by == "abs" else flat

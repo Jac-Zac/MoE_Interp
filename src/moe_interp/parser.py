@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         type=str,
         default=None,
-        help="Model name (if not specified, reads from metadata.json)",
+        help="Model name (default: DEFAULT_MODEL or the built-in OLMoE model)",
     )
     pursuit_parser.add_argument(
         "--dataset",

@@ -15,8 +15,8 @@
 # Done as one GPU job — at 10k docs the extraction is ~pile10k-scale (~minutes) and
 # pursuit is fast, so both fit comfortably under the 2h GPU association cap.
 #
-# NOTE: extraction opens its HDF5 in append mode and is NOT partial-resumable, so it
-# must finish in one window (10k docs does, easily). The report prose says "50,000
+# NOTE: extraction overwrites its HDF5 and is NOT partial-resumable, so it must finish
+# in one window (10k docs does, easily). The report prose says "50,000
 # TriviaQA"; this run uses 10k (per request) — update the wording when reading results.
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1

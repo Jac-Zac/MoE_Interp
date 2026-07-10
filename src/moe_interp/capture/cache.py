@@ -75,6 +75,11 @@ def append_to_file(
     weights = routing_weights.detach().cpu() if routing_weights is not None else None
     if acts.numel() == 0:
         return
+    n_rows = acts.shape[0]
+    if toks.shape[0] != n_rows or (weights is not None and weights.shape[0] != n_rows):
+        raise ValueError(
+            "activations, tokens, and routing_weights must have equal lengths"
+        )
     group = f.require_group(_expert_group_name(expert_id))
     # If a group has activations but no routing_weights, backfill with NaN so the
     # column stays length-aligned before appending this batch's weights.
@@ -94,6 +99,8 @@ def append_to_file(
     _append_dataset(group, "tokens", toks)
     if weights is not None:
         _append_dataset(group, "routing_weights", weights)
+    elif "routing_weights" in group:
+        _append_dataset(group, "routing_weights", torch.full((n_rows,), float("nan")))
 
 
 def save_unembedding(path: Path, tensor: torch.Tensor) -> None:

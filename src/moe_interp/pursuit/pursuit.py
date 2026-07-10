@@ -18,14 +18,14 @@ from moe_interp.pursuit.concepts import CONCEPT_WORDS
 from moe_interp.pursuit.decomposition import SOMP
 
 
-def _empty_device_cache(device: torch.device) -> None:
+def _empty_device_cache(device: torch.device | str) -> None:
     """Return freed blocks to the OS so the caching allocator's high-water mark
     doesn't accumulate one `cross` matrix per expert.
 
     Only done on MPS, whose allocator fragments badly across the per-expert
     size changes. CUDA's caching allocator handles this fine, and a per-expert
     `empty_cache()` there only forces a synchronizing free + re-malloc."""
-    if device.type == "mps":
+    if torch.device(device).type == "mps":
         torch.mps.empty_cache()
 
 
@@ -247,6 +247,7 @@ def run_pursuit(
 
             for expert_idx, acts in expert_acts.items():
                 n_acts = acts.shape[0]
+                count_matrix[layer_idx, expert_idx] = n_acts
                 X = acts.float().to(device)
                 tokens, evr = projection_pursuit(
                     X,
@@ -277,7 +278,6 @@ def run_pursuit(
                 results.append(record)
 
                 evr_matrix[layer_idx, expert_idx] = evr[-1]
-                count_matrix[layer_idx, expert_idx] = n_acts
 
                 if jsonl_file is not None:
                     jsonl_file.write(json.dumps(record) + "\n")

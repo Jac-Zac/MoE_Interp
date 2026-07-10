@@ -128,14 +128,23 @@ def capture_expert_activations(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
     if model_name is None:
         model_name = model.config._name_or_path
 
     adapter = get_model_adapter(model)
     ds = prepare_prompts_dataset(prompts)
+    if not ds:
+        raise ValueError("prompts must contain at least one tokenized prompt")
+    if min(ds["length"]) <= 0:
+        raise ValueError("prompts must not contain empty token sequences")
 
     layer_files: dict[int, h5py.File] = {
-        i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a")
+        # Capture is not resumable: a new run replaces prior layer data rather than
+        # silently appending duplicate rows to it.
+        i: h5py.File(output_dir / f"layer_{i:02d}.h5", "w")
         for i in range(adapter.n_layers)
     }
 

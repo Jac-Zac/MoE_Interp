@@ -2,7 +2,7 @@
 
 Capture taps each MoE block's boundary tensors once per forward
 (``hidden_states``, ``top_k_index``, ``top_k_weights``) and re-derives every
-expert's per-token contribution from the block's weight params — fused MoE
+expert's per-token gated output from the block's weight params — fused MoE
 kernels never materialise the per-expert vectors, and nnsight 0.7's
 ``tracer.iter`` does not step the internal expert loop, so they cannot be traced
 directly.
@@ -10,7 +10,9 @@ directly.
 The boundary tap and the surrounding reconstruction loop (real-token masking,
 routing-weight scaling, component RMSNorm) are shared. The only model-specific
 piece is ``expert_forward`` — one expert's raw transform — which mirrors that
-model's own expert math so the reconstruction is exact. Pick an adapter with
+model's own expert math so the boundary reconstruction is exact. The optional
+final-RMSNorm scaling is a direct-effect projection, not propagation through later
+layers. Pick an adapter with
 ``get_model_adapter(model)``.
 """
 
@@ -39,10 +41,11 @@ def apply_component_rmsnorm(
     weight: torch.Tensor,
     eps: float,
 ) -> torch.Tensor:
-    """Approximate component RMSNorm using the residual stream second moment.
+    """Apply the final RMSNorm scale using the full residual's second moment.
 
-    This keeps the expert output on the same scale as the final model norm while
-    avoiding recomputing the full residual-stream normalization.
+    OLMoE and gpt-oss use the same RMSNorm formula. Applying its shared scale to one
+    earlier-layer expert component is a direct-effect approximation: it puts that
+    component in the unembedding space but does not propagate it through later layers.
     """
     input_dtype = hidden_states.dtype
     # NOTE: Keep float32 here for stability (HF issue #33133).
@@ -97,7 +100,8 @@ class MoEAdapter(ABC):
 
         ``hidden_states`` is ``(n_tokens, d_model)`` float32. Returns
         ``(n_tokens, d_model)`` float32, BEFORE routing-weight scaling and the
-        component RMSNorm (both applied by ``reconstruct_expert_contributions``).
+        component final-RMSNorm scale (both applied by
+        ``reconstruct_expert_contributions``).
         """
 
     # --- shared reconstruction loop ------------------------------------------

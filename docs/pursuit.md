@@ -19,8 +19,8 @@ It is cached on disk so pursuit can reuse it without rebuilding the matrix.
 Then `pursuit/pursuit.py` runs greedy sparse decomposition (`SOMP`) to find the tokens that best explain the expert activations:
 
 ```python
-decomposition = SOMP(k=k, compute_evr=True, return_full=False)
-result = decomposition(X=X, dictionary=dictionary, descriptors=list(range(len(dictionary))), device=device)
+decomposition = SOMP(k=k)
+result = decomposition(X=X, dictionary=dictionary, device=device)
 ```
 
 Two useful modes exist:

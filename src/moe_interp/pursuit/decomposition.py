@@ -64,6 +64,8 @@ def somp(
     over many experts with the same dictionary, pass it in precomputed to skip
     the per-call 412 MB transpose-and-copy.
     """
+    if k <= 0:
+        raise ValueError(f"k must be positive, got {k}")
     if dictionary.shape[0] < k:
         raise ValueError(f"Dictionary has {dictionary.shape[0]} rows, k={k}")
     if dictionary.shape[1] != X.shape[1]:
@@ -93,7 +95,7 @@ def somp(
         X_mean = torch.zeros((1, X.shape[1]), device=device, dtype=X.dtype)
 
     chosen = torch.zeros(k, dtype=torch.long, device=device)
-    notchosen = torch.ones(dictionary.shape[0], device=device)
+    available = torch.ones(dictionary.shape[0], dtype=torch.bool, device=device)
     residual = X.clone()
     recon = torch.zeros_like(X)
     evr = torch.zeros(k, device=device)
@@ -108,9 +110,9 @@ def somp(
         cross = residual @ dict_t
         proj_scores = cross.abs().sum(dim=0)
 
-        atom_idx = (proj_scores * notchosen).argmax()
+        atom_idx = proj_scores.masked_fill(~available, -torch.inf).argmax()
         chosen[i] = atom_idx
-        notchosen[atom_idx] = 0
+        available[atom_idx] = False
 
         current_atoms = torch.index_select(dictionary, 0, chosen[: i + 1])
         if is_mps:

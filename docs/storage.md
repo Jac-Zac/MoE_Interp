@@ -58,3 +58,5 @@ This avoids rebuilding the dictionary every time pursuit runs.
 ## Why HDF5
 
 HDF5 lets us append expert rows incrementally during capture without keeping everything in memory.
+Each extraction command starts fresh and overwrites existing layer files; interrupted captures
+are not resumable.

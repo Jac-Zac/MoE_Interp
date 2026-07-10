@@ -31,8 +31,8 @@ model = LanguageModel(
     device_map="auto",
     dtype="auto",
     dispatch=True,
-    # Captures tap the MoE block's boundary tensors (hidden_states, top_k_index, top_k_weights) once per forward
-    # and reconstruct each expert's contribution from the expert weights.
+    # Captures tap the MoE block's boundary tensors (hidden_states, top_k_index,
+    # top_k_weights) once per forward and reconstruct each expert's contribution.
 )
 
 print(model.dtype)  # Show dtype
@@ -60,7 +60,9 @@ ds = prepare_prompts_dataset(prompts)
 
 # Keep HDF5 files open for the full run (much faster than open/close per write)
 layer_files = {
-    i: h5py.File(output_dir / f"layer_{i:02d}.h5", "a") for i in range(n_layers)
+    # Capture is a fresh run, not a resume: overwrite old layers to avoid duplicate rows.
+    i: h5py.File(output_dir / f"layer_{i:02d}.h5", "w")
+    for i in range(n_layers)
 }
 
 # Right-pad so token positions are preserved (RoPE stays correct)
@@ -78,9 +80,10 @@ for batch in tqdm(
 
     # --- Pass 1: ONE trace, grab the 3 inputs OlmoeExperts.forward receives
     # and recompute every expert's contribution afterwards from the expert weights via
-    # the model-specific adapter.reconstruct_expert_contributions. Works under grouped_mm / eager / batched_mm.
+    # the model-specific adapter.reconstruct_expert_contributions. Works under
+    # grouped_mm / eager / batched_mm.
     expert_inputs = []
-    with torch.no_grad(), model.trace(batch_tokens, remote=REMOTE):
+    with torch.no_grad(), model.trace(batch_tokens):
         input_ids = model.inputs[1]["input_ids"].save()  # type: ignore[index]
 
         for layer in model.model.layers:

@@ -26,6 +26,7 @@ from _helpers import (
 from moe_interp.capture.model_adapter import (
     GptOssAdapter,
     SwiGLUMoEAdapter,
+    apply_component_rmsnorm,
     get_model_adapter,
 )
 
@@ -76,6 +77,17 @@ def test_get_model_adapter_rejects_unknown():
 
 def test_repr_includes_model_info():
     assert "dummy/olmoe" in repr(get_model_adapter(fake_model("olmoe")))
+
+
+def test_component_rmsnorm_matches_shared_olmoe_gpt_oss_formula():
+    hidden = torch.tensor([[1.0, -2.0], [3.0, 4.0]])
+    second_moment = torch.tensor([2.0, 5.0])
+    weight = torch.tensor([0.5, 2.0])
+    expected = weight * hidden * torch.rsqrt(second_moment[:, None] + 1e-6)
+
+    actual = apply_component_rmsnorm(hidden, second_moment, weight, 1e-6)
+
+    assert torch.allclose(actual, expected)
 
 
 # --- reconstruction correctness vs. the real modules -------------------------

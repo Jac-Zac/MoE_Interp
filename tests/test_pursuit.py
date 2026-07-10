@@ -141,6 +141,23 @@ def test_somp_evr_grows_and_atoms_unique():
     assert len(chosen) == len(set(chosen)), "SOMP selected duplicate atoms"
 
 
+def test_somp_atoms_stay_unique_after_residual_is_zero():
+    X = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])
+    dictionary = torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.0, -1.0]])
+
+    result = somp(
+        X=X,
+        orig_X=X,
+        pc=None,
+        dictionary=dictionary,
+        k=3,
+        device="cpu",
+    )
+
+    chosen = result["chosen"].tolist()
+    assert len(chosen) == len(set(chosen)) == 3
+
+
 def test_projection_pursuit_decodes_kept_token_ids():
     """Verify that kept_token_ids are used correctly for decoding base dictionary tokens."""
     # Create a dictionary where row index != token ID (simulates filtering)
@@ -211,7 +228,11 @@ def test_run_pursuit_handles_concepts_with_only_single_token_words(
     monkeypatch.setattr(pursuit, "load_unembedding", lambda path: torch.eye(4))
     monkeypatch.setattr(pursuit, "get_unembedding_dir", lambda model_name: tmp_path)
     monkeypatch.setattr(pursuit, "get_device", lambda: "cpu")
-    monkeypatch.setattr(pursuit, "load_layer_activations", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        pursuit,
+        "load_layer_activations",
+        lambda *args, **kwargs: {0: torch.zeros(5, 4)},
+    )
     monkeypatch.setattr(
         "transformers.AutoTokenizer.from_pretrained",
         lambda model_name: _DummyTokenizerForConcepts(),
@@ -226,6 +247,7 @@ def test_run_pursuit_handles_concepts_with_only_single_token_words(
     assert results == []
     assert evr_matrix.shape == (1, 1)
     assert count_matrix.shape == (1, 1)
+    assert count_matrix[0, 0] == 5
 
 
 def test_somp_uses_double_precision_for_lstsq(monkeypatch):

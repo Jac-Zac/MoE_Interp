@@ -4,6 +4,7 @@ masking, completeness, last-token selection). Expert-math correctness is covered
 test_model_adapter.py."""
 
 import h5py
+import pytest
 import torch
 from _helpers import build_experts, fake_model
 
@@ -39,6 +40,22 @@ def test_append_stores_activations_and_routing_weights(tmp_path):
     layer = load_layer_h5(tmp_path, 0, n_experts=4)
     assert layer[0]["activations"].shape == (10, 4)
     assert layer[0]["routing_weights"].shape == (10,)
+
+
+def test_append_keeps_optional_routing_weights_aligned(tmp_path):
+    path = tmp_path / "layer_00.h5"
+    with h5py.File(path, "w") as f:
+        append_to_file(f, 0, torch.zeros(2, 4), torch.arange(2), torch.rand(2))
+        append_to_file(f, 0, torch.ones(3, 4), torch.arange(2, 5))
+    entry = load_layer_h5(tmp_path, 0, n_experts=1)[0]
+    assert entry["routing_weights"].shape == (5,)
+    assert entry["routing_weights"][-3:].isnan().all()
+
+
+def test_append_rejects_misaligned_columns(tmp_path):
+    with h5py.File(tmp_path / "layer_00.h5", "w") as f:
+        with pytest.raises(ValueError, match="equal lengths"):
+            append_to_file(f, 0, torch.zeros(2, 4), torch.arange(3))
 
 
 def test_reconstruct_is_complete_over_real_tokens():

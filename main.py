@@ -17,7 +17,7 @@ from moe_interp.parser import build_parser
 from moe_interp.pursuit import run_pursuit
 
 
-def main():
+def main() -> None:
     load_dotenv()
     set_seed(1337)
 
