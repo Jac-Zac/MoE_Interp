@@ -3,7 +3,7 @@
 These modules read the HDF5 extractions and (optionally) the SOMP pursuit results
 and require no model forward pass — everything is recomputed from stored tensors:
 
-- ``logit_lens``: bulk mean-projection logit-lens baseline + SOMP-vs-lens comparison.
+- ``logit_lens``: bulk mean-projection logit-lens baseline compared with SOMP.
 """
 
 from moe_interp.analysis.logit_lens import run_logit_lens_comparison

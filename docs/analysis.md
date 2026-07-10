@@ -20,8 +20,8 @@ unembedding row. SOMP instead selects a **basis** of atoms that explain the **va
 the (centred) activations. Both EVRs use the identical estimator (squared projection / total
 variance) from `pursuit.decomposition.somp`, so they are comparable to the stored EVR.
 
-Reported per expert and aggregated: top-10 token overlap (Jaccard), the logit lens's single
-EVR, and SOMP EVR at depths 1/3/10. Writes `logit_lens_comparison.json`.
+Reported per expert and aggregated: the logit lens's single EVR and SOMP EVR at depths
+1/3/10. Writes `logit_lens_comparison.json`.
 
 The headline: a single top-k token ranking explains little of an expert's variance, while
 SOMP's first few atoms explain much more — i.e. a single top-k logit-lens token under-reads

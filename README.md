@@ -66,7 +66,7 @@ python scripts/cineca/downweight_runner.py    # intervene: knockout / downweight
 │   │   └── concepts.py                # Word lists (offensive, countries, numbers)
 │   ├── analysis/
 │   │   ├── common.py                  # Shared loaders for the post-hoc analyses
-│   │   └── logit_lens.py              # Logit-lens baseline vs SOMP (EVR + Jaccard)
+│   │   └── logit_lens.py              # Logit-lens baseline vs SOMP (EVR)
 │   ├── circuit/                       # Causal toxic-expert study (model in the loop)
 │   │   ├── prompts.py                 # RealToxicityPrompts eliciting/neutral split
 │   │   ├── concept_probe.py           # Concept-logit probe + right-padding context

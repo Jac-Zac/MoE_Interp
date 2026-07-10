@@ -125,9 +125,7 @@ used inside the SOMP run, so they are directly comparable.
 EVR averaged over all 1,024 experts, computed on a pile (10k-document) extraction. The logit
 lens reads one direction, so it has a single EVR (0.0010); SOMP's basis is shown at depths 1, 3,
 and 10. Even atom-for-atom SOMP captures $approx 2 times$ the lens, and its 10-atom basis
-$approx 14 times$, yet both stay under 2%. The mean top-10 token overlap between the two readouts
-(Jaccard) is only 0.043, so the two methods largely disagree on which tokens characterize an
-expert.
+$approx 14 times$, yet both stay under 2%.
   ],
 ) <tab:lens>
 
@@ -135,7 +133,7 @@ expert.
 atoms explain under 2% of an expert's activation variance --- a direct, quantitative signature
 of polysemanticity: an expert's output does not lie near any low-dimensional vocabulary
 subspace @lecomte2025sparsity. Second, SOMP consistently captures $approx 2.1 times$ the
-variance of the logit lens, and the two readouts share almost no top tokens (Jaccard $0.043$).
+variance of the logit lens.
 A single mean-direction ranking therefore systematically under-reads an expert: it is biased
 toward the high-norm mean rather than the directions along which the expert actually varies.
 This is the per-expert analogue of the cross-layer finding that semantics in MoEs live in

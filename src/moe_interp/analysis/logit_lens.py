@@ -1,4 +1,4 @@
-"""Standard logit-lens baseline and SOMP-vs-lens comparison.
+"""Standard logit-lens baseline and SOMP comparison.
 
 The *logit lens* reads an activation by projecting it onto the unembedding and taking
 the top tokens. Aggregated over an expert's stored activations, the natural baseline is
@@ -79,16 +79,11 @@ def compare_expert(
     lens_tokens = [tokenizer.decode([i]) for i in lens_idx]
     lens_evr = direction_evr(A, dictionary[lens_idx[0]])  # single top-1 direction
 
-    a = {t.strip() for t in lens_tokens[:k]}
-    b = {t.strip() for t in somp_tokens[:k]}
-    jaccard = len(a & b) / len(a | b) if (a | b) else 0.0
-
     return {
         "lens_tokens": lens_tokens,
         "lens_evr": lens_evr,
         "somp_tokens": somp_tokens[:k],
         "somp_evr": [_evr_at(somp_evr, i) for i in range(1, k + 1)],
-        "jaccard_topk": jaccard,
     }
 
 
@@ -102,7 +97,7 @@ def run_logit_lens_comparison(
     pursuit_dir: Path | str | None = None,
     output_dir: Path | None = None,
 ) -> dict:
-    """Run the mean-projection logit lens vs SOMP over every analyzable expert.
+    """Run the mean-projection logit lens and SOMP comparison over every expert.
 
     ``extractions_dir`` / ``pursuit_dir`` default to the standard local layout; pass
     explicit paths to read from elsewhere. Returns a summary dict and (if ``output_dir``
@@ -148,9 +143,6 @@ def run_logit_lens_comparison(
         "dataset": dataset,
         "n_experts_compared": len(records),
         "k": k,
-        "mean_jaccard_topk": (
-            float(np.mean([r["jaccard_topk"] for r in records])) if records else 0.0
-        ),
         "mean_lens_evr": (
             float(np.mean([r["lens_evr"] for r in records])) if records else 0.0
         ),
