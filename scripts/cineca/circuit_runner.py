@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """Run the gate-AtP localization step + render the localization report.
 
-Builds the disjoint RealToxicityPrompts train/test split and computes the gate-AtP causal-effect
-grid (one backward pass) over the eliciting *train* prompts, then renders the HTML report
-(gate-AtP heatmap + activation-patching faithfulness). Artifacts land under ``data/<model>/circuit/``.
+Builds the disjoint RealToxicityPrompts train/test split and computes the gate-AtP contribution
+grid (one backward pass per batch) over the eliciting *train* prompts, then renders the HTML report
+(gate-AtP heatmap + exact gate-ablation comparison). Artifacts land under ``data/<model>/circuit/``.
 
-The grid is keyed by train-set size (``atp_grid_n<N>.npy``) and is *shared* with the
+The grid is keyed by concept and train-set size and is *shared* with the
 knockout/downweighting sweep (``scripts/cineca/downweight_runner.py``), which is where the
 intervention results are produced. See ``moe_interp.circuit.attribution`` for the AtP method and
-its one-off validation against exhaustive activation patching.
+its one-off validation against exhaustive gate ablation.
 
 Usage:
     python scripts/cineca/circuit_runner.py [--model MODEL] [--batch-size N]
@@ -23,14 +23,14 @@ import torch
 from dotenv import load_dotenv
 from nnsight import LanguageModel
 
-from moe_interp.circuit.attribution import gate_attribution
+from moe_interp.circuit.attribution import attribution_grid_path, gate_attribution
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.circuit.report import build_report
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import build_concept_token_ids
 
 
-def main():
+def main() -> None:
     load_dotenv()
     set_seed(1337)
 
@@ -83,7 +83,7 @@ def main():
     )
 
     # Train split identifies the experts; keyed by train size so the downweight sweep reuses this
-    # exact grid (same prompts, same toxic ids). The test split is computed for a shared split but
+    # exact grid (same prompts and concept-token ids). The test split is computed for a shared split
     # not used here — the intervention scoring lives in the downweight sweep.
     elic_tr, _, _, _ = rtp_split(
         model.tokenizer,
@@ -92,19 +92,20 @@ def main():
         hi=args.hi,
         challenging=args.challenging,
     )
-    regime = (
-        ""
-        if (args.hi == 0.5 and not args.challenging)
-        else (f"_hi{args.hi:g}" + ("_chal" if args.challenging else ""))
-    )
-    toxic_ids = build_concept_token_ids(model.tokenizer)
+    concept_ids = build_concept_token_ids(model.tokenizer)
     print(f"Model loaded: {len(elic_tr)} train eliciting prompts", flush=True)
 
-    # gate-AtP localization grid (one backward pass) — the causal localizer.
-    atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}{regime}.npy"
+    # One backward pass per batch scores every routed expert simultaneously.
+    atp_path = attribution_grid_path(
+        cdir,
+        concept="offensive",
+        n_prompts=len(elic_tr),
+        hi=args.hi,
+        challenging=args.challenging,
+    )
     if not atp_path.exists():
         print("gate-AtP localization grid ...", flush=True)
-        atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=atp_batch)
+        atp = gate_attribution(model, elic_tr, concept_ids, batch_size=atp_batch)
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp.numpy())
     else:
@@ -115,7 +116,7 @@ def main():
         torch.cuda.empty_cache()
 
     print("Building report ...", flush=True)
-    report_path = build_report(model_name)
+    report_path = build_report(model_name, atp_grid_path=atp_path)
     print(f"Report -> {report_path}", flush=True)
     print("Done.", flush=True)
 

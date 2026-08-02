@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 from nnsight import LanguageModel
 
 from moe_interp.capture.model_adapter import model_num_experts
+from moe_interp.circuit.attribution import attribution_grid_path
 from moe_interp.circuit.expert_sets import (
     _causal_grid_set,
     _matched_random_set,
@@ -91,8 +92,12 @@ def main():
     pattern = concept_regex(CONCEPT_WORDS[args.concept])
 
     # Full ranked selector lists (prefixes give every k).
-    md = get_model_dir(args.model)
-    atp_path = md / "circuit" / "attribution" / f"atp_grid_n{len(elic_tr)}.npy"
+    cdir = get_model_dir(args.model) / "circuit"
+    atp_path = attribution_grid_path(
+        cdir,
+        concept=args.concept,
+        n_prompts=len(elic_tr),
+    )
     atp_full = _causal_grid_set(atp_path, kmax) or []
     somp_full = somp_concept_experts_evr(args.model, args.dataset, args.concept, kmax)
     if not atp_full:

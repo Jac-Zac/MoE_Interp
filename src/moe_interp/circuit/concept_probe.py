@@ -37,7 +37,7 @@ def relative_logit_score(
     More sensitive than a raw ``P(next token in concept set)`` probe: the softmax floor
     over a 50k vocab makes the absolute probability of any specific content word tiny, so
     small causal shifts are easier to read on the (centred) logits. Concept-agnostic — the
-    toxic-logit metric is just this with an offensive-word id set.
+    harmful-content proxy is this score with an offensive-word token set.
     """
     logits = logits_last.float()
     return logits[:, concept_ids].mean(dim=-1) - logits.mean(dim=-1)

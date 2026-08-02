@@ -114,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the SOMP results dir (default: data/<model>/pursuit/<dataset>)",
     )
 
-    # The causal toxic-expert circuit study (gate-AtP localization, generation-time
+    # The exploratory gate-AtP study (localization, generation-time
     # expert knockout / gate downweighting, and the HTML report) lives in the
     # `# %%` walkthroughs under notebooks/circuits/, driving moe_interp.circuit directly.
 

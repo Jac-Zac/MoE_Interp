@@ -34,7 +34,8 @@ token. The gated output of expert $e$ for token $bold(x)$ is:
 $ bold(c)_e (bold(x)) = g_e (bold(x)) dot f_e (bold(x)) $
 
 where $g_e$ is the scalar gating weight and $f_e (bold(x)) in RR^d$ is the expert FFN output.
-Expert Pursuit operates on $bold(c)_e$ averaged over documents.
+Expert Pursuit stacks one $bold(c)_e$ row for every document whose last token routes to expert
+$e$; it does not insert zero rows for documents that do not route to that expert.
 
 == GPT-OSS Notes
 
@@ -54,15 +55,15 @@ _zero, one, two, ..., nineteen, twenty, thirty, ..., ninety, hundred, thousand, 
 billion_, plus ordinals _first, second, third, fourth, fifth_ and quantifiers _half,
 quarter, double, triple, single, pair, dozen_.
 
-*Countries.* 50 country names covering major world regions, including _France, Germany,
+*Countries.* Country names covering major world regions, including _France, Germany,
 Japan, Brazil, Nigeria, India, Australia_, etc. Multi-word names such as _United Kingdom_
-and _South Korea_ are included as single entries; the tokenizer may split these into
-multiple tokens, all of which are included in the restricted dictionary.
+and _South Korea_ are included as single entries. In pursuit, a multi-token word is represented
+by the normalized mean of its token unembedding rows; in the logit probe, multi-token entries are
+dropped because the probe indexes next-token logits directly.
 
 *Offensive.* A list of 66 words associated with harmful or sensitive content, including
 _hate, terrorism, violent, racist_, etc. This list was used to probe whether any experts
-specialize in harmful content; none of the top-ranked experts under this concept showed
-coherent specialization on TriviaQA.
+align with harmful-content vocabulary. It is not a validated toxicity classifier.
 
 == SOMP Algorithm <app:somp>
 
@@ -94,39 +95,41 @@ Output: support S (ranked tokens); EVR curve
 5      W   ← argmin_W ‖H − W·D_S‖_F²                         # least-squares refit
 6      R   ← H − W·D_S
 7      EVR_t ← 1 − ‖R‖_F² / ‖H‖_F²
-8  return S ordered by ‖W‖ ,  {EVR_t}
+8  return S in greedy selection order,  {EVR_t}
 ```
   ])),
 ) <app:somp-alg>
 
 == gate-AtP Algorithm <app:atp>
 
-@app:atp-alg gives the causal selector of @sec:selectors. It scores every $(l, e)$ from a
-single forward--backward pass, the first-order approximation of the $approx 1024$ ablation
-forward passes that exhaustive patching (@eq:patch) would cost. The only adaptation to MoE
+@app:atp-alg gives the gate-AtP selector of @sec:selectors. It scores every $(l, e)$ from one
+forward--backward pass per prompt batch, approximating an exhaustive per-slot gate
+ablation sweep (@eq:patch). The only adaptation to MoE
 experts is the *node we differentiate*: the fused-experts kernel never materializes the
 per-expert hidden neurons, so the finest differentiable per-expert handle is the router gate
 $g_e$. Because the block output $sum_e g_e f_e$ is *linear* in $g_e$, the gate carries no
 node-level saturation, and AtP's only error is the downstream nonlinearity below the residual
-stream --- which is why it tracks the gold patching grid closely in the late layers (@sec:results).
+stream --- which is consistent with its closer agreement with exact gate ablation in late layers
+(@sec:results).
 
 #figure(
   kind: "algorithm",
   supplement: [Algorithm],
-  caption: [gate-AtP: per-$(l, e)$ causal attribution in one backward pass.],
+  caption: [gate-AtP: per-$(l, e)$ causal attribution with one backward pass per prompt
+    batch.],
   block(width: 100%, inset: 8pt, stroke: 0.5pt, radius: 3pt, align(left, [
     #set text(size: 9pt)
 ```
 Input:  prompts; concept token set C; metric s_C (concept-logit probe)
 Output: attribution grid AtP ∈ R^{L×E}
 1  AtP[l, e] ← 0
-2  forward pass; at each layer l read the fused-experts boundary (h, idx, g);
+2  for each prompt batch: forward pass; at each layer l read (h, idx, g);
                   mark the gates g differentiable
 3  L ← Σ_{prompt} s_C(z_last)                              # metric over the batch
 4  backward pass → ∂L/∂g for every layer l
 5  for each layer l, for each routed slot (token, expert e in idx):
 6      AtP[l, e] += g · ∂L/∂g                              # contribution = −Δmetric on g→0
-7  return AtP ;  rank experts by signed AtP
+7  sum batch grids; return AtP; rank experts by signed AtP
 ```
   ])),
 ) <app:atp-alg>

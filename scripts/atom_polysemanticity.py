@@ -1,8 +1,8 @@
 """Quantify expert polysemanticity from the *content* of an expert's top SOMP atoms.
 
 Low EVR alone does not establish polysemanticity (it is consistent with superposition, but
-also with an expert whose output simply lies off the vocabulary manifold). The direct test the
-slides need is: do an expert's top atoms span *many unrelated token directions*? We answer it in
+also with an expert whose output simply lies off the vocabulary manifold). This diagnostic asks
+whether an expert's top atoms span *many weakly aligned token directions*. We measure that in
 the model's own readout geometry — each atom is a row of the (L2-normalized) unembedding, so two
 atoms are "related" when their unembedding rows are aligned (high cosine) and "unrelated" when
 near-orthogonal.
@@ -14,9 +14,9 @@ For each expert we take its top-N atoms and report two threshold-questions:
   directions). Threshold-free.
 * number of semantic families = agglomerative clusters of the atom rows at cosine ≥ 0.4.
 
-Both are anchored by two controls: a *monosemantic* set (one concept's words → low PR / 1 family)
-and a *random-vocab* set (orthogonal ceiling → PR≈N). If experts sit near the random ceiling,
-their "specialization" is a thin layer over a polysemantic core.
+Both are anchored by two reference sets: one concept's words and random vocabulary rows. These
+are geometry controls, not frequency-matched semantic nulls, so the output should not be treated
+as a definitive polysemanticity measurement.
 
 Runs locally off the cached ``dictionary.h5`` if present; otherwise lazy-loads ``lm_head.weight``
 from the HF safetensors shards (no full-model load). On a cluster (Orfeo/Cineca) just point
@@ -44,14 +44,12 @@ def load_unembedding_rows(model_name: str, cache_dict: Path | None) -> torch.Ten
             load_unembedding(cache_dict).float(), dim=1
         )
 
-    from huggingface_hub import try_to_load_from_cache
+    from huggingface_hub import hf_hub_download
     from safetensors import safe_open
-    from transformers import AutoConfig
 
-    AutoConfig.from_pretrained(model_name)  # ensures the snapshot is present
-    index = try_to_load_from_cache(model_name, "model.safetensors.index.json")
-    weight_map = json.load(open(index))["weight_map"]
-    shard = Path(index).parent / weight_map["lm_head.weight"]
+    index = hf_hub_download(model_name, "model.safetensors.index.json")
+    weight_map = json.loads(Path(index).read_text())["weight_map"]
+    shard = hf_hub_download(model_name, weight_map["lm_head.weight"])
     with safe_open(shard, framework="pt") as f:
         W = f.get_tensor("lm_head.weight").float()
     return torch.nn.functional.normalize(W, dim=1)
@@ -90,12 +88,11 @@ def _components(rows: torch.Tensor, cos_thr: float) -> list[int]:
 
 
 def largest_family_frac(rows: torch.Tensor, cos_thr: float = 0.4) -> float:
-    """Share of atoms in the biggest cosine-family — robust polysemanticity score.
+    """Share of atoms in the biggest thresholded cosine-family.
 
     ≈1 for a monosemantic expert (one dominant topic); ≈1/N when the top atoms are a grab-bag of
-    mutually-unrelated directions. Unlike the raw family *count* it is not saturated by SOMP's
-    atom decorrelation, so it cleanly separates the few clean specialists from the polysemantic
-    majority."""
+    mutually weakly aligned directions. The value depends on ``cos_thr`` and single-linkage
+    connectivity, so interpret it together with threshold sensitivity and controls."""
     n = rows.shape[0]
     if n < 2:
         return 1.0

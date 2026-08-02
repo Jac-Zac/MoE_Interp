@@ -7,6 +7,8 @@ import pytest
 import torch
 
 from moe_interp.circuit import intervene
+from moe_interp.circuit.attribution import attribution_grid_path
+from moe_interp.circuit.downweight import _bootstrap_cell
 from moe_interp.circuit.expert_sets import _causal_grid_set, _matched_random_set
 from moe_interp.grids import top_experts
 
@@ -66,3 +68,47 @@ def test_causal_grid_drops_unsampled_nan_cells(tmp_path):
 def test_top_experts_validates_mode():
     with pytest.raises(ValueError, match="by must be"):
         top_experts(np.ones((2, 2)), by="largest")
+
+
+def test_bootstrap_rejects_unpaired_lengths():
+    cell = {"propensity": [1.0], "word_hit": [0.0], "distinct1": [1.0]}
+    base = {"propensity": [1.0, 2.0], "word_hit": [0.0], "distinct1": [1.0]}
+
+    with pytest.raises(ValueError, match="equal propensity lengths"):
+        _bootstrap_cell(cell, base, n_boot=10, rng=np.random.default_rng(0))
+
+
+def test_attribution_grid_path_prefers_canonical_then_legacy(tmp_path):
+    legacy = tmp_path / "attribution" / "atp_grid_n100.npy"
+    legacy.parent.mkdir()
+    legacy.touch()
+
+    assert (
+        attribution_grid_path(
+            tmp_path,
+            concept="offensive",
+            n_prompts=100,
+        )
+        == legacy
+    )
+
+    canonical = legacy.with_name("atp_grid_offensive_n100.npy")
+    canonical.touch()
+    assert (
+        attribution_grid_path(
+            tmp_path,
+            concept="offensive",
+            n_prompts=100,
+        )
+        == canonical
+    )
+    assert (
+        attribution_grid_path(
+            tmp_path,
+            concept="countries",
+            n_prompts=60,
+            hi=0.8,
+            challenging=True,
+        ).name
+        == "atp_grid_countries_n60_hi0.8_chal.npy"
+    )

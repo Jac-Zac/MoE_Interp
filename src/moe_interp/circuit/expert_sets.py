@@ -9,12 +9,13 @@ consumes these sets is :mod:`moe_interp.circuit.downweight`.
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import numpy as np
 
 from moe_interp.analysis.common import load_somp_results
 from moe_interp.capture.model_adapter import model_num_experts
-from moe_interp.config import get_model_dir, get_pursuit_dir
+from moe_interp.config import get_pursuit_dir
 from moe_interp.grids import top_experts
 
 
@@ -75,7 +76,7 @@ def somp_concept_experts_evr(
     return [le for _, le in scored[:k]]
 
 
-def _causal_grid_set(path, k: int) -> list[tuple[int, int]] | None:
+def _causal_grid_set(path: Path, k: int) -> list[tuple[int, int]] | None:
     """Top-``k`` promoter experts from a cached effect grid (signed: most toxicity-promoting)."""
     if not path.exists():
         return None
@@ -86,12 +87,11 @@ def _causal_grid_set(path, k: int) -> list[tuple[int, int]] | None:
 def expert_intervention_sets(
     model,
     model_name: str,
-    eliciting,
     *,
     concept: str,
     dataset: str,
     k: int,
-    atp_grid_path=None,
+    atp_grid_path: Path,
 ) -> dict[str, list[tuple[int, int]]]:
     """The expert sets compared by the intervention experiments: SOMP, AtP, + random.
 
@@ -100,11 +100,10 @@ def expert_intervention_sets(
     the experts this experiment most wants to act on. ``random`` is matched to the AtP causal set's
     layers (falling back to SOMP) so the specificity control shares the causal set's routing depth.
 
-    ``atp_grid_path`` overrides the AtP grid location (e.g. a concept-specific ``atp_<concept>``
-    grid); it defaults to the toxicity grid keyed by train size. Missing grids are skipped.
+    ``atp_grid_path`` identifies the grid fitted on the separate identification prompts. Missing
+    grids are skipped.
     """
     ne = model_num_experts(model)
-    md = get_model_dir(model_name)
     somp = somp_concept_experts_evr(model_name, dataset, concept, k)
     if not somp:
         raise RuntimeError(
@@ -112,10 +111,6 @@ def expert_intervention_sets(
             "run the concept-restricted pursuit first."
         )
     sets: dict[str, list[tuple[int, int]]] = {"SOMP": somp}
-    if atp_grid_path is None:
-        atp_grid_path = (
-            md / "circuit" / "attribution" / f"atp_grid_n{len(eliciting)}.npy"
-        )
     atp = _causal_grid_set(atp_grid_path, k)
     if atp:
         sets["AtP"] = atp

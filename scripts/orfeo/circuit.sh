@@ -13,13 +13,12 @@
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# gate-AtP localization + localization report. Computes the causal-effect grid (one backward
-# pass) over the eliciting train prompts and renders the gate-AtP heatmap + faithfulness report.
+# gate-AtP localization + localization report. Computes the contribution grid (one backward
+# pass per prompt batch) and renders the gate-AtP heatmap + faithfulness report.
 # The grid is shared with the knockout/downweighting sweep (scripts/orfeo/downweight.sh), which is
 # where the intervention results are produced.
 #
-# NOTE: the gate-AtP grid (atp_grid_n<N>.npy) is keyed by --n-prompts, so changing --n-prompts
-# just writes a new file — no stale-cache cleanup needed.
+# The grid is keyed by concept and --n-prompts, so changing --n-prompts writes a separate file.
 source scripts/setup_env.sh
 module load cuda
 

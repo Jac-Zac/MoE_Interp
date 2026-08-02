@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from nnsight import LanguageModel
 
 from moe_interp.capture.model_adapter import model_num_experts
+from moe_interp.circuit.attribution import attribution_grid_path
 from moe_interp.circuit.expert_sets import _causal_grid_set, _matched_random_set
 from moe_interp.circuit.intervene import (
     concept_propensity,
@@ -114,8 +115,12 @@ def main():
     concept_ids = build_concept_token_ids(model.tokenizer, CONCEPT_WORDS[args.concept])
     pattern = concept_regex(CONCEPT_WORDS[args.concept])
 
-    md = get_model_dir(args.model)
-    atp_path = md / "circuit" / "attribution" / f"atp_grid_n{len(elic_tr)}.npy"
+    cdir = get_model_dir(args.model) / "circuit"
+    atp_path = attribution_grid_path(
+        cdir,
+        concept=args.concept,
+        n_prompts=len(elic_tr),
+    )
     atp = _causal_grid_set(atp_path, args.k)
     if not atp:
         raise RuntimeError(

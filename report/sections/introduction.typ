@@ -20,11 +20,11 @@ Our contributions:
 - A residual-stream decomposition for MoE experts based on gated outputs.
 - Application of SOMP with the unembedding dictionary to obtain sparse, token-level
   expert summaries.
-- A TriviaQA-based pipeline for analyzing expert specialization in OLMoE.
-- A held-out causal circuit study with only *expert-level, gate-only* interventions: three
+- A TriviaQA-based pipeline for proposing and testing expert-specialization hypotheses in OLMoE.
+- A gate-intervention study with separate identification and evaluation prompts: three
   selectors (SOMP, gate-AtP, random) $times$ two interventions (gate knockout and down-weighting),
   run over three concepts.
-- Evidence that causal controllability is a _gradient_ (countries $>$ numbers $>$ toxicity), that
-  the *selector matters* (gate-AtP knockout beats the random control where SOMP does not), and that
-  how much a sparse knockout removes tracks how concentrated the concept's attribution map is ---
-  no gate-only intervention fully removes a concept, since top-$k$ routing is redundant.
+- Exploratory evidence that sparse gate controllability varies by lexicon and tracks attribution-map
+  concentration, plus a larger held-out RealToxicityPrompts study showing only a weak handle for an
+  offensive-word probe. These interventions scale post-top-$k$ weights without rerouting or
+  renormalizing them.

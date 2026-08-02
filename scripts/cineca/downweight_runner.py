@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run the knockout/downweight sweep (no steering) with per-prompt bootstrap error bars.
+"""Run the gate knockout/downweighting sweep with per-prompt bootstrap error bars.
 
 Reuses the circuit study's disjoint RealToxicityPrompts train/test split and the gate-AtP
 localizer, then sweeps gate downweighting (``s=0`` knockout ... ``s=0.9`` 10% downweight) on the
@@ -22,14 +22,18 @@ import numpy as np
 from dotenv import load_dotenv
 from nnsight import LanguageModel
 
-from moe_interp.circuit.attribution import gate_attribution
+from moe_interp.circuit.attribution import (
+    attribution_grid_path,
+    gate_attribution,
+    prompt_regime_suffix,
+)
 from moe_interp.circuit.downweight import run_downweight_sweep
 from moe_interp.circuit.prompts import rtp_split
 from moe_interp.config import get_default_model, get_device, get_model_dir, set_seed
 from moe_interp.pursuit.concepts import build_concept_token_ids
 
 
-def main():
+def main() -> None:
     load_dotenv()
     set_seed(1337)
 
@@ -59,6 +63,11 @@ def main():
     )
     p.add_argument("--n-boot", type=int, default=10000)
     args = p.parse_args()
+    if args.concept != "offensive":
+        p.error(
+            "this runner currently provides only the RealToxicityPrompts/offensive protocol; "
+            "other concepts need an explicit concept-specific prompt source"
+        )
 
     model_name = args.model
     cdir = get_model_dir(model_name) / "circuit"
@@ -67,26 +76,28 @@ def main():
         model_name, device_map=device_map, dtype="auto", dispatch=True
     )
 
-    elic_tr, elic_te, neut_tr, neut_te = rtp_split(
+    elic_tr, elic_te, _, neut_te = rtp_split(
         model.tokenizer,
         n_train=args.n_prompts,
         n_test=args.n_test,
         hi=args.hi,
         challenging=args.challenging,
     )
-    regime = (
-        ""
-        if (args.hi == 0.5 and not args.challenging)
-        else (f"_hi{args.hi:g}" + ("_chal" if args.challenging else ""))
-    )
+    regime = prompt_regime_suffix(args.hi, args.challenging)
     print(f"{len(elic_tr)} train + {len(elic_te)} test eliciting prompts", flush=True)
 
     # gate-AtP grid (shared with circuit_runner, keyed by train size) — build if absent.
-    atp_path = cdir / "attribution" / f"atp_grid_n{len(elic_tr)}{regime}.npy"
+    atp_path = attribution_grid_path(
+        cdir,
+        concept=args.concept,
+        n_prompts=len(elic_tr),
+        hi=args.hi,
+        challenging=args.challenging,
+    )
     if not atp_path.exists():
         print("gate-AtP grid missing; computing ...", flush=True)
-        toxic_ids = build_concept_token_ids(model.tokenizer)
-        atp = gate_attribution(model, elic_tr, toxic_ids, batch_size=args.batch_size)
+        concept_ids = build_concept_token_ids(model.tokenizer)
+        atp = gate_attribution(model, elic_tr, concept_ids, batch_size=args.batch_size)
         atp_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(atp_path, atp.numpy())
 
@@ -96,7 +107,7 @@ def main():
         model_name,
         concept=args.concept,
         dataset=args.dataset,
-        train=(elic_tr, neut_tr),
+        n_train=len(elic_tr),
         test=(elic_te, neut_te),
         out_path=out_path,
         budgets_frac=tuple(args.budgets),

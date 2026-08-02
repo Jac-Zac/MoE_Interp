@@ -30,9 +30,10 @@ MoEs. @wang2025whatgets distinguish *domain* experts (specialized to a topic) fr
 experts (large causal effect on the output), and @chaudhari2026moelens show a single
 top-weighted expert can approximate a whole layer's contribution to decoding. @herbst2026expert
 argue the expert is a more effective interpretable unit than the neuron, automatically
-describing hundreds of experts. This view is *actionable*: @ternovtsii2026geometric control
-behavior by steering routing through its geometry, and @do2026domain find domain-specific
-experts do exist and edit their weights for training-free domain control. Together this
+describing hundreds of experts. This view can be *actionable*: in a model with architecturally
+rank-1 experts, @ternovtsii2026geometric control behavior through geometric routing and expert
+editing; across ten pretrained MoEs, @do2026domain report domain-specific routing patterns and a
+training-free domain-steering method. Together this
 motivates treating expert outputs as structured, interpretable, and *intervenable* objects ---
 the premise of our circuit study (@sec:causal).
 
@@ -50,7 +51,7 @@ domain expertise. Architectures such as Monet @park2024monet and intrinsically-i
 MoEs @he2025intrinsic instead *force* the monosemanticity standard experts lack.
 
 The defensible reading is not that per-expert decomposition is uninformative, but that a
-single-readout summary under-reads a polysemantic expert --- which we test directly in
+single-readout summary may under-read a polysemantic expert --- which we examine in
 @sec:results.
 
 == SOMP
@@ -70,7 +71,8 @@ least-squares. After $T$ steps, we obtain a sparse set of vocabulary tokens that
 characterize the expert's behavior. The explained variance ratio (EVR) at each step
 measures how much signal the selected atoms capture.
 
-This is a multi-sample generalization of the Logit Lens @nostalgebraist2020logitlens (and its
-trained refinement, the Tuned Lens @belrose2023tunedlens): projecting a single activation onto
-$bold(D)$ is equivalent to one step of Matching Pursuit on one sample. SOMP extends this by operating on many samples simultaneously and
-selecting multiple atoms @basile2025headpursuit.
+This is closely related to the Logit Lens @nostalgebraist2020logitlens (and its trained refinement,
+the Tuned Lens @belrose2023tunedlens): both compare hidden directions with the unembedding rows.
+They are not identical objectives. A standard logit lens ranks signed logits for one activation,
+whereas our SOMP step aggregates *absolute* residual correlations across samples and then refits a
+multi-atom least-squares basis @basile2025headpursuit.

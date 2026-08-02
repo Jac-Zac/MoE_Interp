@@ -5,45 +5,57 @@ SOMP on aggregated gated outputs against the unembedding dictionary, we obtain h
 token summaries for each expert. Applied to OLMoE-1B-7B-Instruct on 10,000 TriviaQA
 questions, the method recovers interpretable specialists in numbers, geography, names,
 biology, kinship, and entertainment, concentrated in the later layers. The concept-
-restricted mode enables targeted queries that confirm and quantify specialization along
-specific semantic axes.
+restricted mode enables targeted queries that provide convergent evidence for candidate
+specialization along specific semantic axes.
 
 Two results temper the "specialist" reading and align with recent MoE interpretability work.
-First, only a minority of experts are cleanly specialized: the median final EVR is low, so most
-experts are polysemantic @lecomte2025sparsity @illusionspecialization2026. Second, even
+First, only a minority of experts have clean token summaries: the median final EVR is low, so a
+small vocabulary basis explains little output variance. This is compatible with superposition
+and polysemanticity @lecomte2025sparsity @illusionspecialization2026, but does not establish either
+without a calibrated null. Second, even
 atom-for-atom SOMP explains $approx 2 times$ the variance of a single mean-direction logit lens
-(and $approx 14 times$ with its full 10-atom basis) while sharing almost none of its top tokens,
-confirming that a one-shot per-expert readout under-reads a polysemantic expert. We therefore read Expert Pursuit not as evidence that experts are crisp concept
+(and $approx 14 times$ when its 10-atom basis is compared with the lens's single direction),
+showing that the one-shot mean-direction readout captures less variance. We therefore read Expert Pursuit not as evidence that experts are crisp concept
 detectors, but as a sparse, honest summary of the *limited* low-dimensional structure a single
 expert carries --- consistent with the view that MoE semantics live largely in cross-layer
 routing paths rather than individual experts @monosemanticpaths2026.
 
-Finally, a causal circuit study across three concepts --- with all selectors fit on a train split
-and all interventions scored on held-out prompts --- draws a sharp line between vocabulary
-association and causation, and reveals that causal _controllability_ is a *gradient*: `countries`
-is sharply localizable, `numbers` only weakly, toxicity not at all. Two findings recur along it.
-First, the *selector matters*: knocking out the top-$1%$ gate-AtP experts lowers the concept-logit
-propensity more than the SOMP or random sets on every concept, and clearly beats the layer-matched
-random control on `countries` and `numbers` --- where the correlational SOMP set, which ties gate-AtP
-on the localized `countries`, falls back to chance. Association is causal only where the concept is
-localized. Second, no gate-only intervention _removes_ a concept: even zeroing the top $10%$ of all
-1,024 experts, or padding the causal set with its co-firing neighbours, leaves most of the concept
-intact, because with $8$-of-$64$ routing the model routes around any sparse set. A sparse knockout
-_reduces_ a concept (by $approx 21%$ for countries down to $approx 5%$ for toxicity) without any
-sparse set being individually _necessary_ for it. A cheap one-pass gate gradient recovers this
-causal signal faithfully ($r approx 0.69$ pooled, $approx 0.93$ in the late layers where the
-controllable signal lives), so the expensive patching grid is needed only to validate it. The
-diffuse tail (toxicity) is the honest endpoint: it has no usable expert handle at all --- knockout
-is near-inert for every selector --- because the behaviour is semantic and fully distributed rather
-than carried by any sparse expert set. Correlational specialization summaries are thus a starting
-point for hypotheses, not a substitute for a causal, coherence-aware test.
+Finally, the gate intervention study separates vocabulary association from the effect of a specific
+post-top-$k$ gate ablation. Gate-AtP has the largest knockout point estimate on all three prompt
+sets, and its correlation with exhaustive gate ablation is $r approx 0.69$ pooled and $approx 0.93$
+over layers 12--15. The `countries` and `numbers` results are exploratory ($n = 18$ each, separately
+authored prompt sets, one random draw); the larger held-out RealToxicityPrompts experiment shows
+only a weak sparse handle for the offensive-word probe. Because remaining weights are not
+renormalized and replacement experts are not selected, robustness to knockout should not be called
+router compensation without an additional experiment. The probe is also lexical rather than an
+independent toxicity classifier. Correlational summaries are therefore useful hypothesis generators,
+not substitutes for controlled causal and behavioral evaluation.
+
+== Limitations
+
+- *Position and routing support.* TriviaQA is read only at the shared final template token, so the
+  descriptive sample covers 334 of 1,024 layer--expert slots. Pile-10k supplies the all-slot EVR
+  comparison but answers a different, completion-style question. Content-token averaging remains
+  the most important extraction ablation.
+- *Readout approximation.* Earlier expert outputs are scaled with the final residual's RMSNorm
+  factor but are not propagated through later layers. The reconstruction has unit tests against
+  the expert equations, not an end-to-end real-model error measurement against the actual block
+  and final residual outputs.
+- *Dictionary dependence.* EVR and atom-family coherence depend on the normalized unembedding,
+  the number of selected atoms, and a fixed cosine threshold. A random-dictionary floor,
+  frequency-matched token null, PCA ceiling, and threshold sensitivity analysis are missing.
+- *Causal evaluation.* The `countries` and `numbers` prompt sets are small and incompletely
+  archived; each comparison uses one random set. The rollout propensity follows a different
+  generated context under each intervention, and the offensive lexicon is not an independent
+  toxicity measure. Distinct-1 detects repetition but not factuality or general fluency.
+- *Scope.* OLMoE is the primary model. The smaller GPT-OSS check supports dictionary-alignment and
+  gate-AtP correlation observations, not a powered cross-model intervention result.
 
 == Future Work
 
-The descriptive and faithfulness results are solid; the following close the gap to a
-paper-strength _causal_ claim, roughly in order of importance.
+The following close the gap to a paper-strength causal claim, roughly in order of importance.
 
-- *Break the metric circularity.* The toxic-logit probe is built from the same offensive word
+- *Break the metric circularity.* The offensive-token logit probe is built from the same word
   list that defines the concept it grades, so the knockout is partly judged by the thing it
   removes. Scoring the held-out continuations with an *independent* toxicity
   classifier (Detoxify @hanu2020detoxify or Perspective API) as the headline metric, keeping the
@@ -51,14 +63,14 @@ paper-strength _causal_ claim, roughly in order of importance.
   with the existing held-out split.
 
 - *Calibrate the EVR floor.* A random-dictionary / PCA ceiling would calibrate the EVR result
-  against the floor that $k$ free atoms give (the sufficiency curve and co-firing group ablation
-  in @sec:causal already confirm the top-$k$ redundancy account, and bootstrap CIs resolve the
-  one significant knockout effect).
+  against the floor that $k$ free atoms give. The cumulative and co-firing ablations in
+  @sec:causal establish robustness to the tested interventions but do not isolate whether it comes
+  from concurrent experts, changed later routing, or distributed non-expert computation.
 
 - *Cross-layer paths.* Since semantics in MoEs appear to live in routing trajectories rather than
-  single experts @monosemanticpaths2026, and even co-firing _groups_ are knockout-redundant,
-  decomposing and intervening *along an expert path* (the sequence of experts a token routes
-  through) is the natural next fix for the redundancy that defeats sparse knockout.
+  single experts @monosemanticpaths2026, and even the tested co-firing _groups_ have modest effects
+  under post-top-$k$ gate downweighting, decomposing and intervening *along an expert path* (the
+  sequence of experts a token routes through) is the natural next test of distributed mechanisms.
 
 - *Scale the second study.* The GPT-OSS run replicates the descriptive and faithfulness claims
   but identified experts on only $n_"train" = 50$ prompts; re-running the full held-out circuit at

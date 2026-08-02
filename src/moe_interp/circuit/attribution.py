@@ -1,33 +1,46 @@
-"""gate-AtP — gradient attribution patching over the router gates (AtP-style).
+"""Estimate direct router-gate contributions with gradient × activation.
 
-The causal localizer for the toxic-expert circuit, and the canonical reference for its
-validation (other modules point here). Whole-expert ablation needs one forward *per expert*;
-attribution patching estimates every expert's effect from a single backward pass via a
-first-order Taylor expansion. Zeroing expert ``e``'s gate (``g_e -> 0``) changes the metric,
-to first order, by ``-g_e · dL/dg_e``; we store the expert's *contribution* — the negative of
-that, i.e. how much the metric would drop on ablation:
+Zeroing expert ``e``'s post-top-k gate changes the metric, to first order, by
+``-g_e · dL/dg_e``. We store its estimated contribution:
 
     attribution_e  ≈  g_e · dL/dg_e              (summed over token positions)
 
-where ``g_e`` is the router gate weight wherever expert ``e`` was selected and ``L`` is the
-toxic-logit metric. The gate weights are real differentiable tensors at the fused-experts
-boundary (the per-expert hidden neurons are not materialised by the fused kernel, so the gate
-is the finest node we can take gradients of here). A large positive attribution means "this
-expert pushes the metric up; ablating it would push it down" — summed over the top-ranked
-experts it gives the *distributed* circuit. (Sign: this is the same convention as the patching
-grid's ``base - ablated``, with which the stored grid correlates +0.69; a leading minus would
-flip it to anti-correlation.)
-
-gate-AtP is a first-order approximation of exhaustive activation patching (zero each gate in a
-separate forward pass). The two were checked once on the toxicity grid and agreed closely
-(pooled Pearson r≈0.69, up to ≈0.96 in the late layers), so only the cheap AtP grid is run; the
-frozen check lives in ``data/<model>/circuit/compare/faithfulness.json``.
+where ``L`` is the concept-logit metric. A positive value predicts that zeroing the gate will
+lower the metric. The stored validation compares this approximation with exact per-slot gate
+ablation in ``data/<model>/circuit/compare/faithfulness.json``.
 """
+
+from pathlib import Path
 
 import torch
 
 from moe_interp.capture.model_adapter import model_num_experts
 from moe_interp.circuit.concept_probe import relative_logit_score, right_padded
+
+
+def prompt_regime_suffix(hi: float = 0.5, challenging: bool = False) -> str:
+    """Encode non-default RealToxicityPrompts selection settings in artifact names."""
+    if hi == 0.5 and not challenging:
+        return ""
+    return f"_hi{hi:g}" + ("_chal" if challenging else "")
+
+
+def attribution_grid_path(
+    circuit_dir: Path,
+    *,
+    concept: str,
+    n_prompts: int,
+    hi: float = 0.5,
+    challenging: bool = False,
+) -> Path:
+    """Return the canonical grid path, reusing the legacy offensive path if present."""
+    regime = prompt_regime_suffix(hi, challenging)
+    grid_dir = circuit_dir / "attribution"
+    canonical = grid_dir / f"atp_grid_{concept}_n{n_prompts}{regime}.npy"
+    legacy = grid_dir / f"atp_grid_n{n_prompts}{regime}.npy"
+    if concept == "offensive" and legacy.exists() and not canonical.exists():
+        return legacy
+    return canonical
 
 
 def gate_attribution(
@@ -36,11 +49,11 @@ def gate_attribution(
     concept_ids: list[int],
     batch_size: int = 8,
 ) -> torch.Tensor:
-    """Per-(layer, expert) attribution for the toxic-logit metric.
+    """Return per-(layer, expert) attribution for the concept-logit metric.
 
     Returns a ``(n_layers, n_experts)`` tensor; entry ``[l, e]`` is the gradient-times-gate
     attribution summed over all token positions and prompts (sign: positive = the expert
-    raises the toxic score, so ablating it would lower it).
+    raises the score, so ablating it is predicted to lower it).
     """
     n_layers = model.config.num_hidden_layers
     n_experts = model_num_experts(model)

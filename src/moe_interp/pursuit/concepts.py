@@ -342,7 +342,8 @@ def build_concept_token_ids(tokenizer, words: list[str] | None = None) -> list[i
     Defaults to the ``offensive`` lexicon; multi-token words are dropped so the ids can be
     used directly as a logit probe.
     """
-    words = words or CONCEPT_WORDS["offensive"]
+    if words is None:
+        words = CONCEPT_WORDS["offensive"]
     ids: set[int] = set()
     for w in words:
         for variant in (w, " " + w):

@@ -1,8 +1,8 @@
-"""Knockout / downweighting sweep with per-prompt error bars (no steering).
+"""Gate knockout/downweighting sweeps with per-prompt error bars.
 
 This is the trimmed-down causal-necessity experiment: the steering arm (``esteer``/``ablate``/
 dose-response) is dropped entirely. We keep only the two *gate* interventions — full **knockout**
-and partial **downweighting** — applied to the SOMP (correlational), gate-AtP (causal) and
+and partial **downweighting** — applied to the SOMP, gate-AtP, and
 matched-random expert sets, at two budgets expressed as a fraction of the model's
 ``(layer, expert)`` slots (e.g. 1% and 5% of all experts; top-ranked per selector).
 
@@ -19,6 +19,7 @@ so a run cut off by the 2h GPU cap resumes where it stopped.
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
@@ -77,10 +78,14 @@ def _bootstrap_cell(cell: dict, base: dict | None, n_boot: int, rng) -> dict:
         ]
         if base is not None:
             b = np.asarray(base[field], dtype=float)
-            n = min(len(b), len(x))
-            idx = rng.integers(0, n, size=(n_boot, n))
-            d = b[:n][idx].mean(1) - x[:n][idx].mean(1)
-            out[f"{field}_delta"] = float(b[:n].mean() - x[:n].mean())
+            if len(b) != len(x):
+                raise ValueError(
+                    f"Paired bootstrap requires equal {field} lengths: {len(b)} != {len(x)}"
+                )
+            delta = b - x
+            idx = rng.integers(0, len(delta), size=(n_boot, len(delta)))
+            d = delta[idx].mean(1)
+            out[f"{field}_delta"] = float(delta.mean())
             out[f"{field}_delta_ci"] = [
                 float(np.percentile(d, 2.5)),
                 float(np.percentile(d, 97.5)),
@@ -94,13 +99,13 @@ def run_downweight_sweep(
     *,
     concept: str,
     dataset: str,
-    train: tuple[list[list[int]], list[list[int]]],
+    n_train: int,
     test: tuple[list[list[int]], list[list[int]]],
     out_path: Path,
     budgets_frac: tuple[float, ...] = (0.01, 0.05),
     scales: tuple[float, ...] = (0.9, 0.5, 0.25, 0.0),
     max_new_tokens: int = 24,
-    atp_grid_path=None,
+    atp_grid_path: Path | None = None,
     n_boot: int = 10000,
 ) -> dict:
     """Knockout/downweight sweep over SOMP / AtP / random at each budget, with per-prompt CIs.
@@ -123,29 +128,33 @@ def run_downweight_sweep(
     meta = {
         "concept": concept,
         "dataset": dataset,
+        "n_train": n_train,
+        "atp_grid": atp_grid_path.name if atp_grid_path is not None else None,
+        "atp_grid_sha256": (
+            sha256(atp_grid_path.read_bytes()).hexdigest()
+            if atp_grid_path is not None and atp_grid_path.exists()
+            else None
+        ),
         "n_total_experts": n_total,
         "budgets": budgets,
         "scales": list(scales),
         "max_new_tokens": max_new_tokens,
-        "n_test": len(elic_eval),
+        "n_test_eliciting": len(elic_eval),
+        "n_test_neutral": len(neut_eval),
         "n_boot": n_boot,
     }
-    # Resume from any prior partial run; warn if the stored run used different args
-    # (completed cells are kept, so mixing regimes in one JSON is easy to miss).
+    # Resume only a compatible partial run; mixing regimes would make the output invalid.
     if out_path.exists():
         res = json.loads(out_path.read_text())
         if res.get("meta") != meta:
-            print(
-                f"[resume] WARNING: args differ from the stored run at {out_path}\n"
-                f"  stored:  {res.get('meta')}\n"
-                f"  current: {meta}\n"
-                "  completed cells are kept; delete the file to start clean.",
-                flush=True,
+            raise ValueError(
+                f"Cannot resume {out_path} with different arguments: "
+                f"stored={res.get('meta')}, current={meta}"
             )
     else:
         res = {"meta": meta, "baseline": {}, "budgets": {}}
 
-    def save():
+    def save() -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(res, indent=2))
 
@@ -164,7 +173,6 @@ def run_downweight_sweep(
             sets = expert_intervention_sets(
                 model,
                 model_name,
-                elic_eval,
                 concept=concept,
                 dataset=dataset,
                 k=k,

@@ -6,30 +6,41 @@ outputs using the same SOMP-based sparse coding framework.
 
 == Dataset
 
-We use TriviaQA @joshi2017triviaqa (RC configuration, train split, $n = 10,000$), following
-the Head Pursuit setup. Each question is one document. Questions are wrapped in the model's chat
-template without any additional QA prompt --- only the raw question text is presented to the
-model.
+We use TriviaQA @joshi2017triviaqa (`rc.nocontext`, train split, $n = 10,000$), following
+the Head Pursuit setup. Each question is one document. The question is inserted into the fixed
+instruction ``Answer the following question in 1--3 words only ... Question: {question} Answer:``
+and then wrapped in the model's chat template with a generation prompt. Consequently, every
+TriviaQA example has the same final template token; @sec:results discusses the resulting routing
+concentration and uses pile-10k for all-expert aggregate comparisons.
 
 == Model and Activation Extraction
 
 We target OLMoE-1B-7B-Instruct @muennighoff2024olmoe: 16 layers, 64 experts per layer,
-top-8 routing, $d = 2048$. Using `nnsight` for model tracing, we capture for each token: (1)
-the router's top-$k$ expert indices and gating weights, and (2) the raw FFN output
-$f_e (bold(x)_i)$ from each selected expert.
+top-8 routing, $d = 2048$. Using `nnsight`, we tap each fused MoE block's boundary tuple:
+hidden states, top-$k$ expert indices, and routing weights. The fused kernel does not expose
+individual FFN outputs, so after the trace we reconstruct each selected expert's raw output
+$f_e (bold(x)_i)$ from the saved hidden state and that expert's weights. This reconstruction
+mirrors the OLMoE SwiGLU forward pass.
 
 To keep the capture aligned with the model's positional encoding, prompts are traced in
 right-padded batches and we extract the last real token from each prompt. The gated expert
-output is then multiplied by the router weight and passed through an approximate final
-RMSNorm using the residual-stream second moment, matching the scale of the model's final
-representation.
+output is multiplied by the router weight and by the final RMSNorm's shared, input-dependent
+scale, computed from the final pre-norm residual's second moment. This is a *direct-effect
+readout*: it places an earlier component on the final unembedding scale without propagating it
+through later layers or accounting for how changing that component would alter the normalization
+denominator.
 
 == Aggregation
 
-For each expert $e$ at layer $l$, we compute the gated output at the last token position for
-each document $j$:
+For each expert $e$ at layer $l$, we compute the scaled gated output at the last token position
+for each document $j$:
 
-$ bold(e)_(e,l)^j = g_e (bold(x)_j) dot f_e (bold(x)_j) $ <eq:expert-agg>
+$ bold(e)_(e,l)^j = bold(gamma) times frac(g_e (bold(x)_j) dot f_e (bold(x)_j),
+sqrt(d^(-1) norm(bold(r)_j)_2^2 + epsilon)) $ <eq:expert-agg>
+
+Here $bold(r)_j$ is the actual final pre-norm residual for that document, $bold(gamma)$ is the
+final RMSNorm weight, and multiplication by $bold(gamma)$ is element-wise. The denominator is
+held fixed while scaling the component.
 
 Stacking across $n$ documents yields $macron(bold(E))_(e,l) in RR^(n times d)$, the input to
 SOMP. Documents where expert $e$ receives no routed tokens are excluded.
@@ -50,13 +61,14 @@ determines their influence during SOMP.
 *Full-dictionary mode.* SOMP searches the entire vocabulary ($v approx$ 50,000 tokens). The
 output is an unrestricted ranked list of tokens that summarize the expert's aggregate
 behavior --- analogous to a per-expert logit lens applied across many documents. This is the
-primary mode for discovering what each expert specializes in.
+primary mode for proposing candidate expert specializations.
 
 *Concept-restricted mode.* The dictionary is restricted to the token IDs corresponding to a
 predefined concept word list (e.g., `numbers`, `countries`). SOMP then decomposes each
 expert's activations against only those directions, and final EVR scores rank experts by how
-strongly they respond to that concept. This allows targeted queries such as: _which experts
-are most active on numeric content?_ The concept word lists are defined in
+well their output variation lies in that concept dictionary. This allows targeted queries such
+as: _which experts' outputs are best represented by numeric token directions?_ It does not
+measure routing frequency or causal responsibility. The concept word lists are defined in
 `src/moe_interp/pursuit/concepts.py`.
 
 The two modes are complementary: full-dictionary pursuit discovers specialists without prior
@@ -71,9 +83,10 @@ aligns with, not whether that expert _causes_ a behavior. To test causation we b
 circuit pipeline that, for a chosen concept, _localizes_ the experts the concept routes through
 and then _intervenes_ during generation to remove it. The pipeline is concept-agnostic --- only
 the target token set and prompts change --- and we run it on three concepts of decreasing
-lexical sharpness: `countries`, `numbers`, and `offensive` (toxicity). Throughout, the
-correlational pursuit (SOMP) ranking from above is the association-only baseline to beat. All
-experiments run locally on Apple MPS.
+lexical sharpness: `countries`, `numbers`, and `offensive` (a harmful/sensitive-word proxy).
+Throughout, the
+correlational pursuit (SOMP) ranking from above is the association-only baseline. The reported
+OLMoE causal experiments ran locally on Apple MPS.
 
 The pipeline is a *selectors $times$ interventions* design: a selector proposes the concept's
 experts, an intervention acts on them, and we ask both whether the _selector_ matters and whether
@@ -89,7 +102,7 @@ $bold(g)$; the direction-level controls act on the residual $bold(h)$.
 
 We score a concept with a *concept-logit* probe: for a logit vector $bold(z)$ at the prediction
 position, $ s_(cal(C))(bold(z)) = 1/(|cal(C)|) sum_(t in cal(C)) z_t - 1/v sum_(t=1)^v z_t $ <eq:conceptprobe>
-where $cal(C)$ is the set of single-token concept words (e.g. the `offensive` list for toxicity)
+where $cal(C)$ is the set of single-token concept-word variants (e.g. the `offensive` list)
 and $v$ is the vocabulary size --- the mean concept-token logit relative to the row mean. We
 complement this sensitive probe with a literal *word-fraction*: the share of generated
 continuations that contain a concept word. For prompts we draw a split from RealToxicityPrompts
@@ -98,9 +111,11 @@ high-toxicity _eliciting_ set and a matched low-toxicity _neutral_ set; the neut
 as a *collateral check* on the intervention (how far it drags down prompts that never elicited the
 concept).
 
-Crucially, every selector (gate-AtP, SOMP ranking) is fit on a _train_ split of the prompts and
-every intervention is then scored on a _disjoint held-out test_ split. This avoids the identify-and-score-on-the-same-prompts circularity that would otherwise
-inflate any causally-selected method against the correlational baseline.
+The `offensive` experiment uses RealToxicityPrompts for the gate-AtP identification set and a
+disjoint held-out test set for intervention scoring. The stored `countries` and `numbers`
+experiments instead use separately authored concept-eliciting identification and evaluation
+prompts; their smaller evaluation sets make those comparisons exploratory rather than a matched
+cross-concept benchmark. SOMP is fitted independently from stored RTP activations.
 
 === Selectors: Which Experts <sec:selectors>
 
@@ -108,32 +123,38 @@ We compare three ways to pick a concept's top-$k$ experts:
 
 - *SOMP* (correlational) --- experts whose pursuit atoms most overlap the concept lexicon; the
   no-forward-pass, association-only baseline.
-- *Gate-AtP* (causal) --- one backward pass. Attribution patching @kramar2024atp estimates every
+- *Gate-AtP* (causal approximation) --- one backward pass per prompt batch. Following the
+  gradient-times-activation
+  idea used in attribution patching @kramar2024atp, it estimates every
   expert's contribution to the metric from a first-order expansion: zeroing a gate ($g_e -> 0$)
   changes the metric by $approx - g_e dot (dif cal(L))/(dif g_e)$, so the expert's _contribution_
   --- how far the probe would drop on ablation --- is the negative of that,
   $ "AtP"(l,e) approx sum_("pos") g_e dot (dif cal(L)) / (dif g_e), quad cal(L) = sum_("prompt") s_(cal(C)), $ <eq:atp>
   where $g_e$ is the gate weight wherever expert $e$ fired. Sign: positive = the expert raises the
-  concept score, so ablating it would lower it (the same sign as the patching grid @eq:patch, with
-  which it correlates $r approx +0.69$; see @sec:results). This is our causal selector, driving
-  every intervention below; @app:atp-alg gives the one-pass procedure.
-- *Random* (control) --- $k$ random experts in the same layers as the AtP set, isolating whether
-  it has to be _these_ experts.
+  concept score, so ablating it would lower it (the same sign as the gate-ablation grid @eq:patch,
+  with which it correlates $r approx +0.69$; see @sec:results). This is our direct-effect selector,
+  driving
+  every intervention below; @app:atp-alg gives the batched procedure.
+- *Random* (control) --- one deterministic draw of $k$ experts in the same layers as the AtP set.
+  This controls layer footprint but does not estimate variability across random sets.
 
-Gate-AtP is a first-order approximation of *exhaustive activation patching* --- zeroing each
+Gate-AtP is a first-order approximation of *exhaustive gate ablation* --- zeroing each
 expert's gate in a separate forward pass and recording the probe change,
 $ "PE"(l,e) = bb(E)_("prompt") [ s_(cal(C))(bold(z)_("base")) - s_(cal(C))(bold(z)_(- (l,e))) ], $ <eq:patch>
-which is the exact causal effect but costs one forward pass per routed expert ($approx 64 times$
-more). We ran the patching grid *once* to validate gate-AtP and the two agreed closely (Pearson
+which is the exact effect of this particular gate-zeroing intervention but costs one forward pass
+per routed layer--expert slot. We ran the ablation grid *once* to validate gate-AtP and the two
+agreed closely (Pearson
 $r approx 0.69$ pooled, $approx 0.93$ in the late layers; @sec:results), so the expensive sweep is
-not part of the pipeline --- AtP gives effectively the same ranking at a fraction of the cost. The
+not part of the pipeline --- AtP provides a useful, imperfect ranking approximation at a fraction
+of the cost. The
 AtP grid spans all 16 layers $times$ 64 experts; a positive entry promotes the concept, a negative
 entry _suppresses_ it.
 
 === Interventions: What We Do <sec:interventions>
 
-Every intervention is *expert-level* --- it acts on the selected experts' router gate, never on the
-residual stream --- so a positive effect is attributable to those experts and nothing else. Each
+Every intervention is *expert-level* --- it acts on the selected experts' post-top-$k$ routing
+weight, never directly on the residual stream. It does not renormalize the remaining weights or
+select replacement experts. Each
 selected set is hit with one of two gate interventions, applied at every decoded step of greedy
 generation and read out on the held-out prompts:
 
@@ -147,10 +168,11 @@ generation and read out on the held-out prompts:
   curve, with per-prompt bootstrap error bars. Both interventions are implemented as a single gate
   scaling (`gate_scale_intervention`), knockout being the $s = 0$ endpoint.
 
-Scoring is held-out and multi-signal: the mean probe value over the continuation (lower = less
-concept), the literal word-fraction, the *neutral* prompts as a collateral check, and a
+Scoring is multi-signal: the mean probe value over each method's generated continuation (lower =
+less concept-lexicon elevation), the literal word-fraction, the *neutral* prompts as a collateral
+check, and a
 *distinct-1* coherence guard (the ratio of unique unigrams; a healthy continuation sits around
-$0.6$--$0.9$). The coherence guard is what separates genuine concept removal from a method that
-merely *degrades the text into garbage* --- a probe drop with a collapsed distinct-1 is not a
-clean intervention. Because the probe is built from any concept's token set, the whole pipeline
-generalizes across concepts.
+$0.6$--$0.9$). This guard detects severe repetition but is not a general fluency metric. Because
+each intervention is evaluated on the continuation it generates, the rollout score combines a
+direct logit change with the effect of entering different subsequent contexts. The probe is
+lexical: in particular, the `offensive` score is not an independent toxicity classifier.
